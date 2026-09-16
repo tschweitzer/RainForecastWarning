@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Regenwarnung</h1>
+<p class="lede">Eine E-Mail, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
+Vorhersage bis zwei Stunden voraus.</p>
+
+<form id="signup">
+  <label for="email">E-Mail</label>
+  <input type="email" id="email" name="email" required autocomplete="email"
+         placeholder="du@example.org">
+
+  <div class="row">
+    <div>
+      <label for="lat">Breite</label>
+      <input type="number" id="lat" name="lat" step="0.0001" min="47" max="56" required
+             placeholder="50.1109">
+    </div>
+    <div>
+      <label for="lon">Länge</label>
+      <input type="number" id="lon" name="lon" step="0.0001" min="5" max="16" required
+             placeholder="8.6821">
+    </div>
+  </div>
+  <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+
+  <div class="consent">
+    <input type="checkbox" id="consent" required>
+    <label for="consent" style="font-weight:400;margin:0">
+      Ich bin einverstanden, dass meine E-Mail-Adresse und mein Standort gespeichert werden,
+      um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über den Abmeldelink.
+    </label>
+  </div>
+
+  <button type="submit">Anmelden</button>
+</form>
+<p id="result" role="status"></p>
+
+<div class="note">
+  Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird nichts gespeichert und es
+  kommen keine weiteren Mails.
+</div>
+
+<script>
+document.getElementById('locate').addEventListener('click', function () {
+  if (!navigator.geolocation) { return; }
+  navigator.geolocation.getCurrentPosition(function (pos) {
+    document.getElementById('lat').value = pos.coords.latitude.toFixed(4);
+    document.getElementById('lon').value = pos.coords.longitude.toFixed(4);
+  });
+});
+document.getElementById('signup').addEventListener('submit', async function (event) {
+  event.preventDefault();
+  var out = document.getElementById('result');
+  out.textContent = 'Wird gesendet …';
+  var response = await fetch('/api/v1/subscriptions', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      email: document.getElementById('email').value,
+      lat: parseFloat(document.getElementById('lat').value),
+      lon: parseFloat(document.getElementById('lon').value)
+    })
+  });
+  out.textContent = response.ok
+    ? 'Fast fertig – schau in dein Postfach und bestätige die Anmeldung.'
+    : 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+});
+</script>
+{% endblock %}

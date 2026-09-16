@@ -3,9 +3,9 @@
 A cloud service that warns you by email shortly before it starts raining at your location,
 using DWD radar nowcast data (Germany).
 
-**Status:** M0 and M1 complete, M2 code complete. The radar format is verified against real data;
-the decoder, georeferencing, `probe` CLI and the ingest pipeline exist. No subscriptions or web
-service yet.
+**Status:** M0–M3 code complete. The radar format is verified against real data; the decoder,
+georeferencing, `probe` CLI, ingest pipeline, subscription API and web pages exist. Alerting
+itself (M4) is next — nothing sends a rain warning yet.
 
 - **[docs/DESIGN.md](docs/DESIGN.md)** — requirements, decisions log, architecture, data model,
   alert state machine, API, privacy, testing strategy and milestones.
@@ -16,7 +16,7 @@ service yet.
 
 ```sh
 make dev     # virtualenv + dependencies
-make test    # 76 tests, including a golden comparison against wradlib
+make test    # 98 tests, including a golden comparison against wradlib
 make lint
 
 .venv/bin/python -m rainalert.cli probe \
@@ -37,6 +37,27 @@ It fetches the latest cycle conditionally, refuses anything that is not a plausi
 composite, archives the raw bytes, and records exactly one row per nominal time. The ingest tests
 need a real Postgres and skip without `TEST_DATABASE_URL`.
 
-Next up is **M3**: subscriptions, double opt-in and the mail path.
+Running the web service:
+
+```sh
+make migrate           # create/upgrade the schema
+make serve             # http://localhost:8000
+```
+
+With `NOTIFIER=file` and `MAIL_OUTBOX_DIR=./var/outbox`, mails are written as `.eml` files you can
+open instead of being sent — which is how the whole double opt-in flow can be exercised locally.
+
+**Configuration you will need at deploy time** (all have working local defaults):
+
+| Variable | What it is |
+|---|---|
+| `PUBLIC_BASE_URL` | the origin every emailed link is built from |
+| `MAIL_FROM` | sender address; its domain needs SPF, DKIM and DMARC or the mail lands in spam |
+| `NOTIFIER` | `console`, `file` or `smtp` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | any provider — they all speak SMTP |
+| `SECRET_KEY` | salts the consent IP hashes; must be set in production |
+| `TRUSTED_PROXY_HOPS` | how many proxies in front of us are ours (0 ignores `X-Forwarded-For`) |
+
+Next up is **M4**: sampling, the alert state machine, and actually sending warnings.
 
 Data basis: Deutscher Wetterdienst (DWD), radar product RV, CC BY 4.0.

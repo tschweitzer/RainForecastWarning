@@ -11,6 +11,12 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
+    "pydantic[email]>=2.6",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
@@ -40,3 +46,14 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+
+# Depends()/Form() in argument defaults is FastAPI's documented dependency-injection syntax, not
+# the mutable-default bug B008 exists to catch.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Form",
+    "fastapi.Query",
+    "fastapi.Body",
+    "fastapi.Header",
+]

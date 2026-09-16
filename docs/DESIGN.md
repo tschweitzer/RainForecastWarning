@@ -1005,10 +1005,27 @@ first few cycles rather than scheduling it and walking away.
 the per-cycle numbers go to structured logs); the GCS store is written but unexercised, there being
 no bucket yet (M6); Alembic arrives with M3, when there is more than one table to migrate.
 
-**M3 — subscriptions + mail.**
-Schema, API (§10) minus `/forecast` and `/overlays`, double opt-in, manage/unsubscribe pages,
-`Notifier` adapters, rate limits, deletion.
+**M3 — subscriptions + mail.** 🟡 *code complete 2026-09-16*
+Schema and Alembic migrations, API (§10) minus `/forecast` and `/overlays`, double opt-in,
+subscribe/confirm/unsubscribe/privacy pages, `Notifier` adapters, rate limits, deletion. 98 tests.
+Verified end to end against a live server: subscribe → confirmation mail → GET leaves the state
+untouched → POST activates → API token works → unsubscribe deletes everything.
 *Done when:* a friend can subscribe from a phone browser and unsubscribe with one click.
+*Outstanding:* a real address on a real domain, which needs Q-1 (domain) and Q-4 (provider), plus
+SPF/DKIM/DMARC. Until then the flow is exercised with the `file` notifier.
+*Deliberately deferred:* the map picker is M5, so the subscribe form takes coordinates with a
+browser-geolocation button; rule parameters exist as columns and API fields but are not in the UI
+(D-14); `PATCH /subscriptions/me` and pause/resume are not implemented yet.
+
+**Delivery is configuration, not code (Q-4).** Every provider worth using — Brevo, Mailgun,
+SendGrid, Postmark, SES, or an ordinary mailbox — speaks SMTP, so the SMTP adapter covers all of
+them and choosing one is a matter of host, port and credentials. A provider's HTTP API can be added
+behind the same `Notifier` protocol later if its delivery telemetry justifies the coupling. The
+`console` and `file` adapters make the whole opt-in flow testable without sending anything.
+
+**Domains are configuration too (Q-1).** `PUBLIC_BASE_URL` and `MAIL_FROM` are the only places a
+hostname appears; every link in every mail is built from the former. The defaults are working
+localhost placeholders, so nothing is blocked on choosing a domain.
 
 **M4 — alerting.**
 Sampler, rules, state machine, dispatcher, `evaluations`/`rain_events`/`notifications`, plus the

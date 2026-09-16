@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Abmelden</h1>
+<p class="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
+nicht rückgängig machen.</p>
+<form method="post" action="/unsubscribe">
+  <input type="hidden" name="token" value="{{ token }}">
+  <button type="submit">Abmelden und alles löschen</button>
+</form>
+{% endblock %}

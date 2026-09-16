@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Angemeldet</h1>
+<p class="lede">Du bekommst jetzt eine Mail, wenn Regen aufzieht.</p>
+
+<div class="note">
+  <strong>Zugangsschlüssel</strong> – wird später von der App gebraucht. Er wird nur jetzt
+  angezeigt und nirgends noch einmal:<br><br>
+  <code>{{ api_token }}</code>
+</div>
+
+<p>Abmelden kannst du dich jederzeit hier:<br>
+<code>{{ settings.public_base_url.rstrip('/') }}/unsubscribe?token={{ unsubscribe_token }}</code></p>
+{% endblock %}

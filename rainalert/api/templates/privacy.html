@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Datenschutz</h1>
+<p class="lede">Kurzfassung: so wenig wie möglich, nur zum Warnen, jederzeit löschbar.</p>
+
+<h2>Was gespeichert wird</h2>
+<ul>
+  <li>Deine E-Mail-Adresse.</li>
+  <li>Dein Standort (Koordinaten) – nur der aktuelle, kein Verlauf.</li>
+  <li>Deine Einstellungen und die Warnungen, die verschickt wurden.</li>
+  <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
+      der Einwilligung.</li>
+</ul>
+
+<h2>Wofür</h2>
+<p>Ausschließlich, um dir Regenwarnungen zu schicken. Keine Werbung, keine Weitergabe,
+kein Tracking.</p>
+
+<h2>Wie lange</h2>
+<p>Bis du dich abmeldest. Nicht bestätigte Anmeldungen werden nach
+{{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>
+
+<h2>Löschen</h2>
+<p>Über den Abmeldelink in jeder Mail – das löscht sofort und vollständig.</p>
+
+<h2>Rechtsgrundlage</h2>
+<p>Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), erteilt durch die Bestätigung per Mail.</p>
+{% endblock %}

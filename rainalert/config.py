@@ -52,6 +52,46 @@ class Settings(BaseSettings):
     # --- Retention (D-7) -------------------------------------------------------------------
     raw_retention_hours: int = 48
 
+    # --- Public identity (Q-1: the domain is not chosen yet) ---------------------------------
+    #: Every link in every email is built from this. The placeholder works for local development;
+    #: set it to the real origin at deploy time. Nothing else in the code knows a hostname.
+    public_base_url: str = "http://localhost:8000"
+    #: Likewise a placeholder. Deliverability needs SPF, DKIM and DMARC on whatever domain this
+    #: ends up on - without them these mails land in spam and the service is pointless (§12).
+    mail_from: str = "RainAlert <rainalert@localhost>"
+    mail_reply_to: str | None = None
+
+    # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
+    #: console | file | smtp | push. SMTP reaches every provider worth using, so choosing one is
+    #: a matter of credentials rather than code.
+    notifier: str = "console"
+    mail_outbox_dir: str | None = None
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_tls: bool = True
+    smtp_timeout_seconds: float = 20.0
+
+    # --- Tokens and consent -------------------------------------------------------------------
+    #: Salts the IP hashes and signs anything that needs signing. Must be set in production.
+    secret_key: str = "dev-secret-change-me"
+    confirm_token_ttl_hours: int = 24
+    #: Which wording of the consent text was agreed to, so the record still means something after
+    #: the text is edited (GDPR Art. 7(1)).
+    consent_text_version: str = "2026-09-16"
+    #: Unconfirmed subscriptions are deleted after this long (data minimisation, §13).
+    unconfirmed_purge_hours: int = 24
+
+    # --- Rate limiting (§10) ------------------------------------------------------------------
+    #: How many proxy hops in front of us are ours. X-Forwarded-For is appended to by each hop, so
+    #: only the last N entries are trustworthy; 0 means take the socket peer and ignore the header
+    #: entirely. Getting this wrong lets a client spoof its own identity (SECURITY_REVIEW.md F-5).
+    trusted_proxy_hops: int = 0
+    subscribe_limit_per_hour: int = 5
+    location_limit_per_hour: int = 60
+    rate_limit_retention_days: int = 7
+
     log_level: str = "INFO"
     metrics_path: str | None = Field(default=None, description="write Prometheus text here on exit")
 

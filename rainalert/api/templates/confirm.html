@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Anmeldung bestätigen</h1>
+<p class="lede">Ein Klick noch, dann bist du angemeldet.</p>
+<form method="post" action="/confirm">
+  <input type="hidden" name="token" value="{{ token }}">
+  <button type="submit">Jetzt bestätigen</button>
+</form>
+{% endblock %}
