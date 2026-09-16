@@ -851,10 +851,12 @@ time or only accrues — §11.1).
 *This resolves every "VERIFY" marker in this document; if reality differs from §4.1, update §4/§5
 before writing code.*
 
-**M1 — decoder + grid + CLI.**
-`decoder.py`, `grid.py`, `rainalert probe --lat 50.1 --lon 8.7` prints 25 lead values with valid
-times. Tests §16.1, §16.2, §16.4.
-*Done when:* probe output matches a public radar map during real rain.
+**M1 — decoder + grid + CLI.** ✅ *done 2026-09-16*
+`decoder.py`, `grid.py`, `rainalert probe --lat 50.1 --lon 8.7` prints the lead values with valid
+times. Tests §16.1, §16.2, §16.4 plus the dropout regression (§16.1b) — 32 tests, lint clean.
+Grid verified against wradlib over all 1 320 000 cells.
+*Remaining for the acceptance criterion:* probe output still needs to be eyeballed against a public
+radar map during real rain. The fixtures prove internal consistency, not that the map is right.
 
 **M2 — ingest pipeline.**
 Politeness client, GCS archiving, `radar_cycles`, idempotency, advisory lock, metrics, retention

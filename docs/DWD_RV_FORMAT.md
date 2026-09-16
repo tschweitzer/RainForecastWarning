@@ -215,20 +215,42 @@ runtime dependency.
 
 ## 11. Georeferencing
 
-`wradlib.georef.get_radolan_grid(1200, 1100, wgs84=True)` → `(1200, 1100, 2)` lon/lat.
+Projection, exactly as DWD defines it — a sphere, not an ellipsoid:
 
-- SW corner `grid[0,0]` = 3.5519 E, 45.6959 N; NE corner `grid[-1,-1]` = 18.7494 E, 55.8411 N.
-- **Row 0 is the southern edge.** Images must be flipped vertically when rendering north-up (§11.1).
+```
++proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 +x_0=0 +y_0=0 +R=6370040 +units=km +no_defs
+```
 
-Spot check against the decoded field:
+DE1200 ties to the reference point 9.0 E / 51.0 N at grid offsets `j_0 = 470`, `i_0 = 600`, with
+1 km cells. `rainalert/radar/grid.py` pins these constants and the test suite compares the resulting
+lon/lat against `wradlib.georef.get_radolan_grid(1200, 1100, wgs84=True)` over **all 1 320 000
+cells** (max deviation < 1e-9°), not at a handful of points — a systematic offset of a few cells is
+invisible everywhere else and warns the wrong village.
+
+Two conventions that are easy to get wrong:
+
+- **Row 0 is the southern edge.** Images must be flipped vertically when rendering north-up (§11.1
+  of DESIGN.md).
+- **`get_radolan_grid` returns each cell's lower-left corner, not its centre** (its default mode is
+  `radolan`; `mode="center"` gives centres). Anything distance-related must add half a cell.
+  *An earlier revision of this document called those values "cell centres" — they are corners.*
+
+Spot check, using cell centres, against the decoded field:
 
 | | row | col | cell centre | value |
 |---|---|---|---|---|
-| Frankfurt 50.1109 N 8.6821 E | 496 | 444 | 50.1073, 8.6788 | 0.00 mm/5min |
-| Hamburg 53.5511 N 9.9937 E | 895 | 543 | 53.5521, 9.9932 | 0.00 mm/5min |
-| Munich 48.1351 N 11.5820 E | 264 | 669 | 48.1385, 11.5823 | 0.10 mm/5min |
+| Frankfurt 50.1109 N 8.6821 E | 496 | 444 | 50.1116, 8.6853 | 0.00 mm/5min |
+| Hamburg 53.5511 N 9.9937 E | 894 | 543 | 53.5477, 10.0006 | 0.00 mm/5min |
+| Munich 48.1351 N 11.5820 E | 263 | 668 | 48.1345, 11.5758 | 0.23 mm/5min |
 
-Cell centres land within ~0.004° (≈ 300 m) of the true coordinates, as expected for a 1 km grid.
+Centres land within half a cell of the true coordinates, as they must.
+
+### Radius masks use ground distance
+
+The projection's scale factor at German latitudes is ≈ 1.09 (the standard parallel is 60 N), so a
+"1 km" grid cell is about 0.92 km on the ground and projected kilometres are ~9 % longer than real
+ones. Selecting a subscriber's radius in projected units would quietly inflate every radius by that
+much, so `radius_mask` measures true geodesic distance (WGS84) from the point to each cell centre.
 
 ## 12. Fixtures
 

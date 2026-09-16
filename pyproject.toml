@@ -1,0 +1,35 @@
+[project]
+name = "rainalert"
+version = "0.1.0"
+description = "Warns about rain starting at your location, from DWD radar nowcast data"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "pyproj>=3.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "wradlib>=2.0",   # test-only oracle for the decoder and grid (D-21) - never imported at runtime
+    "ruff>=0.5",
+]
+
+[project.scripts]
+rainalert = "rainalert.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rainalert*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "golden: compares against wradlib, the reference implementation (D-21)",
+]
+
+[tool.ruff]
+line-length = 100
