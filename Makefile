@@ -21,3 +21,7 @@ fmt:
 probe:
 	$(VENV)/bin/python -m rainalert.cli probe tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 \
 		--lat $(LAT) --lon $(LON)
+
+run-ingest:
+	ARCHIVE_DIR=$(or $(ARCHIVE_DIR),./var/raw) \
+	$(VENV)/bin/python -m rainalert.cli ingest --create-tables --prune

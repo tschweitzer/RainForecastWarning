@@ -11,6 +11,7 @@ filename, so a file fetched as ``..._LATEST.tar.bz2`` is self-describing.
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 import tarfile
@@ -190,13 +191,19 @@ def decode_frame(blob: bytes) -> RVFrame:
     )
 
 
-def read_frames(archive: Path | str) -> list[RVFrame]:
+def read_frames(archive: Path | str | bytes) -> list[RVFrame]:
     """Decode every member of an RV ``.tar.bz2``, ordered by cycle then forecast lead.
+
+    Accepts a path or the raw bytes. The ingest job holds the archive in memory and never writes it
+    to disk, which is what makes tar path traversal a non-issue here; keep it that way.
 
     Accepts archives holding more than one cycle - fixtures do, the real product does not.
     """
     frames: list[RVFrame] = []
-    with tarfile.open(archive, "r:*") as tar:
+    source: dict = (
+        {"fileobj": io.BytesIO(archive)} if isinstance(archive, bytes) else {"name": archive}
+    )
+    with tarfile.open(mode="r:*", **source) as tar:
         members = [m for m in tar.getmembers() if m.isfile()]
         _check_limits(members)
         for member in members:
@@ -234,7 +241,7 @@ def _check_limits(members: list[tarfile.TarInfo]) -> None:
         raise RVArchiveRejected(f"archive declares {total} bytes total, limit is {MAX_TOTAL_BYTES}")
 
 
-def read_cycle(archive: Path | str) -> list[RVFrame]:
+def read_cycle(archive: Path | str | bytes) -> list[RVFrame]:
     """Decode a single RV cycle, ordered by forecast lead.
 
     Raises if the archive holds frames from more than one nominal time: silently merging cycles

@@ -106,6 +106,61 @@ def probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def ingest(args: argparse.Namespace) -> int:
+    """Run one ingest cycle. This is the Cloud Run job entry point (DESIGN.md §6)."""
+    import logging
+
+    from rainalert.config import get_settings
+    from rainalert.db.session import create_all, make_engine, make_session_factory
+    from rainalert.jobs.ingest import ingest_once, prune_archives
+    from rainalert.radar.client import DWDClient
+    from rainalert.storage import GCSArchiveStore, LocalArchiveStore
+
+    settings = get_settings()
+    logging.basicConfig(
+        level=settings.log_level,
+        format='{"level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}',
+    )
+
+    engine = make_engine(settings.database_url)
+    if args.create_tables:
+        create_all(engine)
+    session_factory = make_session_factory(engine)
+
+    if settings.archive_dir:
+        store = LocalArchiveStore(settings.archive_dir)
+    elif settings.gcs_bucket:
+        store = GCSArchiveStore(settings.gcs_bucket)
+    else:
+        print("set ARCHIVE_DIR or GCS_BUCKET", file=sys.stderr)
+        return 2
+
+    client = DWDClient(
+        base_url=settings.dwd_base_url,
+        latest_name=settings.dwd_latest_name,
+        user_agent=settings.dwd_user_agent,
+        max_response_bytes=settings.dwd_max_response_bytes,
+        hourly_byte_budget=settings.dwd_hourly_byte_budget,
+        daily_byte_budget=settings.dwd_daily_byte_budget,
+        max_attempts=settings.dwd_max_attempts,
+        backoff_base_seconds=settings.dwd_backoff_base_seconds,
+        timeout_seconds=settings.dwd_request_timeout_seconds,
+        breaker_threshold=settings.dwd_breaker_threshold,
+        breaker_cooldown_seconds=settings.dwd_breaker_cooldown_seconds,
+    )
+
+    with client, session_factory() as session:
+        outcome = ingest_once(session, client, store, settings)
+        if args.prune:
+            removed = prune_archives(store, settings)
+            if removed:
+                logging.getLogger("rainalert.jobs.ingest").info("pruned %d archives", removed)
+
+    print(f"{outcome.status}: {outcome.nominal_time or ''} {outcome.reason or ''}".strip())
+    # Halted ingestion means nobody gets warned: that is a non-zero exit so the scheduler notices.
+    return 0 if outcome.status in {"ok", "partial", "not_modified", "duplicate"} else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rainalert")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -118,6 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="mm per 5 min")
     p.add_argument("--timezone", default="Europe/Berlin")
     p.set_defaults(func=probe)
+
+    i = sub.add_parser("ingest", help="fetch, validate and archive one radar cycle")
+    i.add_argument("--create-tables", action="store_true", help="create the schema if absent")
+    i.add_argument("--prune", action="store_true", help="also delete archives past retention")
+    i.set_defaults(func=ingest)
     return parser
 
 

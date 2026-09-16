@@ -951,11 +951,19 @@ Grid verified against wradlib over all 1 320 000 cells.
 *Remaining for the acceptance criterion:* probe output still needs to be eyeballed against a public
 radar map during real rain. The fixtures prove internal consistency, not that the map is right.
 
-**M2 — ingest pipeline.**
-Politeness client, GCS archiving, `radar_cycles`, idempotency, advisory lock, metrics, retention
-lifecycle. Runs locally on a schedule via `make run-ingest`.
-*Done when:* 24 h of unattended local running produces exactly 288 cycle rows, zero duplicate
-downloads, and the politeness tests pass.
+**M2 — ingest pipeline.** 🟡 *code complete 2026-09-16, acceptance run outstanding*
+Politeness client, archiving, `radar_cycles`, idempotency, advisory lock, the §4.3.1 validation
+gates, retention. `make run-ingest` runs one cycle; 76 tests pass, including 14 politeness tests and
+an ingest suite against a real Postgres.
+*Done when:* 24 h of unattended running produces exactly 288 cycle rows, zero duplicate downloads,
+and the politeness tests pass.
+*Outstanding:* the 24 h run — and any run at all against the real `opendata.dwd.de`, which the
+development environment cannot reach. The pipeline has only been exercised end to end against a
+local server replaying a real archive. **The first live run is therefore itself a test**: watch the
+first few cycles rather than scheduling it and walking away.
+*Deliberately deferred:* Prometheus metrics (the endpoint belongs to the API service in M3; for now
+the per-cycle numbers go to structured logs); the GCS store is written but unexercised, there being
+no bucket yet (M6); Alembic arrives with M3, when there is more than one table to migrate.
 
 **M3 — subscriptions + mail.**
 Schema, API (§10) minus `/forecast` and `/overlays`, double opt-in, manage/unsubscribe pages,

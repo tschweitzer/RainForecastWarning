@@ -6,6 +6,11 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
     "pyproj>=3.6",
+    "httpx>=0.27",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
 ]
 
 [project.optional-dependencies]
@@ -14,6 +19,8 @@ dev = [
     "wradlib>=2.0",   # test-only oracle for the decoder and grid (D-21) - never imported at runtime
     "ruff>=0.5",
 ]
+# Production only; the local archive store needs no cloud SDK.
+gcs = ["google-cloud-storage>=2.16"]
 
 [project.scripts]
 rainalert = "rainalert.cli:main"
