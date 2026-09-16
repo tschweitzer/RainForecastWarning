@@ -204,6 +204,9 @@ as "no rain".
    **Never strip flag bits blind:** `0x29C4 & 0x0FFF = 2500`, which after the precision factor is a
    plausible-looking 25.00 mm/5 min — so the naive decode silently turns 47 % of the grid into
    extreme rain and alerts everyone, forever. Required test case (§16.1).
+   Equally: **do not read data quality out of the header's `MS` radar-site list.** It lags reality — a
+   site absent from `MS` can still be contributing, and vice versa (`DWD_RV_FORMAT.md` §5). Coverage
+   comes from the no-data mask and nothing else.
 5. Return `(values: float32 [rows, cols], missing: bool [rows, cols], header: dict)`.
 
 Georeferencing (`rainalert/radar/grid.py`):
@@ -758,6 +761,12 @@ Unit tests must run **offline** and fast. No test ever touches `opendata.dwd.de`
    the fixture holds three.
    Include the sentinel case explicitly: a cell of `0x29C4` must decode to missing, never to
    25.00 mm/5 min (§5).
+1b. **Radar-dropout test.** Fixture `tests/fixtures/DE1200_RV_outage_20260915_1615-1630.tar.bz2` — a
+   real two-cycle dropout of the Borkum radar. Assert, for a 2 km mask at 53.58 N 6.66 E: at 16:15
+   `missing_fraction[0] == 0` but the forecast frames are fully missing, so the cycle is **not**
+   evaluated as dry; at 16:20 and 16:25 every frame is missing and the state is left unchanged; at
+   16:30 normal evaluation resumes. Hamburg in the same files must be unaffected throughout.
+   *This is the regression test for the frame-0-only gate — a real case that defeats it.*
 2. **Grid/georeferencing test.** Reference points against `wradlib.georef.get_radolan_grid`,
    tolerance half a cell; plus known city coordinates.
 3. **State machine tests.** Table-driven over synthetic sequences: clean onset, showers, forecast

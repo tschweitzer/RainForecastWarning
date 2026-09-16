@@ -69,26 +69,51 @@ time and mtime are in the same timezone (a UTC/CEST mismatch would show as ~2 h)
 the first attempt lands after the common case, and the existing backoff (20/40/80/160 s, cumulative
 300 s) still covers the +5 m tail. DESIGN.md §4.4 carries the measured figures.
 
-## 5. A real outage to test against
+## 5. A real radar dropout (analysed)
 
-Three consecutive cycles on 15-Sep are ~half the size of their neighbours while the surrounding trend
-is rising:
+Three cycles on 15-Sep looked anomalous in the listing (roughly half the size of their neighbours).
+Decoding them plus 16:30 as a control shows what actually happened — and the size signal was a **red
+herring**: 15-Sep was a nearly dry day nationally (peak 0.14–0.79 mm/5 min across all of Germany), so
+the small files are mostly just "no rain", not "no data".
 
-```
-composite_rv_20260915_1610.tar   1413120
-composite_rv_20260915_1615.tar    890880   <-
-composite_rv_20260915_1620.tar    870400   <-
-composite_rv_20260915_1625.tar    880640   <-
-composite_rv_20260915_1630.tar   1433600
-```
+The real event is a **single radar dropping out for exactly two cycles**:
 
-(The `.tar.bz2` variant shows the same dip: 260547 → 127703 / 125251 / 129310 → 273695.)
+| cycle | no-data @ t+0 | sites in `MS` | national max |
+|---|---|---|---|
+| 16:15 | 47.10 % | 17 | 0.60 mm/5min |
+| 16:20 | **52.89 %** | 15 | 0.14 |
+| 16:25 | **52.89 %** | 15 | 0.14 |
+| 16:30 | 47.01 % | 15 | 0.79 |
 
-Most likely a partial composite — one or more radars missing — rather than a quiet spell, since the
-neighbouring cycles bracket it at double the size. **These three cycles are worth keeping as fixtures
-for the missing-data gate (§9 step 0) and the timeline gap rendering (§11.1)**: a real partial-outage
-case is much better than a synthetic one. They age out of DWD's window on 17-Sep ~16:15, so fetch them
-before then if we want them.
+The extra 76 514 no-data cells (5.80 % of the grid) at 16:20/16:25 are centred on **53.89 N, 7.09 E** —
+the North Sea, exactly where **Borkum (`deasb`)** sits. Borkum's own cell is no-data at 16:20 and
+16:25, valid at 16:15 and 16:30. By 16:30 the mask is back to within 790 cells of 16:15.
+
+### The `MS` site list is not a data-quality signal
+
+`deasb` and `deboo` are absent from the `MS` list at 16:20, 16:25 **and 16:30** — yet coverage is fully
+restored at 16:30. The header's site list therefore lags reality and cannot be used to decide whether
+a region has data. **Derive quality from the no-data mask, never from `MS`.**
+
+### Why this fixture matters: it breaks the frame-0-only gate
+
+Sampling a 2 km mask at Borkum (53.58 N, 6.66 E), with Hamburg as a control:
+
+| cycle | `missing_fraction[0]` | frames fully missing (of 25) |
+|---|---|---|
+| 16:15 | **0.00** | **24** |
+| 16:20 | 1.00 | 25 |
+| 16:25 | 1.00 | 25 |
+| 16:30 | 0.00 | 0 |
+
+Hamburg is 0.00 / 0 throughout.
+
+At **16:15 the analysis frame is perfectly fine while 24 of 25 forecast frames are already gone** — the
+dropout appears in the nowcast before it appears in the analysis. A gate that checks only frame 0
+(as DESIGN.md §8 originally specified) passes this cycle and then reads 24 empty frames as "no rain",
+concluding *dry* for a location it has no data for — which can clear a `WARNED` state or suppress a
+warning outright. The per-frame gate (§9 of DESIGN.md) catches it. This is real evidence for that
+correction, not a hypothetical.
 
 ## 6. Archive contents
 
@@ -205,11 +230,18 @@ Spot check against the decoded field:
 
 Cell centres land within ~0.004° (≈ 300 m) of the true coordinates, as expected for a 1 km grid.
 
-## 12. Fixture
+## 12. Fixtures
 
-`tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2` (214 KB) — members `_000`, `_060`, `_120` of the
-2026-09-16 13:55 cycle. Three frames rather than two so that the moving no-data mask (§9) is testable.
-Tests must not assert "25 members" against this fixture; assert member naming and header parsing.
+| file | size | contents |
+|---|---|---|
+| `DE1200_RV2609161355_trimmed.tar.bz2` | 214 KB | frames `_000`, `_060`, `_120` of the 2026-09-16 13:55 cycle — a wet cycle. Three frames so the moving no-data mask (§9) is testable. |
+| `DE1200_RV_outage_20260915_1615-1630.tar.bz2` | 81 KB | frames `_000`, `_005`, `_060` of each of the four cycles in §5 — the Borkum dropout plus its control. |
 
-Still unrepresented, and worth capturing separately if the code paths matter: a cycle with clutter or
-secondary flags set, and the partial-outage cycles of §5.
+Tests must not assert "25 members" against either fixture; assert member naming and header parsing.
+
+The outage fixture pins three behaviours: the per-frame missing gate (16:15, where t+0 is clean and
+the forecast is not), full suppression at 16:20/16:25, and recovery at 16:30 — with Hamburg as an
+unaffected control in the same files.
+
+Still unrepresented: a cycle with clutter or secondary flags set. No deadline on that one — any
+archive from a day with ground clutter would do.
