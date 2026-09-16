@@ -153,10 +153,44 @@ throttle abusive clients. The ingest worker **must**:
    plus jitter (≈ 20 s, 40 s, 80 s, 160 s), then give up and let the next cycle handle it.
 6. Honour `429` / `503` / `Retry-After` with backoff; after 5 consecutive failed cycles, open a
    circuit breaker (stop fetching for 15 min) and emit an operational alert.
-7. Enforce a daily byte budget guard (config `DWD_DAILY_BYTE_BUDGET`, default 8 GiB). Exceeding it
-   logs an error and halts ingestion rather than silently hammering.
+7. Enforce byte budget guards — **per hour** (`DWD_HOURLY_BYTE_BUDGET`, default 512 MiB) as well as
+   per day (`DWD_DAILY_BYTE_BUDGET`, default 8 GiB). Both halt ingestion rather than hammer DWD.
+   Being a good citizen is a real requirement, but note which way these fail: **halting means nobody
+   gets warned**, and the trigger is partly controlled by the other side. So the hourly budget makes
+   exhaustion cost an hour rather than a day; a single capped response (§4.3.1) can never consume a
+   meaningful fraction of either; and exhaustion **pages the operator immediately**, marks
+   `/readyz` degraded, shows a banner in the UI, and is recorded in `radar_cycles.notes` so the gap
+   in the timeline has an explanation. A silent day-long halt is not acceptable.
 8. Be idempotent per cycle: a retried Cloud Run job execution must not re-download an
    already-archived cycle (unique key on `radar_cycles.nominal_time`).
+
+### 4.3.1 The upstream archive is untrusted input (hard requirements)
+
+DWD is a national weather service, not an adversary — but the *bytes* are untrusted all the same. A
+compromised mirror, a hijacked route with a mis-issued certificate, a malicious proxy, and a plainly
+corrupt publication are indistinguishable at the decoder, and because `_LATEST` re-serves the same
+bytes every cycle, one bad file is an **indefinite** outage rather than a single failure.
+
+1. **Cap the download.** Reject a response whose `Content-Length` exceeds 32 MiB, and stream with a
+   hard byte counter that aborts at the same limit — `Content-Length` is attacker-supplied too.
+2. **Cap the archive before reading it.** At most 32 members; every declared member size under
+   8 MiB; declared total under 128 MiB. Reject the archive *as a whole* — decoding "the good parts"
+   of a suspicious file lets the sender choose which forecast steps we see. Implemented in
+   `decoder._check_limits`; a 483-byte archive declaring 512 MiB is a real, tested case.
+3. **Read bounded.** Never `handle.read()` without a length; never `extractall()`; nothing is ever
+   written to disk, so tar path traversal does not apply and must not start applying.
+4. **Validate header fields against ranges, not just presence.** Reading dimensions and precision
+   from the header (§5) is right, but unvalidated it means trusting a remote party with our
+   allocation size and the scale of every reading: a forged `PR E+20` otherwise yields
+   `precision = 1e+20`. Implemented in `decoder.parse_header`.
+5. **Validate the nominal time against our own clock.** Reject a cycle stamped more than 15 minutes
+   in the future or 3 hours in the past, and page rather than store — see §15, where this value is
+   the key SLI. Cross-check it against the response's `Last-Modified`, which tracks it to within
+   about 5 minutes (`DWD_RV_FORMAT.md` §4); a larger disagreement is an integrity signal.
+6. **Plausibility-gate the decoded field** before any evaluation, recording the verdict in
+   `radar_cycles.status`. Reject and page on: national max above 40 mm/5 min, a no-data fraction
+   outside the observed 45–55 % band, or an implausible jump in wet fraction against the previous
+   cycle. A gated cycle freezes state — it must never be evaluated as "dry" (§9 step 0).
 
 ### 4.4 Publication timing
 
@@ -248,8 +282,10 @@ Cloud Run Service: api  (scale to zero, min-instances 0)
    Postgres            GCS (overlay PNGs, public-read or proxied)
 ```
 
-**Why steps 5–8 live in the same job as 4:** the decoded grids are 66 MB in memory and are needed by
-both the sampler and the renderer. Splitting would mean re-reading from GCS for no benefit at this
+**Why steps 5–8 live in the same job as 4:** the decoded grids are needed by both the sampler and the
+renderer. Measured, a complete 25-frame cycle as `float32` plus boolean masks is **165 MB** (the
+66 MB figure an earlier revision used is the raw `uint16` size), before the renderer's reprojection
+buffers — size the task from 165 MB, not from 66. Splitting would mean re-reading from GCS for no benefit at this
 scale. If subscriber count ever makes step 6 slow, split 7 (rendering) into its own job first — it is
 the only part that is not on the alerting critical path.
 
@@ -263,7 +299,7 @@ older than 30 min `expired` (a late rain warning is worse than none).
 | Resource | Purpose | Notes |
 |---|---|---|
 | Cloud Run **job** `rainalert-ingest` | the 5-minute pipeline | `--max-retries 1`, `--task-timeout 240s`, **concurrency 1** |
-| Cloud Run **service** `rainalert-api` | API + web UI | min instances 0 |
+| Cloud Run **service** `rainalert-api` | API + web UI | min instances 0, **`--max-instances` set explicitly** (see below) |
 | Cloud Scheduler `rainalert-tick` | `4-59/5 * * * *` UTC | invokes the job via OIDC SA; minute 4 is measured, not guessed (§4.4) |
 | GCS bucket `rainalert-data` | `raw/` (48 h), `overlays/obs/` (14 h), `overlays/fc/` (1 h) | per-prefix lifecycle rules, uniform ACL |
 | Secret Manager | DB URL, mail API key, `SECRET_KEY` | mounted as env |
@@ -273,6 +309,14 @@ older than 30 min `expired` (a late rain warning is worse than none).
 
 Cloud Run job concurrency must be 1 (plus a Postgres advisory lock `pg_try_advisory_lock` around the
 pipeline) so a retried execution can never double-send.
+
+`--max-instances` on the API service is a **security control, not a tuning knob**. Left at the
+platform default, unauthenticated traffic to any endpoint that touches the database — `/readyz` does
+so by definition — scales out until the database's connection ceiling is exhausted, which **starves
+the ingest job of the connection it needs to alert anyone**, and bills us for the privilege.
+Scale-to-zero means traffic costs money, so cost amplification is a real attack here rather than a
+theoretical one. Set it low (single digits at this scale), give the ingest job its own database role
+with reserved connections, and never let the web tier be able to take alerting down.
 
 ### 6.2 Cost estimate (rough, EUR/month, single-digit subscriber count)
 
@@ -372,8 +416,9 @@ CREATE TABLE evaluations (
   evaluated_at           timestamptz NOT NULL DEFAULT now(),
   now_wet                boolean NOT NULL,
   first_hit_lead_minutes integer,             -- NULL = no hit inside the lead window
-  max_rate_by_lead       real[] NOT NULL,     -- 25 values, mm per 5 min, index = frame k
-  missing_fraction       real[] NOT NULL,     -- per frame: share of masked cells that were no-data
+  max_rate_by_lead       real[] NOT NULL,     -- 25 slots, mm per 5 min, index = lead/5 (NOT
+                                              -- the frame's position: see 8.2), NULL where absent
+  missing_fraction       real[] NOT NULL,     -- same indexing as max_rate_by_lead
   state_before           alert_state NOT NULL,
   state_after            alert_state NOT NULL,
   decision               text NOT NULL,       -- alert | no_rain | suppressed_state |
@@ -438,7 +483,14 @@ For each active subscription, per cycle:
    forecast (measured: 102 615 cells go valid → no-data between t+0 and t+120, and 79 483 the other
    way; `DWD_RV_FORMAT.md` §9), so a point near the edge of coverage can have good data now and none
    at t+45. Taking frame 0's mask for all frames would evaluate garbage for exactly those users.
-4. Coverage is **not** the same as being inside the grid: the DE1200 rectangle is much larger than the
+4. **The loop is fault-isolating.** Each subscription is evaluated inside its own try/except: a
+   failure records `decision='error'`, increments a metric, and the loop continues. Without this, one
+   unevaluatable row — a `NaN` latitude that arrived through the API, an unknown `timezone` string —
+   aborts the run for *everyone*, every cycle, permanently, and §13's ban on logging exact
+   coordinates makes it hard to find which row is at fault. A subscription that keeps failing is
+   surfaced as unhealthy in `/subscriptions/me` and `/manage`, so the user is told rather than
+   silently never warned.
+5. Coverage is **not** the same as being inside the grid: the DE1200 rectangle is much larger than the
    radar network's reach, and ~47 % of it is no-data even in perfect conditions. A subscription is
    flagged `out_of_coverage` when its mask is entirely no-data at t+0 across several consecutive
    cycles — not merely when the point falls outside the grid. The UI/API says so explicitly rather
@@ -447,6 +499,23 @@ For each active subscription, per cycle:
 Rationale for `max` rather than `mean`: a 2 km radius around a point, one of whose cells is under a
 shower, means the user gets wet. Mean would dilute small convective cells, which is exactly the case
 this service exists for.
+
+### 8.0 Index by lead, never by position
+
+`max_rate_by_lead` and `missing_fraction` are indexed by **`lead_minutes / 5`**, built from a
+`dict[int, float]` keyed on the frame's own `lead_minutes`. They are *not* the decoded frame list
+indexed by position.
+
+The two agree only when all 25 members are present with leads exactly 0, 5, … 120. If a cycle
+arrives with `_015` missing, positional indexing shifts every later entry down one slot: rain at +60
+is emailed as rain at +55, and the wrong `predicted_start_at` is written to the permanent
+`rain_events` record — which then corrupts the verification job that exists to tune the thresholds.
+With a forged `VV` field the misalignment is chosen by the sender. Absent leads stay NULL, which the
+§9 per-frame gate already treats as "excluded, not dry".
+
+The ingest path asserts completeness — leads exactly `range(0, 125, 5)`, one `nominal_time` — and
+marks anything else `status='partial'`. (§16.1 tells the *fixture* tests not to assert a member
+count, because fixtures hold three frames; that instruction must not leak into the pipeline.)
 
 ### 8.1 Why sample per subscription at all?
 
@@ -511,6 +580,16 @@ instead of suppressing one.
 
 On the `DRY → WARNED` transition: open a `rain_events` row with
 `predicted_start_at = T0 + 5·first_hit`, queue the notification, set `last_alert_at`.
+
+**Blast-radius limit (global, per cycle).** Before any mail is queued, count the transitions this
+cycle would produce. If more than `min(50 % of active subscriptions, BLAST_RADIUS_MAX)` subscriptions
+would be warned at once, queue **nothing**, record the cycle as `partial`, and send a single operator
+alert instead. A national squall line is real and will trip this; at this scale a human confirming it
+once is cheap, and it is the only control that bounds the worst case — a poisoned or corrupt cycle
+that reads as rain everywhere would otherwise mail the entire list in one go *and* burn the mail
+provider's daily quota, so that the day's genuine alerts are never delivered. There is also a
+per-run absolute ceiling on mails, with confirmation mail drawing from a separate reserve so it
+cannot starve alert mail.
 
 **Suppression checks** (evaluated in this order, before queuing):
 1. `min_gap_minutes > 0` and `now - last_alert_at < min_gap_minutes` → `suppressed_gap`
@@ -703,7 +782,13 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 | `DWD_BASE_URL` | `https://opendata.dwd.de/weather/radar/composite/rv/` | product directory |
 | `DWD_USER_AGENT` | — | must include contact URL/mailbox (§4.3) |
 | `DWD_MAX_ATTEMPTS` | `5` | per cycle |
-| `DWD_DAILY_BYTE_BUDGET` | `8589934592` | 8 GiB guard |
+| `DWD_DAILY_BYTE_BUDGET` | `8589934592` | 8 GiB guard; halting pages the operator (§4.3 rule 7) |
+| `DWD_HOURLY_BYTE_BUDGET` | `536870912` | 512 MiB guard, so exhaustion costs an hour not a day |
+| `DWD_MAX_RESPONSE_BYTES` | `33554432` | 32 MiB hard cap on a single response (§4.3.1) |
+| `CYCLE_MAX_FUTURE_MINUTES` | `15` | reject a cycle stamped further ahead than this |
+| `CYCLE_MAX_AGE_HOURS` | `3` | reject a cycle stamped further back than this |
+| `PLAUSIBILITY_MAX_MM_5MIN` | `40` | national max above this gates the cycle |
+| `BLAST_RADIUS_MAX` | `25` | absolute cap on subscriptions warned in one cycle (§9) |
 | `RAW_RETENTION_HOURS` | `48` | GCS lifecycle (D-7) |
 | `EVALUATION_RETENTION_HOURS` | `48` | purge of the `evaluations` debug log (D-23) |
 | `OVERLAY_OBS_RETENTION_HOURS` | `14` | GCS lifecycle, observed frames (12 h window + margin) |
@@ -728,7 +813,15 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 
 Metrics (Prometheus text on `/metrics`, mirrored to Cloud Monitoring):
 - `rainalert_cycle_age_seconds` — **the key SLI**: now − latest `radar_cycles.nominal_time`.
-  Alert if > 20 min.
+  Alert if > 20 min. Note this value derives from a field **the remote party supplies**, so it is
+  clamped at zero and a **negative raw age is its own paging condition**: a cycle stamped in the
+  future would otherwise read as "the freshest data we ever had" and silence this alert until real
+  time caught up. §4.3.1 rule 5 rejects such a cycle at ingest; this alert is the backstop for
+  whatever slips through.
+- `rainalert_cycle_status_total{status=ok|partial|rejected}` — a cycle can be fetched, stored and
+  *meaningless*. Staleness monitoring does not cover "fetched, parsed, and implausible", which is
+  exactly the shape of a poisoned-upstream attack that suppresses everyone's alerts while the
+  dashboard stays green.
 - `rainalert_fetch_attempts_total{result=ok|notmodified|late|failed}`
 - `rainalert_fetch_bytes_total`, `rainalert_daily_budget_used_ratio`
 - `rainalert_decode_seconds`, `rainalert_pipeline_seconds` (alert if > 120 s — the 5-minute budget)
@@ -891,6 +984,28 @@ locations per subscriber, additional countries/sources.
 
 ---
 
+## 18.1 Security findings still outstanding
+
+An independent adversarial review is at [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md) — 18 findings,
+6 high, none critical. The findings that were design-level have been folded into the sections above
+(§4.3.1, §6.1, §8.0, §8 step 4, §9, §15) and the two that were live code (F-1 decompression bomb,
+F-3 undocumented exception types) are fixed with regression tests in `tests/test_hostile_input.py`
+and `tests/test_grid.py`. The rest are tracked here so they are not lost, against the milestone that
+owns them:
+
+| Finding | Owner | Note |
+|---|---|---|
+| F-4 long-lived API token issued by an emailed `GET` link | M3 | Mail scanners GET links: the scanner consumes the single-use token *and* receives the bearer token. Make confirm a `POST` from a landing page; never put a token in a URL that gets logged |
+| F-5 rate limiting has no defined client-IP source | M3 | `X-Forwarded-For` is attacker-controlled unless the trusted-proxy hop count is pinned. Deletion also erases the abuse state, so delete-and-retry resets any limit |
+| F-6 scale-to-zero cost/DoS | M6 | Folded into §6.1 as `--max-instances`; the reserved-connection half is deploy work |
+| F-8 Cloud Run request logs defeat §13 | M6 | The platform logs full URLs including query strings for 30 days by default — §13's "plaintext never stored" is only true once that is configured |
+| F-9 "public-read or proxied" also exposes `raw/` | M6 | Split the bucket, or proxy; the raw DWD archives should not be world-readable next to the overlays |
+| F-12 GDPR: DPA scope, consent columns, reversible IP hash | **now** | The mail-provider Auftragsverarbeitungsvertrag applies from the first friend's address, not from public launch. §7 has no columns for the consent record. An unsalted hash of an IP is reversible by brute force |
+| F-13 `/metrics` "internal" is not expressible on Cloud Run | M6 | Either authenticate it or do not expose it |
+| F-14–F-16 `/forecast` amplification, rule-parameter abuse, web hardening | M3/M5 | CSP `frame-ancestors`, `Referrer-Policy`, CSRF, mail header injection, session model |
+| F-17 location updates silently suppress alerting for a moving user | M7 | D-17 resets state on a >1 km move; an app updating location often could keep a user permanently in `UNKNOWN` |
+| F-18 supply chain and deploy path | M6 | Pin dependencies, pin base image by digest |
+
 ## 19. Open questions
 
 | # | Question | Needed by |
@@ -902,6 +1017,7 @@ locations per subscriber, additional countries/sources.
 | Q-5 | Map tiles: OSM public tiles are fine privately but not for a public launch | M5 |
 | Q-6 | Should raw archives be kept longer than 48 h — and become a permanent cold archive? They are the system of record (D-23), N-independent at ~500 GB/year, ≈ €2–4/month on Coldline, and the only thing that allows retroactively re-tuning thresholds against real weather. My recommendation: 48 h hot now, revisit once alerting is tuned | M2 |
 | Q-8 | Is 12 h the right past span, or would 24 h be more useful? Storage is negligible (~22 MB per 12 h); the real limits are DWD's own file retention and slider usability | M5 |
+| Q-9 | Accept the mail provider's DPA and Google's CDPA before the first friend subscribes (F-12). Ten minutes of clicking, and Art. 28 GDPR applies from the first address handed over — this is not launch paperwork | M3 |
 | Q-7 | Reverse geocoding for a friendly place name in the subject line — worth an extra dependency/service? | M4 |
 
 ---
@@ -916,6 +1032,8 @@ locations per subscriber, additional countries/sources.
 | Radar outage read as "dry" | Missed warnings, wrong state transitions | `MISSING_FRACTION_LIMIT` gate (§9 step 0) |
 | Mail lands in spam | Service is useless | SPF/DKIM/DMARC as an M6 gate; transactional provider; RFC 8058 unsubscribe |
 | Cloud Run job overruns the 5-minute budget as subscribers grow | Cycles skipped | `rainalert_pipeline_seconds` alert; split the overlay renderer out first (§6) |
+| A poisoned or corrupt upstream response suppresses everyone's alerts while monitoring stays green | Nobody is warned, and we do not find out | Plausibility gate and cycle status metric (§4.3.1, §15); staleness alone does not cover "fetched, parsed, meaningless" |
+| One unevaluatable subscription aborts every cycle | Permanent outage for all users from one bad row | Per-subscription fault isolation (§8 step 4); `OutsideGrid` covers every rejected coordinate |
 | Hammering DWD through a retry bug | Blocked by DWD, reputational | Attempt caps, backoff, circuit breaker, daily byte budget, idempotency (§4.3) |
 | Personal data leak (email + precise location) | GDPR incident | Minimisation, hashed tokens, rounded logs, hard delete (§13) |
 | 168 timeline frames overwhelm a phone on mobile data | Map page unusable where it matters most | Windowed lazy loading, no full preload, LRU eviction (§11.1) |

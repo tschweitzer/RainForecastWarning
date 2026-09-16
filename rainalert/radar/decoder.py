@@ -11,6 +11,7 @@ filename, so a file fetched as ``..._LATEST.tar.bz2`` is self-describing.
 
 from __future__ import annotations
 
+import logging
 import re
 import tarfile
 from dataclasses import dataclass
@@ -23,6 +24,24 @@ ETX = 0x03
 
 #: Sentinel for "no measurement here". See the warning in :func:`decode_frame`.
 NODATA = 0x29C4
+
+# Limits on what an archive may contain. The upstream file is fetched over the internet from a
+# third party, so it is untrusted input even though the third party is a national weather service:
+# a compromised mirror, a hijacked route, or simply a corrupt publication all look the same here.
+# A 483-byte bz2 archive can declare a 512 MiB member (ratio 1:1111533); decoding it unbounded
+# OOMs the job, and because ..._LATEST keeps serving the same bytes it OOMs every cycle after that.
+MAX_MEMBERS = 32
+MAX_MEMBER_BYTES = 8 * 1024 * 1024
+MAX_TOTAL_BYTES = 128 * 1024 * 1024
+
+# Accepted header ranges. Reading dimensions and precision from the header rather than hard-coding
+# them is right, but unvalidated it means trusting a remote party with the allocation size and the
+# scale of every reading: a forged "PR E+20" otherwise decodes to precision 1e+20.
+VALID_PRECISIONS = (1e-1, 1e-2, 1e-3)
+VALID_INTERVALS = (5,)
+MIN_DIM, MAX_DIM = 1000, 1400
+MAX_LEAD_MINUTES = 120
+EXPECTED_SHAPE = (1200, 1100)
 
 _FIELD = {
     "BY": re.compile(rb"BY\s*(\d+)"),
@@ -37,8 +56,15 @@ _FIELD = {
 _MS = re.compile(rb"MS\s*(\d+)<([^>]*)>")
 
 
+logger = logging.getLogger(__name__)
+
+
 class RVFormatError(ValueError):
     """The file does not look like an RV composite."""
+
+
+class RVArchiveRejected(RVFormatError):
+    """The archive violates a size or count limit and was not decoded at all."""
 
 
 @dataclass(frozen=True)
@@ -79,24 +105,52 @@ def parse_header(blob: bytes) -> tuple[dict, int]:
             raise RVFormatError(f"header field {key} missing")
         return m
 
-    day, hour, minute = int(head[2:4]), int(head[4:6]), int(head[6:8])
-    month, year = int(head[13:15]), int(head[15:17])
+    # A malformed date field otherwise escapes as a bare ValueError from int()/datetime(), which
+    # callers catching RVFormatError would not see - the same class of bug as the grid coordinates.
+    try:
+        nominal_time = datetime(
+            2000 + int(head[15:17]),
+            int(head[13:15]),
+            int(head[2:4]),
+            int(head[4:6]),
+            int(head[6:8]),
+            tzinfo=UTC,
+        )
+    except ValueError as exc:
+        raise RVFormatError(f"malformed timestamp in header: {exc}") from exc
     gp = need("GP")
     ms = _MS.search(head)
+
+    precision = float(b"1" + need("PR").group(1))
+    interval = int(need("INT").group(1))
+    rows, cols = int(gp.group(1)), int(gp.group(2))
+    lead = int(need("VV").group(1))
+
+    if not MIN_DIM <= rows <= MAX_DIM or not MIN_DIM <= cols <= MAX_DIM:
+        raise RVFormatError(f"implausible grid {rows}x{cols}")
+    if precision not in VALID_PRECISIONS:
+        raise RVFormatError(f"unexpected precision {precision!r}")
+    if interval not in VALID_INTERVALS:
+        raise RVFormatError(f"unexpected interval {interval} min")
+    if not 0 <= lead <= MAX_LEAD_MINUTES or lead % 5:
+        raise RVFormatError(f"implausible forecast lead {lead} min")
+    if (rows, cols) != EXPECTED_SHAPE:
+        # In range but not what DE1200 has always been: decode it, but this should page someone
+        # rather than silently reshape the national composite.
+        logger.warning("RV grid is %dx%d, expected %dx%d", rows, cols, *EXPECTED_SHAPE)
 
     fields = {
         "producttype": "RV",
         "radarid": head[8:13].decode("ascii"),
-        "nominal_time": datetime(2000 + year, month, day, hour, minute, tzinfo=UTC),
+        "nominal_time": nominal_time,
         "datasize": int(need("BY").group(1)),
         "formatversion": int(need("VS").group(1)),
         "softwareversion": need("SW").group(1).decode("ascii"),
-        # "E-02" -> 0.01
-        "precision": float(b"1" + need("PR").group(1)),
-        "interval_minutes": int(need("INT").group(1)),
-        "rows": int(gp.group(1)),
-        "cols": int(gp.group(2)),
-        "lead_minutes": int(need("VV").group(1)),
+        "precision": precision,  # "E-02" -> 0.01
+        "interval_minutes": interval,
+        "rows": rows,
+        "cols": cols,
+        "lead_minutes": lead,
         "moduleflag": int(need("MF").group(1)),
         "radar_sites": tuple(ms.group(2).decode("ascii").split(",")) if ms else (),
         "raw_header": head.decode("latin-1"),
@@ -143,15 +197,41 @@ def read_frames(archive: Path | str) -> list[RVFrame]:
     """
     frames: list[RVFrame] = []
     with tarfile.open(archive, "r:*") as tar:
-        for member in tar.getmembers():
-            if not member.isfile():
-                continue
+        members = [m for m in tar.getmembers() if m.isfile()]
+        _check_limits(members)
+        for member in members:
             handle = tar.extractfile(member)
             if handle is None:
                 continue
-            frames.append(decode_frame(handle.read()))
+            # Bounded read: one byte more than declared, so a member that lies about its size is
+            # caught rather than streamed into memory.
+            blob = handle.read(member.size + 1)
+            if len(blob) != member.size:
+                raise RVArchiveRejected(
+                    f"member {member.name!r} declared {member.size} bytes, delivered {len(blob)}"
+                )
+            frames.append(decode_frame(blob))
     frames.sort(key=lambda f: (f.nominal_time, f.lead_minutes))
     return frames
+
+
+def _check_limits(members: list[tarfile.TarInfo]) -> None:
+    """Reject the archive as a whole before any member is read.
+
+    Deliberately all-or-nothing: decoding "the good parts" of a suspicious archive would let an
+    attacker choose which forecast steps we see.
+    """
+    if len(members) > MAX_MEMBERS:
+        raise RVArchiveRejected(f"{len(members)} members, limit is {MAX_MEMBERS}")
+    total = 0
+    for member in members:
+        if member.size > MAX_MEMBER_BYTES:
+            raise RVArchiveRejected(
+                f"member {member.name!r} declares {member.size} bytes, limit is {MAX_MEMBER_BYTES}"
+            )
+        total += member.size
+    if total > MAX_TOTAL_BYTES:
+        raise RVArchiveRejected(f"archive declares {total} bytes total, limit is {MAX_TOTAL_BYTES}")
 
 
 def read_cycle(archive: Path | str) -> list[RVFrame]:

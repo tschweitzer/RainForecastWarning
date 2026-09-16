@@ -46,7 +46,12 @@ _GEOD = Geod(ellps="WGS84")
 
 
 class OutsideGrid(LookupError):
-    """The coordinate falls outside the DE1200 rectangle.
+    """The coordinate cannot be mapped onto the DE1200 grid.
+
+    Raised for anything this module refuses: outside the rectangle, or not a finite number. It is
+    the *only* exception ``cell_of`` and ``radius_mask`` raise for a bad coordinate - a documented
+    exception type that does not actually cover the failure modes is worse than none, because a
+    caller that carefully catches it still dies on the cases it missed.
 
     Note this is *not* the same as being outside radar coverage: roughly 47 % of the grid is
     permanently no-data because the rectangle is much larger than the radar network's reach.
@@ -80,8 +85,20 @@ def cell_corners(spec: GridSpec = DE1200) -> tuple[np.ndarray, np.ndarray]:
 
 
 def cell_of(lat: float, lon: float, spec: GridSpec = DE1200) -> tuple[int, int]:
-    """Grid indices ``(row, col)`` containing the given WGS84 point."""
+    """Grid indices ``(row, col)`` containing the given WGS84 point.
+
+    Raises :class:`OutsideGrid` for any coordinate that cannot be mapped, including NaN and
+    infinities. These reach the service through the API: Python's ``json`` module accepts the bare
+    tokens ``NaN`` and ``Infinity``, so a stored location can be non-finite without anyone trying.
+    One such row, evaluated every cycle, would otherwise abort the run for every subscriber.
+    """
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        raise OutsideGrid(f"lat={lat!r}, lon={lon!r} is not a finite coordinate")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        raise OutsideGrid(f"lat={lat!r}, lon={lon!r} is not a valid WGS84 coordinate")
     x, y = _to_radolan().transform(lon, lat)
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise OutsideGrid(f"lat={lat!r}, lon={lon!r} does not project onto the grid")
     x0, y0 = _origin(spec)
     col = math.floor((x - x0) / spec.res_km)
     row = math.floor((y - y0) / spec.res_km)

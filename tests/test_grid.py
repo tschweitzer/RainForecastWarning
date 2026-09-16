@@ -101,3 +101,27 @@ def test_radius_mask_grows_monotonically():
     sizes = [len(radius_mask(lat, lon, r)[0]) for r in (0, 1000, 2000, 5000, 10000)]
     assert sizes == sorted(sizes)
     assert sizes[0] == 1  # a zero radius still yields the containing cell
+
+
+@pytest.mark.parametrize(
+    ("lat", "lon", "label"),
+    [
+        (float("nan"), 8.0, "NaN latitude"),
+        (51.0, float("nan"), "NaN longitude"),
+        (float("inf"), 8.0, "infinite latitude"),
+        (51.0, float("-inf"), "infinite longitude"),
+        (91.0, 8.0, "latitude out of WGS84 range"),
+        (51.0, 200.0, "longitude out of WGS84 range"),
+    ],
+)
+def test_non_finite_and_out_of_range_coordinates_raise_outside_grid(lat, lon, label):
+    """Only OutsideGrid, never ValueError/OverflowError (F-3).
+
+    These are reachable through the API - json.loads accepts the bare token NaN - and one such
+    stored row is re-evaluated every cycle, so anything that escapes here is a permanent outage
+    for every subscriber, not just for the bad row.
+    """
+    with pytest.raises(OutsideGrid):
+        cell_of(lat, lon)
+    with pytest.raises(OutsideGrid):
+        radius_mask(lat, lon, 2000)
