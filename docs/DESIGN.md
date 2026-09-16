@@ -1,12 +1,14 @@
 # RainAlert — Design & Requirements
 
-**Status:** Draft v1, ready for implementation
+**Status:** Draft v2, ready for implementation
 **Date:** 2026-09-16
+**Changes since v1:** timeline slider extended to −12 h … +2 h (D-22); evaluation storage reduced to a
+48 h debug log (D-23, §8.1); "simplicity over optimization" added as a governing principle (§1)
 **Repository:** RainForecastWarning — the Python package/module namespace is `rainalert`
 **Audience:** the coding agent that will implement this, and future-me
 
-> **Repository.** `github.com/tschweitzer/RainForecastWarning`. This document is the first commit
-> and is the authoritative specification until code exists; keep it updated as decisions change.
+> **Repository.** `github.com/tschweitzer/RainForecastWarning`. This document is the authoritative
+> specification until code exists; keep it updated as decisions change.
 
 ---
 
@@ -20,7 +22,8 @@ radar nowcast data. "Get the laundry in / take a jacket" — not a general weath
 - Email subscription with double opt-in, one location per subscriber, location updatable via API.
 - Alert when rain is predicted to start at the subscriber's location within the next 30 minutes.
 - Minimal server-rendered web UI: subscribe (map picker), confirm, manage, unsubscribe.
-- The map picker page also renders the current rain nowcast as an overlay with a time slider.
+- The map picker page renders a rain **timeline**: an overlay with a slider spanning the last
+  **12 hours of observed rain** through the next **2 hours of nowcast**.
 - REST API shaped so a future mobile app can use it unchanged.
 
 ### Explicitly out of scope for v1
@@ -31,6 +34,14 @@ radar nowcast data. "Get the laundry in / take a jacket" — not a general weath
 - Snow/hail/thunderstorm classification, wind, temperature.
 - "All clear" / "rain has stopped" notifications.
 - Public launch paperwork (Impressum, full Datenschutzerklärung, DPA). See §13.
+
+### Guiding principle
+
+**Simplicity over optimization.** Where a simpler design and a cleverer one both work at the scale
+this service actually operates at (tens of subscribers, one radar cycle every five minutes), take the
+simpler one — fewer tables, fewer columns, fewer moving parts — even if it leaves performance or
+completeness on the table. Optimize when a measurement says to, not in advance. This rule outranks
+any efficiency argument elsewhere in this document.
 
 ### Non-goals / anti-requirements
 - Do **not** mirror or re-publish DWD bulk data.
@@ -51,7 +62,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-4 | Host on GCP, serverless, scale-to-zero | Cloud Run service + Cloud Run job + Cloud Scheduler + GCS |
 | D-5 | Identity = email + magic link (double opt-in); subscription holds an opaque API token | GDPR consent trail, no passwords, reusable by the future app |
 | D-6 | Ingestion stores **full grids** (the original archives), not just samples | Enables replay, debugging, and the map overlay feature |
-| D-7 | Retention: raw archives **48 h**; rendered overlays **2 h**; per-subscription evaluations **indefinitely** | Cheap, still enough to debug "why did/didn't I get a mail" |
+| D-7 | Retention: raw archives **48 h**; forecast overlays **1 h**; observed overlays **14 h**; `evaluations` **48 h**; `rain_events` / `notifications` indefinitely | See D-23 |
 | D-8 | Alert de-duplication via a **per-subscription state machine** (§9), not a fixed cooldown | One mail per rain *event*, not per cycle |
 | D-9 | v1 throttling: **none beyond the state machine** — maximum notifications, for debugging | Explicit user choice |
 | D-10 | `min_gap_minutes` ("only once per N minutes") and quiet hours exist in the schema and config now, default **off** (`0` / disabled) | Future-configurable without migration |
@@ -64,8 +75,10 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-17 | A location change of more than 1 km resets the alert state to `UNKNOWN` | Otherwise moving into existing rain produces a bogus "rain starting" mail |
 | D-18 | Audience: private (me + friends); designed so going public later is a config/paperwork change, not a rewrite | Still: double opt-in, one-click unsubscribe, deletion endpoint |
 | D-19 | Frontend: server-rendered HTML, no build step; Leaflet + OSM for the map | Non-technical friends must be able to subscribe |
-| D-20 | Map picker page shows the rain nowcast as an image overlay with a **time slider** over the 25 frames | Added during the interview; drives the overlay renderer (§11) |
+| D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
+| D-22 | The slider spans **−12 h … +2 h**. Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast |
+| D-23 | `evaluations` is a **rolling 48 h debug log** with a single TTL. The permanent per-subscriber record is `rain_events` + `notifications`, which are only written when something happens anyway | §8.1 — an indefinite row-per-subscriber-per-cycle series outgrows the entire national radar archive at ~13 500 subscribers, and ~99 % of it says "nothing happened" |
 
 ---
 
@@ -98,8 +111,8 @@ The folders used in the user's earlier project no longer exist:
 2. It is **quantitative precipitation** (mm per 5 min), not raw reflectivity — no dBZ→rain-rate
    conversion (Z-R relationship) needed, so the threshold in D-13 is directly meaningful.
 3. It already includes the t+0 analysis frame, so "is it raining *now*?" (needed by D-2) comes from
-   the same file. **We do not need a second product for the past.** `RS` (past-hour totals) is not
-   required for v1.
+   the same file. **We do not need a second product for the past.** The same t+0 frames, kept per
+   cycle, also supply the map's 12 h history (§11.1). `RS` (past-hour totals) is not required for v1.
 
 Base URL: `https://opendata.dwd.de/weather/radar/composite/rv/`
 Files: `DE1200_RV<YYMMDDHHMM>.tar.bz2`, plus a rolling `DE1200_RV_LATEST.tar.bz2`.
@@ -203,9 +216,9 @@ Cloud Run Job: ingest ───────────────────�
   2. dedupe by nominal_time (unique) ─────────────► Postgres       │
   3. archive raw .tar.bz2 ───────────────────────► GCS  (48 h TTL) │
   4. decode 25 frames (numpy, in memory)                           │
-  5. for each active subscription: sample radius mask ► Postgres   │
+  5. sample per distinct radius mask (deduped) ► fan out to subs    │
   6. evaluate state machine ► enqueue alerts ─────► Postgres       │
-  7. render 25 PNG overlays (Web Mercator) ──────► GCS  (2 h TTL)  │
+  7. render overlays: 1 observed + 24 forecast ──► GCS (14 h / 1 h)│
   8. deliver queued alerts via Notifier ─────────► mail provider   │
 └──────────────────────────────────────────────────────────────────┘
 
@@ -234,7 +247,7 @@ older than 30 min `expired` (a late rain warning is worse than none).
 | Cloud Run **job** `rainalert-ingest` | the 5-minute pipeline | `--max-retries 1`, `--task-timeout 240s`, **concurrency 1** |
 | Cloud Run **service** `rainalert-api` | API + web UI | min instances 0 |
 | Cloud Scheduler `rainalert-tick` | `3-58/5 * * * *` UTC | invokes the job via OIDC SA |
-| GCS bucket `rainalert-data` | `raw/` (48 h), `overlays/` (2 h) | lifecycle rules, uniform ACL |
+| GCS bucket `rainalert-data` | `raw/` (48 h), `overlays/obs/` (14 h), `overlays/fc/` (1 h) | per-prefix lifecycle rules, uniform ACL |
 | Secret Manager | DB URL, mail API key, `SECRET_KEY` | mounted as env |
 | Artifact Registry | one container image, two entrypoints | |
 | Cloud Logging / Monitoring | structured logs, staleness alert | §15 |
@@ -250,7 +263,7 @@ pipeline) so a retried execution can never double-send.
 | Ingest compute | 288 runs/day × ~30 s × 1 vCPU / 2 GiB ≈ 72 vCPU-h/month, partly free-tier | 1–3 |
 | API service | scale-to-zero, a few requests/day | ~0 |
 | GCS raw archives | ~5 MB/cycle × 288/day ≈ 1.4 GB/day, 48 h retention ≈ 3 GB | <0.1 |
-| GCS overlays | 25 PNG × ~150 KB × 288/day, 2 h retention ≈ 0.4 GB | <0.1 |
+| GCS overlays | observed: 144 × ~150 KB rolling ≈ 22 MB; forecast: 24/cycle × 1 h ≈ 43 MB | <0.1 |
 | Egress | overlay PNGs to a handful of browsers | ~0 |
 | Mail | free tier (~300/day) | 0 |
 | Database | Neon free tier / Cloud SQL micro | 0 / ~9 |
@@ -329,7 +342,8 @@ CREATE TABLE radar_cycles (
   frame_count   integer NOT NULL,
   status        cycle_status NOT NULL DEFAULT 'ok',
   archive_uri   text,                         -- gs://.../raw/DE1200_RV<...>.tar.bz2
-  overlay_uri_prefix text,                    -- gs://.../overlays/<nominal_time>/
+  obs_overlay_uri    text,                    -- gs://.../overlays/obs/<nominal_time>.png
+  fc_overlay_prefix  text,                    -- gs://.../overlays/fc/<nominal_time>/
   notes         text
 );
 
@@ -349,6 +363,9 @@ CREATE TABLE evaluations (
   UNIQUE (subscription_id, cycle_id)
 );
 CREATE INDEX evaluations_by_sub_time ON evaluations (subscription_id, evaluated_at DESC);
+-- D-23: the whole table is purged past EVALUATION_RETENTION_HOURS (48 h, matching the raw archives,
+-- so any incident inside that window is fully reconstructable). Nothing here is permanent; the
+-- durable per-subscriber record is rain_events + notifications below.
 
 CREATE TABLE alert_states (
   subscription_id uuid PRIMARY KEY REFERENCES subscriptions(id) ON DELETE CASCADE,
@@ -407,6 +424,32 @@ Rationale for `max` rather than `mean`: a 2 km radius around a point, one of who
 shower, means the user gets wet. Mean would dilute small convective cells, which is exactly the case
 this service exists for.
 
+### 8.1 Why sample per subscription at all?
+
+A fair objection: the radar field is one global object of fixed size, while per-subscriber data grows
+with the number of subscribers. Past some N, storing anything per subscriber per cycle costs more
+than storing the whole national grid — which contains strictly more information anyway.
+
+That is true, and the crossover is low. One `evaluations` row is ≈ 300 bytes with its indexes; one
+cycle's compressed RV archive is ≈ 5 MB. They cost the same at ≈ **13 500 subscribers** — and the
+archive is a fixed cost per cycle at *any* N, while the rows multiply.
+
+The flaw was not that the data is per subscriber. It is that it is **cycle-shaped**: 288 rows per
+subscriber per day, ~99 % of which record "dry, nothing happened". Hence D-23 — `evaluations` is a
+rolling 48 h debug log with one TTL and no exceptions, and the durable per-subscriber record is
+`rain_events` + `notifications`, which are only written when something actually happens and so need no
+retention machinery of their own.
+
+Accepted limitation: once an event ages past 48 h, we know *that* we warned and when, but not the
+exact rule values in force at the time. Recording those would mean another column and another code
+path to answer a question a handful of users will ask about twice a year. Not worth it (see the
+guiding principle in §1).
+
+The sampling itself is deduplicated by mask key `(grid_row, grid_col, radius_m)`, so its cost is
+bounded by the number of *distinct* masks rather than the subscriber count. That is a one-line
+dictionary lookup, not an optimization project, and it is where the story should stop until a
+measurement says otherwise.
+
 ---
 
 ## 9. Alert evaluation and state machine
@@ -454,9 +497,10 @@ later is a config change.
 suppression to the physical event (it must go dry again for 30 minutes) gives exactly one mail per
 rain event, which is what "not too many notifications" means in practice.
 
-**Verification loop (cheap, high value):** because every evaluation is stored forever (D-7), a daily
+**Verification loop (cheap, high value):** `rain_events` rows are kept indefinitely (D-23), so a daily
 job can compare `rain_events.predicted_start_at` with the later-observed t+0 frames and populate
-`verified`, giving hit rate and false-alarm ratio. Build this in M4; it is the only honest way to
+`verified`, giving hit rate and false-alarm ratio. It runs inside the 48 h window, while the archived
+grids are still there. Build this in M4; it is the only honest way to
 tune the defaults in D-13 later.
 
 ---
@@ -476,7 +520,7 @@ All endpoints return RFC 7807 problem details on error.
 | `POST` | `/subscriptions/me/pause` / `/resume` | api | Temporarily stop alerts without deleting data. |
 | `DELETE` | `/subscriptions/me` | api | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
 | `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
-| `GET` | `/overlays/latest` | none | `{cycle_time, valid_from, frames:[{lead_minutes, valid_time, url, bounds:[[s,w],[n,e]], width, height}], colorscale:[…], attribution}`. Drives the map slider. Cache-Control 60 s. |
+| `GET` | `/overlays/timeline?past_hours=` | none | The full slider manifest, default `past_hours=12`: `{now, latest_cycle, bounds:[[s,w],[n,e]], width, height, colorscale:[…], attribution, gaps:[…], frames:[{offset_minutes, valid_time, kind:"observed"｜"forecast", source_cycle, url}]}`. `offset_minutes` is negative for the past, ordered ascending. Cache-Control 60 s. |
 | `GET` | `/unsubscribe?token=…` | unsubscribe token | One-click unsubscribe (also accepts `POST` for RFC 8058 `List-Unsubscribe-Post`). |
 | `GET` | `/healthz`, `/readyz` | none | Liveness / readiness (readiness = DB reachable). |
 | `GET` | `/metrics` | internal | Prometheus-format metrics (§15). |
@@ -493,32 +537,67 @@ Server-rendered Jinja2, no build step, no SPA. Pages:
 
 - **`/` — subscribe.** Leaflet map (OSM tiles), "use my location" button (browser geolocation),
   draggable marker, email field, consent checkbox with a one-line purpose statement, submit.
-  **Plus the rain overlay + time slider (D-20).**
+  **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
   the app later"), and the manage link.
 - **`/manage`** — current location on the map, rule values (read-only in v1), pause/resume, delete.
 - **`/unsubscribe`** — confirmation of one-click unsubscribe.
 - **`/privacy`**, **`/attribution`** — §4.2 and §13.
 
-### 11.1 Rain overlay with time slider
+### 11.1 Rain timeline overlay (−12 h … +2 h)
 
-Renderer (ingest step 7):
+Two kinds of frame, both produced from RV — no second DWD product:
 
-1. Reproject each of the 25 frames from DE1200 polar-stereographic to **EPSG:3857** into a fixed
-   axis-aligned bounding box covering Germany. The row/col index array for this resampling is
-   **precomputed once** (nearest neighbour) and cached in GCS / the image — per cycle it is then a
-   single numpy fancy-index, not a projection computation.
+- **Observed** (`offset_minutes <= 0`): the **t+0 analysis frame of each past cycle**, one per cycle,
+  5-minute spacing — 144 frames over 12 h. This is what the radar actually measured.
+- **Forecast** (`offset_minutes > 0`): leads 1…24 of the **latest** cycle only, +5 … +120 min.
+
+The asymmetry matters and must be visible in the UI: past frames each come from their own cycle,
+while all future frames come from one. A user must never mistake a forecast frame for an
+observation, so the two are labelled differently and the boundary at *now* is marked on the slider.
+
+**Renderer** (ingest step 7), once per cycle:
+
+1. Reproject the frame from DE1200 polar-stereographic to **EPSG:3857** into a fixed axis-aligned
+   bounding box covering Germany, nearest neighbour, using `pyproj` directly. Compute the mapping in
+   the straightforward way each run; if it ever shows up in `rainalert_pipeline_seconds`, cache it
+   then.
    *Why a Mercator box:* Leaflet's `L.imageOverlay` only places axis-aligned, unrotated images by
    lat/lng bounds. Overlaying the native grid directly would be visibly skewed.
 2. Map values to RGBA with a documented colour scale (transparent below the light-rain threshold, then
    a perceptually ordered ramp). Encode as palettised PNG at half resolution (≈ 550×600) — ~100–200 KB.
-3. Upload to `gs://…/overlays/<nominal_time>/rv_<lead_minutes:03d>.png`, publish the manifest via
-   `GET /api/v1/overlays/latest`. Lifecycle deletes after 2 h.
+3. Upload, with different lifetimes because the two kinds are consumed differently:
+   - analysis → `gs://…/overlays/obs/<nominal_time>.png` — kept **14 h** (12 h window + margin)
+   - forecasts → `gs://…/overlays/fc/<nominal_time>/rv_<lead_minutes:03d>.png` — kept **1 h**, since
+     only the newest cycle's forecast is ever served
 
-Client: preload all 25 images, one `L.imageOverlay` swapped by an `<input type=range min=0 max=120
-step=5>`, plus a play/pause button. Labels show the **valid time in local time** and the lead
-("+35 min"), and the cycle's nominal time so staleness is visible. If the latest cycle is older than
-20 minutes, the page shows a clear "radar data is stale" banner instead of pretending.
+**Manifest.** `GET /api/v1/overlays/timeline?past_hours=12` is a query over `radar_cycles` for the
+window, returning frames ordered by `offset_minutes` ascending.
+
+**Gaps.** A cycle the ingester never obtained is a hole in the timeline. The manifest lists missing
+intervals explicitly and the client renders a gap — no overlay, a "no data" label — rather than
+holding the previous image, which would fake continuity across a radar outage.
+
+**Client.**
+
+- Slider spans `−past_hours·60 … +120` in 5-minute steps (168 positions by default), starts at `0`
+  (now), with a visible *now* tick separating observed from forecast.
+- **Do not preload everything.** 168 PNGs is ≈ 25 MB — fine on a desktop, hostile on a phone with
+  mobile data. Load the frame under the cursor, keep a window of ±6 frames prefetched, prefetch ahead
+  in the direction of travel, and LRU-evict beyond ~40 images.
+- Play button sweeps −60 min → +120 min at ~8 fps and loops; dragging the slider cancels playback.
+- Labels show the absolute **local** time, the relative offset (`−45 min` / `+35 min`), the source
+  cycle's nominal time, and `observed` / `forecast`.
+- If the latest cycle is older than 20 minutes, the page shows a clear "radar data is stale" banner
+  instead of pretending.
+
+**Backfill.** A fresh deployment has no history, so the timeline starts empty and fills at one frame
+per 5 minutes. `rainalert backfill --hours 12` fetches past cycles **sequentially** (one request at a
+time, ≥ 2 s apart, byte budget and all other §4.3 rules honoured) and renders their analysis
+overlays. A separate re-render path rebuilds observed overlays from the 48 h raw archives without
+touching DWD at all — prefer it whenever the archive still has the cycle.
+*How far back the `rv/` directory actually keeps files is an **M0 VERIFY** item*; if DWD only retains
+a few hours, backfill can fill only that much and the rest accrues over time.
 
 **OSM tile policy:** the OpenStreetMap public tile servers are a donated resource with a usage policy
 that forbids heavy use. Fine for a private map picker with correct `User-Agent`/referrer; before any
@@ -558,9 +637,11 @@ a private project this is personal data under GDPR.
 
 - **Legal basis:** consent (Art. 6(1)(a)), obtained via double opt-in; the confirmation timestamp and
   source IP hash are the consent record.
-- **Data minimisation:** store only email, coordinates, rule settings, and evaluation history. No
-  location history (the location is overwritten in place — D-16), no IP logs beyond a hashed value for
-  rate limiting, retained 7 days.
+- **Data minimisation:** store only email, coordinates, rule settings, and the alerts actually sent.
+  No location history (the location is overwritten in place — D-16), no IP logs beyond a hashed value
+  for rate limiting, retained 7 days. The per-cycle `evaluations` log is purged after 48 h (D-23): an
+  indefinite 5-minute-resolution series per subscriber would be a presence log, which is more personal
+  data than this service has any reason to hold.
 - **Purpose limitation:** the stored evaluation rows contain coordinates-derived samples only, never
   raw identifying data beyond the subscription id.
 - **Deletion:** `DELETE /api/v1/subscriptions/me` and the unsubscribe link both hard-delete
@@ -595,7 +676,10 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 | `DWD_MAX_ATTEMPTS` | `5` | per cycle |
 | `DWD_DAILY_BYTE_BUDGET` | `8589934592` | 8 GiB guard |
 | `RAW_RETENTION_HOURS` | `48` | GCS lifecycle (D-7) |
-| `OVERLAY_RETENTION_HOURS` | `2` | GCS lifecycle |
+| `EVALUATION_RETENTION_HOURS` | `48` | purge of the `evaluations` debug log (D-23) |
+| `OVERLAY_OBS_RETENTION_HOURS` | `14` | GCS lifecycle, observed frames (12 h window + margin) |
+| `OVERLAY_FC_RETENTION_HOURS` | `1` | GCS lifecycle, forecast frames |
+| `TIMELINE_PAST_HOURS` | `12` | default/maximum past span of the slider (D-22) |
 | `DEFAULT_RADIUS_M` | `2000` | D-3 |
 | `DEFAULT_THRESHOLD_MM_5MIN` | `0.1` | D-13 |
 | `DEFAULT_LEAD_MINUTES` | `30` | D-13 |
@@ -623,6 +707,8 @@ Metrics (Prometheus text on `/metrics`, mirrored to Cloud Monitoring):
 - `rainalert_evaluations_total{decision=…}`
 - `rainalert_notifications_total{status=…}`
 - `rainalert_missing_fraction` histogram (radar outage visibility)
+- `rainalert_timeline_gaps` — cycles missing from the last `TIMELINE_PAST_HOURS`; a non-zero value
+  means the map shows holes
 
 Logs: structured JSON, one summary record per cycle (nominal time, bytes, decode ms, subscriptions
 evaluated, alerts queued/sent, skipped). A per-subscription debug log line is emitted only at
@@ -654,8 +740,13 @@ Unit tests must run **offline** and fast. No test ever touches `opendata.dwd.de`
    `evaluations` row per subscription, one mail.
 7. **API tests.** Double opt-in flow end to end with the console notifier; token expiry/single use;
    enumeration-safe responses; deletion cascades.
-8. **Rendering test.** Overlay PNG has expected size/bounds; colour scale maps known values.
-9. **Manual acceptance.** `rainalert probe --lat --lon` CLI prints the 25 lead values for a point;
+8. **Rendering test.** Overlay PNG has expected size/bounds; colour scale maps known values;
+   analysis and forecast frames land under the right prefixes.
+9. **Timeline manifest test.** Frames ordered by `offset_minutes`; exactly one observed frame per
+   cycle; forecasts only from the latest cycle; `kind` correct either side of the *now* boundary;
+   missing cycles reported in `gaps` rather than silently skipped; `past_hours` clamped to
+   `TIMELINE_PAST_HOURS`.
+10. **Manual acceptance.** `rainalert probe --lat --lon` CLI prints the 25 lead values for a point;
    compare against a public radar map during actual rain before trusting the alerts.
 
 CI: ruff + mypy (strict on `rainalert/`) + pytest + the import-linter rule that runtime code never
@@ -681,7 +772,7 @@ RainForecastWarning/
       client.py             # politeness-enforcing DWD HTTP client (§4.3)
       decoder.py            # header + payload → arrays (§5)
       grid.py               # DE1200 ↔ WGS84, radius masks (§5)
-      overlay.py            # reprojection + PNG rendering (§11.1)
+      overlay.py            # reprojection + PNG rendering, obs/fc split (§11.1)
     alerting/
       sampler.py            # §8
       rules.py              # threshold/lead evaluation
@@ -693,9 +784,10 @@ RainForecastWarning/
       main.py routes_*.py templates/ static/
     jobs/
       ingest.py             # the Cloud Run job entrypoint (§6)
-      retention.py          # purge job
+      retention.py          # purge job (GCS lifecycle + evaluations TTL)
+      backfill.py           # past cycles from DWD / re-render from raw archives (§11.1)
       verify.py             # prediction vs observation (§9)
-    cli.py                  # probe / backfill / send-test-mail
+    cli.py                  # probe / backfill / render-backfill / send-test-mail
   tests/
     fixtures/ unit/ integration/
 ```
@@ -712,7 +804,9 @@ Each milestone ends with a working, demonstrable artefact.
 **M0 — DWD RV spike (half a day, do this first).**
 Download a real RV archive by hand. Document in `docs/DWD_RV_FORMAT.md`: exact `_LATEST` filename,
 inner member names and count, every header field with an example, the `PR` precision value, the flag
-bit meanings, file size, and observed publication delay over a couple of hours.
+bit meanings, file size, observed publication delay over a couple of hours, and **how far back the
+`rv/` directory retains files** (this decides whether the 12 h timeline can be backfilled at deploy
+time or only accrues — §11.1).
 *Done when:* the doc exists and a trimmed fixture is committed.
 *This resolves every "VERIFY" marker in this document; if reality differs from §4.1, update §4/§5
 before writing code.*
@@ -740,9 +834,10 @@ verification job.
 exactly one mail per event.
 
 **M5 — map UI.**
-Overlay renderer, `/api/v1/overlays/latest`, subscribe page with map picker, rain overlay, time
-slider, staleness banner, attribution.
-*Done when:* the slider animates the next two hours smoothly on a phone.
+Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, backfill/re-render job, subscribe
+page with map picker, rain timeline overlay, slider, staleness banner, attribution.
+*Done when:* the slider animates −12 h … +2 h smoothly on a phone over mobile data, gaps render as
+gaps, and the observed/forecast boundary is unmistakable.
 
 **M6 — deploy.**
 Terraform/gcloud for all §6.1 resources, Secret Manager, SPF/DKIM/DMARC on the sending domain,
@@ -763,7 +858,8 @@ locations per subscriber, additional countries/sources.
 | Q-3 | Database: Neon free tier (≈ €0, outside GCP) vs Cloud SQL `db-f1-micro` (≈ €9/mo, all-in-GCP). Code is DSN-agnostic either way | M3 |
 | Q-4 | Mail provider account: Brevo vs Mailgun vs SendGrid (all have a usable free tier) | M3 |
 | Q-5 | Map tiles: OSM public tiles are fine privately but not for a public launch | M5 |
-| Q-6 | Should overlays/archives be kept longer than 48 h to enable a "rain history" map later? Cost is ~€0.03/GB/month | M2 |
+| Q-6 | Should raw archives be kept longer than 48 h — and become a permanent cold archive? They are the system of record (D-23), N-independent at ~500 GB/year, ≈ €2–4/month on Coldline, and the only thing that allows retroactively re-tuning thresholds against real weather. My recommendation: 48 h hot now, revisit once alerting is tuned | M2 |
+| Q-8 | Is 12 h the right past span, or would 24 h be more useful? Storage is negligible (~22 MB per 12 h); the real limits are DWD's own file retention and slider usability | M5 |
 | Q-7 | Reverse geocoding for a friendly place name in the subject line — worth an extra dependency/service? | M4 |
 
 ---
@@ -780,6 +876,9 @@ locations per subscriber, additional countries/sources.
 | Cloud Run job overruns the 5-minute budget as subscribers grow | Cycles skipped | `rainalert_pipeline_seconds` alert; split the overlay renderer out first (§6) |
 | Hammering DWD through a retry bug | Blocked by DWD, reputational | Attempt caps, backoff, circuit breaker, daily byte budget, idempotency (§4.3) |
 | Personal data leak (email + precise location) | GDPR incident | Minimisation, hashed tokens, rounded logs, hard delete (§13) |
+| 168 timeline frames overwhelm a phone on mobile data | Map page unusable where it matters most | Windowed lazy loading, no full preload, LRU eviction (§11.1) |
+| Per-subscriber time series outgrows the radar archive itself | DB cost scales with N × cycles for data that is ~99 % "nothing happened" | `evaluations` is a 48 h debug log; the permanent record is event-shaped (§8.1, D-23) |
+| DWD retains too little history for backfill | Timeline starts empty and fills over 12 h | M0 verifies actual retention; re-render from raw archives; purely cosmetic — alerting is unaffected |
 
 ---
 
