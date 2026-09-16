@@ -3,7 +3,9 @@
 **Status:** Draft v2, ready for implementation
 **Date:** 2026-09-16
 **Changes since v1:** timeline slider extended to −12 h … +2 h (D-22); evaluation storage reduced to a
-48 h debug log (D-23, §8.1); "simplicity over optimization" added as a governing principle (§1)
+48 h debug log (D-23, §8.1); "simplicity over optimization" added as a governing principle (§1); the
+RV format verified against real data (M0) and the design corrected accordingly; an adversarial
+security review folded in (§4.3.1, §8.0, §9, §15, §18.1); database resolved to Cloud SQL (§6.3)
 **Repository:** RainForecastWarning — the Python package/module namespace is `rainalert`
 **Audience:** the coding agent that will implement this, and future-me
 
@@ -79,6 +81,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
 | D-22 | The slider spans **−12 h … +2 h**. Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast |
 | D-23 | `evaluations` is a **rolling 48 h debug log** with a single TTL. The permanent per-subscriber record is `rain_events` + `notifications`, which are only written when something happens anyway | §8.1 — an indefinite row-per-subscriber-per-cycle series outgrows the entire national radar archive at ~13 500 subscribers, and ~99 % of it says "nothing happened" |
+| D-24 | Production database is **Cloud SQL `db-f1-micro`, `europe-west3`**; dev and CI use Neon free or a local Postgres | §6.3 — Neon's free CU-hour allowance does not survive a 5-minute cadence, and it would add a second US processor for email + home coordinates |
 
 ---
 
@@ -305,7 +308,7 @@ older than 30 min `expired` (a late rain warning is worse than none).
 | Secret Manager | DB URL, mail API key, `SECRET_KEY` | mounted as env |
 | Artifact Registry | one container image, two entrypoints | |
 | Cloud Logging / Monitoring | structured logs, staleness alert | §15 |
-| Postgres | see open question **Q-3** | Neon free tier (default) or Cloud SQL `db-f1-micro` |
+| Postgres | **Cloud SQL `db-f1-micro`, `europe-west3`** | see §6.3 for why, not Neon free |
 
 Cloud Run job concurrency must be 1 (plus a Postgres advisory lock `pg_try_advisory_lock` around the
 pipeline) so a retried execution can never double-send.
@@ -328,11 +331,48 @@ with reserved connections, and never let the web tier be able to take alerting d
 | GCS overlays | observed: 144 × ~150 KB rolling ≈ 22 MB; forecast: 24/cycle × 1 h ≈ 43 MB | <0.1 |
 | Egress | overlay PNGs to a handful of browsers | ~0 |
 | Mail | free tier (~300/day) | 0 |
-| Database | Neon free tier / Cloud SQL micro | 0 / ~9 |
-| **Total** | | **~2–5 (Neon) / ~11–14 (Cloud SQL)** |
+| Database | Cloud SQL `db-f1-micro` + storage + backups | ~9–12 |
+| **Total** | | **~11–17** — the database is most of the bill (§6.3) |
 
 Numbers are estimates; the archive size depends strongly on how much it is raining (bz2 of a dry
 grid is tiny). The daily byte budget guard (4.3 §7) is the backstop.
+
+---
+
+### 6.3 Why Cloud SQL and not Neon's free tier
+
+Both are managed Postgres and the code is DSN-agnostic, so this is not a technical lock-in. Two
+things decided it, and both are specific to *this* workload rather than general advice.
+
+**The 5-minute cadence defeats scale-to-zero billing.** Neon's free plan allows 100 CU-hours per
+month and suspends compute after an idle period, 300 s by default. The ingest job queries every
+300 s, so the idle timer keeps resetting and the compute plausibly never suspends. At the 0.25 CU
+floor that is roughly 730 h × 0.25 = **180 CU-hours against a 100 CU-hour allowance — exhausted
+around day 16**, after which compute stays suspended until the month rolls over. That is a silent
+two-week outage every month, in a service whose entire failure mode is "nobody gets warned and the
+dashboard looks fine".
+
+It can be tuned to fit — dropping autosuspend to ~60 s costs about 65 s of wakefulness per cycle,
+roughly 39 CU-hours/month — but that is production running on a free tier trimmed to fit, with
+arithmetic to re-verify whenever the cadence or the plan changes. Not worth €10/month.
+
+**It would add a second processor for the most sensitive table.** We store email addresses and
+precise home coordinates of private individuals in Germany. Cloud SQL in `europe-west3` keeps that
+inside Google, which is already the processor for Cloud Run and GCS: one DPA, one subprocessor
+entry. Neon is a second processor, US-headquartered since the Databricks acquisition, so the CLOUD
+Act question exists even with data in an EU region — and §13 is built on data minimisation.
+
+Cutting the other way: `db-f1-micro` defaults to about 25 connections, which makes the connection
+starvation in SECURITY_REVIEW.md F-6 *sharper* than it would be behind Neon's pooler. That is an
+argument for setting `--max-instances` low and giving the ingest job its own role with reserved
+connections — both of which F-6 already requires — not for changing database. Note also that
+shared-core instances carry no SLA; at this scale that is acceptable, and it is the reason to keep
+the DSN-agnostic code rather than adopt Cloud SQL-specific features.
+
+**Where Neon is the better answer:** outside GCP, for genuinely bursty workloads that are idle most
+of the time, or when branch-per-PR databases are worth having. Hence the split actually adopted —
+**Neon free (or a local Postgres, which is what the test suite uses) for development and CI; Cloud
+SQL for production.** That costs nothing extra and puts Neon's branching where it is useful.
 
 ---
 
@@ -1020,7 +1060,7 @@ owns them:
 |---|---|---|
 | Q-1 | Domain name and sending domain (needed for links, `User-Agent` contact, SPF/DKIM/DMARC) | M3 |
 | Q-2 | Confirm the private-audience assumption (D-18). Going public adds Impressum, Datenschutzerklärung, provider DPA | before any public link |
-| Q-3 | Database: Neon free tier (≈ €0, outside GCP) vs Cloud SQL `db-f1-micro` (≈ €9/mo, all-in-GCP). Code is DSN-agnostic either way | M3 |
+| ~~Q-3~~ | **Resolved 2026-09-16: Cloud SQL `db-f1-micro` in `europe-west3` for production, Neon or local Postgres for dev/CI.** Reasoning in §6.3 — the 5-minute cadence exhausts Neon's free CU-hour allowance around day 16 of each month, and Neon would add a second, US-headquartered processor for the table holding email plus home coordinates | done |
 | Q-4 | Mail provider account: Brevo vs Mailgun vs SendGrid (all have a usable free tier) | M3 |
 | Q-5 | Map tiles: OSM public tiles are fine privately but not for a public launch | M5 |
 | Q-6 | Should raw archives be kept longer than 48 h — and become a permanent cold archive? They are the system of record (D-23), N-independent at ~500 GB/year, ≈ €2–4/month on Coldline, and the only thing that allows retroactively re-tuning thresholds against real weather. My recommendation: 48 h hot now, revisit once alerting is tuned | M2 |
