@@ -117,11 +117,11 @@ The folders used in the user's earlier project no longer exist:
 Base URL: `https://opendata.dwd.de/weather/radar/composite/rv/`
 Files: `DE1200_RV<YYMMDDHHMM>.tar.bz2`, plus a rolling `DE1200_RV_LATEST.tar.bz2`.
 
-> **VERIFY in the M0 spike (§17):** the exact `_LATEST` filename, the naming of the 25 member files
-> inside the tar, whether the members are individual RADOLAN binaries or one concatenated stream,
-> and the header fields actually present. These could not be confirmed while writing this doc
-> because the drafting environment had no network access to `opendata.dwd.de`. Everything below is
-> written so that the *code* reads these properties from the file header rather than hard-coding them.
+> **VERIFIED 2026-09-16** against a real archive — see `docs/DWD_RV_FORMAT.md`, which is now the
+> authoritative description of the format. 25 members, one per lead, each a raw RADOLAN binary of
+> 195 header bytes + 1200×1100 little-endian `uint16`. Header carries dimensions, precision
+> (`PR E-02` → 0.01 mm), interval, nominal time and the lead itself, so nothing is hard-coded and
+> filename parsing is never required.
 
 ### 4.2 Licence and attribution (mandatory)
 
@@ -160,10 +160,22 @@ throttle abusive clients. The ingest worker **must**:
 
 ### 4.4 Publication timing
 
-RV for nominal time `T0` typically appears a few minutes after `T0` and is occasionally late.
-Therefore: Cloud Scheduler fires at **minute 3, 8, 13, … 58** (`cron: 3-58/5 * * * *`, UTC), and the
-job then applies the bounded retry loop from 4.3 §5. Data staleness is a first-class monitored metric
-(§15) — a stale cycle must never be silently treated as "no rain".
+RV for nominal time `T0` appears a few minutes after `T0`. **Measured** over a full 48 h listing
+(see `docs/DWD_RV_FORMAT.md` §4): typically **+3 m 10 s … +3 m 30 s**, occasionally **+4 … +5 m**,
+worst observed **+5 m 13 s**.
+
+Therefore: Cloud Scheduler fires at **minute 4, 9, 14, … 59** (`cron: 4-59/5 * * * *`, UTC), and the
+job then applies the bounded retry loop from 4.3 §5. Minute 4 puts the *first* attempt after the
+common case, so the usual cycle costs exactly one request; the backoff (20/40/80/160 s, cumulative
+300 s) still covers the five-minute tail. Firing at minute 3 — as this document specified before the
+delay was measured — would land before publication on most cycles and burn a retry every time.
+
+Note that a job started at minute 4 for `T0` is still fetching data for `T0`, not `T0−5`: the nominal
+time comes from the file header (`_LATEST` carries no timestamp in its name), and `radar_cycles`
+dedupes on it, so a cycle that slips past the next firing is simply picked up by that one.
+
+Data staleness is a first-class monitored metric (§15) — a stale cycle must never be silently treated
+as "no rain".
 
 ---
 
@@ -187,8 +199,11 @@ job then applies the bounded retry loop from 4.3 §5. Data staleness is a first-
    header**, not from constants.
 3. Apply the **precision factor from the header's `PR` field** (e.g. `E-02` → ×0.01) to convert raw
    counts to millimetres per 5-minute interval. Do not hard-code the exponent.
-4. Decode flag bits (no-data / clutter / error / secondary) into a boolean `missing` mask. Missing is
+4. Identify no-data by **comparing against the sentinel `0x29C4`**, before any bit masking. Missing is
    **not** zero and **must not** be interpreted as "dry" (§9, step 0).
+   **Never strip flag bits blind:** `0x29C4 & 0x0FFF = 2500`, which after the precision factor is a
+   plausible-looking 25.00 mm/5 min — so the naive decode silently turns 47 % of the grid into
+   extreme rain and alerts everyone, forever. Required test case (§16.1).
 5. Return `(values: float32 [rows, cols], missing: bool [rows, cols], header: dict)`.
 
 Georeferencing (`rainalert/radar/grid.py`):
@@ -208,7 +223,7 @@ CI enforces this with an import-linter rule.
 ## 6. Architecture
 
 ```
-Cloud Scheduler (cron 3-58/5 * * * *, UTC)
+Cloud Scheduler (cron 4-59/5 * * * *, UTC)
         │ OIDC
         ▼
 Cloud Run Job: ingest ────────────────────────────────────────────┐
@@ -246,7 +261,7 @@ older than 30 min `expired` (a late rain warning is worse than none).
 |---|---|---|
 | Cloud Run **job** `rainalert-ingest` | the 5-minute pipeline | `--max-retries 1`, `--task-timeout 240s`, **concurrency 1** |
 | Cloud Run **service** `rainalert-api` | API + web UI | min instances 0 |
-| Cloud Scheduler `rainalert-tick` | `3-58/5 * * * *` UTC | invokes the job via OIDC SA |
+| Cloud Scheduler `rainalert-tick` | `4-59/5 * * * *` UTC | invokes the job via OIDC SA; minute 4 is measured, not guessed (§4.4) |
 | GCS bucket `rainalert-data` | `raw/` (48 h), `overlays/obs/` (14 h), `overlays/fc/` (1 h) | per-prefix lifecycle rules, uniform ACL |
 | Secret Manager | DB URL, mail API key, `SECRET_KEY` | mounted as env |
 | Artifact Registry | one container image, two entrypoints | |
@@ -355,7 +370,7 @@ CREATE TABLE evaluations (
   now_wet                boolean NOT NULL,
   first_hit_lead_minutes integer,             -- NULL = no hit inside the lead window
   max_rate_by_lead       real[] NOT NULL,     -- 25 values, mm per 5 min, index = frame k
-  missing_fraction       real NOT NULL,       -- share of masked cells that were no-data
+  missing_fraction       real[] NOT NULL,     -- per frame: share of masked cells that were no-data
   state_before           alert_state NOT NULL,
   state_after            alert_state NOT NULL,
   decision               text NOT NULL,       -- alert | no_rain | suppressed_state |
@@ -416,9 +431,15 @@ For each active subscription, per cycle:
    resolution and the default 2000 m this is ≈ 13 cells. Computed once and cached in memory, keyed by
    `(grid_row, grid_col, radius_m)` — many subscribers in the same town share a mask.
 3. For every frame `k ∈ [0,24]`: `max_rate_by_lead[k] = max(values[mask] where not missing)`, and
-   `missing_fraction = mean(missing[mask])` (from frame 0).
-4. Points outside the DE1200 grid → subscription is flagged `out_of_coverage`; no alerting, and the
-   UI/API says so explicitly rather than silently never alerting.
+   `missing_fraction[k] = mean(missing[mask])` — **per frame**. The no-data region advects with the
+   forecast (measured: 102 615 cells go valid → no-data between t+0 and t+120, and 79 483 the other
+   way; `DWD_RV_FORMAT.md` §9), so a point near the edge of coverage can have good data now and none
+   at t+45. Taking frame 0's mask for all frames would evaluate garbage for exactly those users.
+4. Coverage is **not** the same as being inside the grid: the DE1200 rectangle is much larger than the
+   radar network's reach, and ~47 % of it is no-data even in perfect conditions. A subscription is
+   flagged `out_of_coverage` when its mask is entirely no-data at t+0 across several consecutive
+   cycles — not merely when the point falls outside the grid. The UI/API says so explicitly rather
+   than silently never alerting.
 
 Rationale for `max` rather than `mean`: a 2 km radius around a point, one of whose cells is under a
 shower, means the user gets wet. Mean would dilute small convective cells, which is exactly the case
@@ -462,9 +483,13 @@ hits      := { k : 1 <= k <= L/5 and max_rate_by_lead[k] >= threshold }
 first_hit := min(hits) or None
 ```
 
-**Step 0 — data quality gate.** If `missing_fraction > 0.30`, record `decision='skipped_missing'`,
+**Step 0 — data quality gate.** If `missing_fraction[0] > 0.30`, record `decision='skipped_missing'`,
 leave the state unchanged, and do nothing else. Radar outage must never be read as "dry" and must
 never clear a `WARNED` state.
+
+Frames beyond t+0 are gated individually: a frame whose `missing_fraction[k]` exceeds the limit is
+excluded from `hits` rather than counted as dry, so losing coverage at long lead delays a warning
+instead of suppressing one.
 
 **States and transitions**
 
@@ -559,7 +584,8 @@ observation, so the two are labelled differently and the boundary at *now* is ma
 **Renderer** (ingest step 7), once per cycle:
 
 1. Reproject the frame from DE1200 polar-stereographic to **EPSG:3857** into a fixed axis-aligned
-   bounding box covering Germany, nearest neighbour, using `pyproj` directly. Compute the mapping in
+   bounding box covering Germany, nearest neighbour, using `pyproj` directly. **Row 0 of the grid is
+   the southern edge**, so the array is flipped vertically for a north-up image. Compute the mapping in
    the straightforward way each run; if it ever shows up in `rainalert_pipeline_seconds`, cache it
    then.
    *Why a Mercator box:* Leaflet's `L.imageOverlay` only places axis-aligned, unrotated images by
@@ -723,10 +749,15 @@ failure rate > 20 % over 30 min, daily budget > 80 %.
 
 Unit tests must run **offline** and fast. No test ever touches `opendata.dwd.de`.
 
-1. **Decoder golden test.** Commit one real RV archive (or a trimmed version: header + first 2
-   frames) as a fixture under `tests/fixtures/`. Assert the decoder's output equals
-   `wradlib.io.read_radolan_composite` on the same file (wradlib is a test-only dep, D-21).
-   *This is the test that protects against silent DWD format drift.*
+1. **Decoder golden test.** Fixture `tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2` (frames
+   `_000`, `_060`, `_120` of the 2026-09-16 13:55 cycle). Assert the decoder's output equals
+   `wradlib.io.read_radolan_composite` on the same file (wradlib is a test-only dep, D-21) — this has
+   already been verified bit-identical once by hand, so a failure means real drift.
+   Note wradlib returns `-9999.0` for no-data, **not** `NaN`, and exposes `meta['nodatamask']` as flat
+   indices; compare against those. Assert member naming and header parsing, **not** "25 members" —
+   the fixture holds three.
+   Include the sentinel case explicitly: a cell of `0x29C4` must decode to missing, never to
+   25.00 mm/5 min (§5).
 2. **Grid/georeferencing test.** Reference points against `wradlib.georef.get_radolan_grid`,
    tolerance half a cell; plus known city coordinates.
 3. **State machine tests.** Table-driven over synthetic sequences: clean onset, showers, forecast
