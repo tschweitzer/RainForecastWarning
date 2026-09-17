@@ -155,6 +155,24 @@ RV161355100000926BY   2640195VS 5SW  P42001HPR E-02INT   5GP1200x1100VV 000MF 00
 | `MF` | `00000008` | module flags |
 | `MS` | `103<…>` | 17 contributing radar sites, 103 chars |
 
+### The header time is UTC — confirmed externally
+
+`RV161355` is **13:55 UTC**, not local time. This matters more than it looks: Germany runs UTC+2 in
+summer, so reading it as local would put every warning two hours out and every map frame two hours
+stale, silently and plausibly.
+
+Two independent pieces of evidence:
+
+1. The publication delay measured in §4 is ~3 minutes between the filename time and the server's
+   mtime. That proves the two share a timezone — it does **not** say which one.
+2. Cross-checked against DWD's own radar app (2026-09-17): the cycle whose header reads `161355`
+   is the image DWD displays as **15:55 CEST**. 13:55 UTC + 2 h = 15:55 CEST. Confirmed.
+
+The code tags the decoded time `UTC` and every user-facing surface converts explicitly — the alert
+mail and `probe` to the subscriber's timezone, the map page to the browser's, the timeline manifest
+to ISO 8601 with an offset. Nothing displays a bare unlabelled time, which is what made this worth
+pinning down rather than assuming.
+
 Everything the decoder needs — dimensions, precision, interval, lead, nominal time — is in the header.
 Nothing must be hard-coded and nothing must be parsed from the filename. This confirms the approach in
 DESIGN.md §5.
