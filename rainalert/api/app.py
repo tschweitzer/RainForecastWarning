@@ -32,7 +32,7 @@ from rainalert.config import Settings, get_settings
 from rainalert.db.models import Subscriber, Subscription, TokenPurpose
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
-from rainalert.tokens import hash_email
+from rainalert.tokens import hash_email, verify_unsubscribe_token
 
 logger = logging.getLogger(__name__)
 
@@ -279,11 +279,14 @@ def create_app(
     def unsubscribe_submit(
         request: Request, token: str = Form(""), session: Session = Depends(get_session)
     ) -> HTMLResponse:
-        try:
-            subscriber = svc.resolve_token(session, token=token, purpose=TokenPurpose.UNSUBSCRIBE)
-        except svc.ValidationError as exc:
+        subscriber_id = verify_unsubscribe_token(token, settings.secret_key)
+        subscriber = session.get(Subscriber, subscriber_id) if subscriber_id else None
+        if subscriber is None:
             return TEMPLATES.TemplateResponse(
-                request, "error.html", {"message": str(exc), "settings": settings}, status_code=400
+                request,
+                "error.html",
+                {"message": "Dieser Abmeldelink ist nicht gültig.", "settings": settings},
+                status_code=400,
             )
         email = subscriber.email
         svc.delete_subscriber(session, subscriber)

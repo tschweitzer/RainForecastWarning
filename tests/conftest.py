@@ -33,15 +33,15 @@ def postgres_url() -> str:
 def db(postgres_url):
     from sqlalchemy import text
 
-    from rainalert.db.models import Base
     from rainalert.db.session import create_all, make_engine, make_session_factory
 
     engine = make_engine(postgres_url)
+    # Reset the whole schema rather than dropping tables by name: with foreign keys between them
+    # the drop order matters, and enum types outlive their tables.
     with engine.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS radar_cycles"))
-        conn.execute(text("DROP TYPE IF EXISTS cycle_status"))
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
     create_all(engine)
     factory = make_session_factory(engine)
     yield factory
-    Base.metadata.drop_all(engine)
     engine.dispose()

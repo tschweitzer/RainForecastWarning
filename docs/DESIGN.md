@@ -1027,11 +1027,24 @@ behind the same `Notifier` protocol later if its delivery telemetry justifies th
 hostname appears; every link in every mail is built from the former. The defaults are working
 localhost placeholders, so nothing is blocked on choosing a domain.
 
-**M4 — alerting.**
-Sampler, rules, state machine, dispatcher, `evaluations`/`rain_events`/`notifications`, plus the
-verification job.
+**M4 — alerting.** 🟡 *code complete 2026-09-17*
+Sampler, rules, state machine, dispatcher, `evaluations`/`rain_events`/`notifications`, and the
+verification job. 143 tests, including the §9 transition table row by row.
+Verified end to end: a real DWD cycle, a subscriber at a point that is dry now and wet in an hour,
+produced one warning mail with a working one-click unsubscribe - and a second cycle of the same
+front produced none.
 *Done when:* a real alert mail arrives before real rain, and a replay of a stored rainy day produces
 exactly one mail per event.
+*Outstanding:* the real-rain half needs live DWD access and a real mailbox. The replay half is
+covered by tests but not yet by an actual stored day.
+*Deliberately deferred:* `dry_clear_minutes` is a constant rather than per-subscription; the
+onset-field optimisation stays unbuilt (§8.1).
+
+**One consequence of the §9 table worth knowing:** a brand-new subscription starts in `UNKNOWN` and
+its first cycle only *observes*, so the earliest possible warning is one cycle (five minutes) after
+confirming - and likewise after a location move. That is deliberate (it is what stops us warning
+about rain someone has just walked into), but it does mean the service is blind for the first five
+minutes of any subscription.
 
 **M5 — map UI.**
 Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, backfill/re-render job, subscribe

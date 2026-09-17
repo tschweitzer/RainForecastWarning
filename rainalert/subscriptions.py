@@ -24,7 +24,14 @@ from rainalert.db.models import (
     TokenPurpose,
 )
 from rainalert.radar.grid import OutsideGrid, cell_of
-from rainalert.tokens import expiry, hash_email, hash_ip, hash_token, new_token
+from rainalert.tokens import (
+    expiry,
+    hash_email,
+    hash_ip,
+    hash_token,
+    new_token,
+    unsubscribe_token,
+)
 
 #: Germany plus a margin, matching the CHECK constraints. Deliberately not the whole planet: a
 #: location that cannot be evaluated is worse than a rejected one (SECURITY_REVIEW.md F-3).
@@ -196,19 +203,21 @@ def confirm(
     subscription.status = SubscriptionStatus.ACTIVE
     subscription.updated_at = now
 
-    api_token, unsub_token = new_token(), new_token()
-    for value, purpose in ((api_token, TokenPurpose.API), (unsub_token, TokenPurpose.UNSUBSCRIBE)):
-        session.add(
-            AuthToken(
-                subscriber_id=subscriber.id,
-                purpose=purpose,
-                token_hash=hash_token(value),
-                expires_at=None,
-                created_at=now,
-            )
+    api_token = new_token()
+    session.add(
+        AuthToken(
+            subscriber_id=subscriber.id,
+            purpose=TokenPurpose.API,
+            token_hash=hash_token(api_token),
+            expires_at=None,
+            created_at=now,
         )
+    )
     session.commit()
-    return ConfirmResult(api_token, unsub_token, subscriber.id)
+    # Signed rather than stored, so every future alert mail can carry a working link (tokens.py).
+    return ConfirmResult(
+        api_token, unsubscribe_token(subscriber.id, settings.secret_key), subscriber.id
+    )
 
 
 def resolve_token(

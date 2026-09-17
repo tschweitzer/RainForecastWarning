@@ -20,6 +20,7 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from rainalert.alerting.dispatcher import deliver_queued, evaluate_cycle
 from rainalert.config import Settings
 from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.db.session import pipeline_lock
@@ -93,6 +94,7 @@ def ingest_once(
     store: ArchiveStore,
     settings: Settings,
     now: datetime | None = None,
+    notifier=None,
 ) -> IngestOutcome:
     """Run one cycle. Safe to call concurrently: the lock and the unique constraint both hold."""
     now = now or datetime.now(UTC)
@@ -161,6 +163,19 @@ def ingest_once(
             )
         )
         session.commit()
+
+        # Evaluation runs inside the same job, against the frames already in memory (§6).
+        if notifier is not None:
+            cycle = session.execute(
+                select(RadarCycle).where(RadarCycle.nominal_time == nominal)
+            ).scalar_one()
+            report = evaluate_cycle(session, cycle, frames, settings, now)
+            sent, expired = deliver_queued(session, settings, notifier, now)
+            if sent or expired:
+                logger.info("delivered %d notification(s), expired %d", sent, expired)
+            if report.blast_radius_tripped:
+                logger.error("blast radius tripped for cycle %s - no mail sent", nominal)
+
         logger.info(
             "stored cycle %s: %d frames, %d bytes, %d attempt(s)",
             nominal,

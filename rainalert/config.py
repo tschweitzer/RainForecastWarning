@@ -49,8 +49,23 @@ class Settings(BaseSettings):
     #: A complete cycle is 25 frames, t+0 ... t+120.
     expected_frame_count: int = 25
 
-    # --- Retention (D-7) -------------------------------------------------------------------
+    # --- Alerting (§9) ------------------------------------------------------------------------
+    #: Defaults from D-13. Per-subscription columns override these; these are what a new
+    #: subscription gets.
+    default_radius_m: int = 2000
+    default_threshold_mm_5min: float = 0.1
+    default_lead_minutes: int = 30
+    dry_clear_minutes: int = 30
+    warned_retract_cycles: int = 3
+    missing_fraction_limit: float = 0.30
+    #: Absolute cap on how many subscriptions one cycle may warn. A cycle that would warn more is
+    #: far likelier to be broken than to be a nationwide squall, and mailing everyone also burns
+    #: the day's sending quota so the genuine alerts later never arrive.
+    blast_radius_max: int = 25
+
+    # --- Retention (D-7, D-23) --------------------------------------------------------------
     raw_retention_hours: int = 48
+    evaluation_retention_hours: int = 48
 
     # --- Public identity (Q-1: the domain is not chosen yet) ---------------------------------
     #: Every link in every email is built from this. The placeholder works for local development;

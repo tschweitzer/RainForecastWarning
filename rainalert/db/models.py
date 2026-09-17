@@ -7,7 +7,10 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    ARRAY,
+    JSON,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -188,3 +191,118 @@ class RateLimitHit(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     bucket: Mapped[str] = mapped_column(String(128), index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class AlertState(enum.StrEnum):
+    #: No trustworthy observation yet - a fresh subscription, or the location just moved.
+    UNKNOWN = "unknown"
+    DRY = "dry"
+    #: Rain is coming and we have said so. Exactly one mail per event comes from this edge.
+    WARNED = "warned"
+    RAINING = "raining"
+
+
+class Evaluation(Base):
+    """One subscription's view of one cycle.
+
+    A rolling debug log, not a permanent record (D-23). Everything here can be recomputed from the
+    archived grid *except* the decision, and the decision is what the durable tables below keep.
+    """
+
+    __tablename__ = "evaluations"
+    __table_args__ = (
+        Index("uq_evaluation", "subscription_id", "cycle_id", unique=True),
+        Index("evaluations_by_sub_time", "subscription_id", "evaluated_at"),
+        Index("evaluations_purge", "evaluated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE")
+    )
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("radar_cycles.id", ondelete="CASCADE"))
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    now_wet: Mapped[bool] = mapped_column(Boolean)
+    first_hit_lead_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 25 slots indexed by lead/5 - NOT by frame position (§8.0). NULL where that lead is absent.
+    max_rate_by_lead: Mapped[list[float | None]] = mapped_column(ARRAY(Float))
+    missing_fraction: Mapped[list[float | None]] = mapped_column(ARRAY(Float))
+    state_before: Mapped[AlertState] = mapped_column(
+        Enum(AlertState, name="alert_state", values_callable=lambda e: [m.value for m in e])
+    )
+    state_after: Mapped[AlertState] = mapped_column(
+        Enum(AlertState, name="alert_state", values_callable=lambda e: [m.value for m in e])
+    )
+    decision: Mapped[str] = mapped_column(String(32))
+
+
+class SubscriptionAlertState(Base):
+    """The live state machine position. One row per subscription."""
+
+    __tablename__ = "alert_states"
+
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), primary_key=True
+    )
+    state: Mapped[AlertState] = mapped_column(
+        Enum(AlertState, name="alert_state", values_callable=lambda e: [m.value for m in e]),
+        default=AlertState.UNKNOWN,
+    )
+    state_since: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: Which location this state reflects. Compared against Subscription.location_updated_at to
+    #: detect a move (D-17). A dedicated field rather than reusing state_since, because the two
+    #: timestamps come from different clocks - the API's wall clock and the evaluator's - and
+    #: comparing across them makes the reset fire either never or every cycle.
+    location_applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: When t+0 was last dry, for the RAINING -> DRY timer.
+    dry_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Consecutive cycles with no hit while WARNED, for the retraction rule.
+    no_hit_cycles: Mapped[int] = mapped_column(Integer, default=0)
+    current_event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_alert_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RainEvent(Base):
+    """One rain event per subscription. Permanent (D-23) - this is the record of what we said."""
+
+    __tablename__ = "rain_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    predicted_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    first_alert_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    observed_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    peak_mm_5min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: True when the rain arrived within the tolerance, False when it did not, NULL until judged.
+    verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+
+class Notification(Base):
+    """Queued before delivery, in the same transaction as the state change.
+
+    A crash between commit and send is recovered by the next cycle; a mail that is too old to be
+    useful is expired rather than sent, because a late rain warning is worse than none.
+    """
+
+    __tablename__ = "notifications"
+    __table_args__ = (Index("notifications_pending", "status", "queued_at"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("rain_events.id", ondelete="SET NULL"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String(16), default="email")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON)

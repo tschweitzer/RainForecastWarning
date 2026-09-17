@@ -31,3 +31,6 @@ serve:
 
 migrate:
 	$(VENV)/bin/alembic upgrade head
+
+verify:
+	$(VENV)/bin/python -m rainalert.cli verify

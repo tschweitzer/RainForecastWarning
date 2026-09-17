@@ -113,6 +113,7 @@ def ingest(args: argparse.Namespace) -> int:
     from rainalert.config import get_settings
     from rainalert.db.session import create_all, make_engine, make_session_factory
     from rainalert.jobs.ingest import ingest_once, prune_archives
+    from rainalert.notify import build_notifier
     from rainalert.radar.client import DWDClient
     from rainalert.storage import GCSArchiveStore, LocalArchiveStore
 
@@ -149,8 +150,9 @@ def ingest(args: argparse.Namespace) -> int:
         breaker_cooldown_seconds=settings.dwd_breaker_cooldown_seconds,
     )
 
+    notifier = build_notifier(settings.notifier, settings)
     with client, session_factory() as session:
-        outcome = ingest_once(session, client, store, settings)
+        outcome = ingest_once(session, client, store, settings, notifier=notifier)
         if args.prune:
             removed = prune_archives(store, settings)
             if removed:
@@ -159,6 +161,29 @@ def ingest(args: argparse.Namespace) -> int:
     print(f"{outcome.status}: {outcome.nominal_time or ''} {outcome.reason or ''}".strip())
     # Halted ingestion means nobody gets warned: that is a non-zero exit so the scheduler notices.
     return 0 if outcome.status in {"ok", "partial", "not_modified", "duplicate"} else 1
+
+
+def verify(args: argparse.Namespace) -> int:
+    """Score warnings against reality. The only honest way to tune the defaults later."""
+    import logging
+
+    from rainalert.alerting.dispatcher import purge_evaluations
+    from rainalert.config import get_settings
+    from rainalert.db.session import make_engine, make_session_factory
+    from rainalert.jobs.verify import verify_events
+
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level)
+    session_factory = make_session_factory(make_engine(settings.database_url))
+    with session_factory() as session:
+        report = verify_events(session)
+        purged = purge_evaluations(session, settings)
+    rate = "n/a" if report.hit_rate is None else f"{100 * report.hit_rate:.0f}%"
+    print(
+        f"judged {report.judged} event(s): {report.hits} hit, {report.misses} missed, "
+        f"hit rate {rate}; purged {purged} evaluation row(s)"
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,6 +203,9 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--create-tables", action="store_true", help="create the schema if absent")
     i.add_argument("--prune", action="store_true", help="also delete archives past retention")
     i.set_defaults(func=ingest)
+
+    v = sub.add_parser("verify", help="score past warnings against what the radar then saw")
+    v.set_defaults(func=verify)
     return parser
 
 
