@@ -309,9 +309,62 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _explain_connection_failure() -> None:
+    """Say what to change, rather than where SQLAlchemy gave up.
+
+    Every command here opens a database, so a mistyped DATABASE_URL surfaces as a hundred lines
+    of connection-pool traceback. The mistake is almost always one of two things, and neither is
+    visible in that traceback.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    from pydantic import ValidationError
+
+    from rainalert.config import Settings
+
+    try:
+        url = Settings().database_url
+    except ValidationError:  # configuration itself is broken; that is the better clue
+        return
+
+    parsed = urlparse(url)
+    socket_dir = (parse_qs(parsed.query).get("host") or [""])[0]
+
+    print("\ncould not connect to the database.", file=sys.stderr)
+    if socket_dir:
+        print(
+            f"DATABASE_URL points at the unix socket in {socket_dir!r}. Two things put it there:\n"
+            f"  - the server is not running    -> macOS: brew services start postgresql@16\n"
+            f"                                    Linux: sudo systemctl start postgresql\n"
+            f"  - the socket is somewhere else -> Homebrew uses /tmp, Debian and Ubuntu use\n"
+            f"                                    /var/run/postgresql. Ask Postgres which:\n"
+            f'                                    psql -c "show unix_socket_directories"\n'
+            "Then fix the ?host=... in .env (docs/LOCAL.md 1.1).",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"DATABASE_URL points at {parsed.hostname or '?'}:{parsed.port or 5432}. "
+            "Check the server is running and reachable there.",
+            file=sys.stderr,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
+    from sqlalchemy.exc import OperationalError
+
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except OperationalError as exc:
+        # Only the "never got a connection" case is explained away. A database that fails
+        # mid-run is a real fault and keeps its traceback.
+        first = str(exc.orig).splitlines()[0] if exc.orig else ""
+        if "connection is bad" not in first and "connection failed" not in first:
+            raise
+        print(first, file=sys.stderr)
+        _explain_connection_failure()
+        return 1
 
 
 if __name__ == "__main__":

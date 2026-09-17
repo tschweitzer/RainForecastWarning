@@ -36,3 +36,61 @@ def test_probe_rejects_points_outside_the_grid(wet_cycle, capsys):
 def test_probe_distinguishes_raining_now_from_rain_coming(wet_cycle, capsys):
     main(["probe", str(wet_cycle), "--lat", "48.1351", "--lon", "11.5820"])
     assert "already raining here" in capsys.readouterr().out
+
+
+def _env(monkeypatch, tmp_path, dsn: str) -> None:
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("SECRET_KEY", "test")
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "raw"))
+    monkeypatch.setenv("NOTIFIER", "file")
+    monkeypatch.setenv("MAIL_OUTBOX_DIR", str(tmp_path / "outbox"))
+
+
+def test_unreachable_database_is_explained_not_dumped(monkeypatch, tmp_path, capsys):
+    """A mistyped socket path is a one-line mistake and must not read as a crash.
+
+    No stubbing: this is the real connect, to a socket directory that is simply empty. It reaches
+    the database before it would reach DWD, so nothing is fetched.
+    """
+    _env(monkeypatch, tmp_path, f"postgresql+psycopg://me@/rainalert?host={tmp_path}")
+    assert main(["ingest"]) == 1
+    err = capsys.readouterr().err
+    assert "could not connect to the database" in err
+    assert str(tmp_path) in err  # the socket directory it actually tried
+    assert "/var/run/postgresql" in err  # the fix it is almost always asking for
+    assert "Traceback" not in err
+
+
+def test_an_unreachable_host_is_explained_without_socket_advice(monkeypatch, tmp_path, capsys):
+    """A TCP DSN gets the TCP diagnosis; socket directories are irrelevant noise there."""
+    _env(monkeypatch, tmp_path, "postgresql+psycopg://me:pw@127.0.0.1:1/rainalert")
+    assert main(["ingest"]) == 1
+    err = capsys.readouterr().err
+    assert "127.0.0.1:1" in err
+    assert "unix socket" not in err
+    assert "pw" not in err  # the password is not ours to print
+
+
+def test_a_database_that_fails_mid_run_keeps_its_traceback(monkeypatch):
+    """Explaining away a real fault would be worse than the wall of text."""
+    import pytest
+    from sqlalchemy.exc import OperationalError
+
+    from rainalert import cli
+
+    def explode(_args):
+        raise OperationalError("SELECT 1", {}, Exception("server closed the connection"))
+
+    monkeypatch.setattr(cli, "build_parser", lambda: _ParserStub(explode))
+    with pytest.raises(OperationalError):
+        main(["ingest"])
+
+
+class _ParserStub:
+    def __init__(self, func):
+        self.func = func
+
+    def parse_args(self, argv=None):
+        import argparse
+
+        return argparse.Namespace(func=self.func)
