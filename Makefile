@@ -48,3 +48,8 @@ image-push:
 	gcloud builds submit --tag $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD)
 	@echo "deploy by digest:" && gcloud artifacts docker images describe \
 	  $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD) --format="value(image_summary.fully_qualified_digest)"
+
+# Wipes local test state. Keeps radar archives - re-fetching them is 144 requests to DWD.
+# `make reset-local ALL=1` drops those too.
+reset-local:
+	$(VENV)/bin/python -m rainalert.cli reset-local $(if $(ALL),--all,)

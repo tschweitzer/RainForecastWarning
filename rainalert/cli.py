@@ -226,6 +226,48 @@ def rerender(args: argparse.Namespace) -> int:
     return 0
 
 
+def reset_local(args: argparse.Namespace) -> int:
+    """Put local state back to empty so a test can start from nothing."""
+    import logging
+
+    from rainalert.config import get_settings
+    from rainalert.db.session import make_engine
+    from rainalert.jobs.reset import NotLocal, reset
+
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level, format="%(message)s")
+    engine = make_engine(settings.database_url)
+
+    what = "subscribers, alerts and notifications"
+    if args.all:
+        what += ", AND every stored radar cycle and archive"
+    if not args.yes:
+        print(f"This deletes {what}.")
+        print(f"Database: {engine.url.render_as_string(hide_password=True)}")
+        if input("Type 'reset' to continue: ").strip() != "reset":
+            print("cancelled")
+            return 1
+
+    directories = (settings.overlay_dir, settings.mail_outbox_dir)
+    if args.all:
+        directories += (settings.archive_dir,)
+
+    try:
+        report = reset(engine, directories, keep_radar=not args.all)
+    except NotLocal as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    print(
+        f"cleared {len(report.tables_cleared)} table(s) and "
+        f"{len(report.directories_cleared)} director(ies)"
+        + ("; radar data kept" if report.radar_kept else "; radar data dropped")
+    )
+    if report.radar_kept:
+        print("run with --all to drop the radar archives too (they will be re-fetched)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rainalert")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -246,6 +288,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify", help="score past warnings against what the radar then saw")
     v.set_defaults(func=verify)
+
+    r = sub.add_parser(
+        "reset-local", help="wipe local test state (refuses anything but a local database)"
+    )
+    r.add_argument(
+        "--all",
+        action="store_true",
+        help="also drop stored radar cycles and archives. Without this they are kept, because "
+        "re-fetching them is 144 requests to a service DWD provides for free.",
+    )
+    r.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    r.set_defaults(func=reset_local)
 
     b = sub.add_parser(
         "rerender", help="rebuild map overlays from archives already held (no DWD traffic)"

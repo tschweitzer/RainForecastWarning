@@ -123,3 +123,83 @@ def test_every_runtime_import_is_a_declared_dependency():
         if name not in names and name not in {"google", "wradlib"}
     )
     assert missing == [], f"imported but not declared in pyproject: {missing}"
+
+
+# --- local reset -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql+psycopg://user:pw@db.example.com/rainalert",
+        "postgresql+psycopg://user@10.0.0.5:5432/rainalert",
+        "postgresql+psycopg://user@rainalert-prod.internal/rainalert",
+    ],
+)
+def test_reset_refuses_a_remote_database(url):
+    """The only thing between "reset my test data" and a very bad afternoon."""
+    from rainalert.jobs.reset import NotLocal, assert_local
+
+    with pytest.raises(NotLocal):
+        assert_local(url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql+psycopg://user@localhost:5432/rainalert",
+        "postgresql+psycopg://user@127.0.0.1/rainalert",
+        "postgresql+psycopg://user@/rainalert?host=/tmp",  # unix socket, as Homebrew uses
+    ],
+)
+def test_reset_allows_a_local_database(url):
+    from rainalert.jobs.reset import assert_local
+
+    assert_local(url)
+
+
+def test_reset_keeps_radar_data_by_default(db, tmp_path):
+    """Radar cycles cost a request each to rebuild; subscriptions cost a click."""
+    from datetime import UTC, datetime
+
+    from rainalert.db.models import CycleStatus, RadarCycle, Subscriber
+    from rainalert.jobs.reset import reset
+    from rainalert.tokens import hash_email
+
+    with db() as session:
+        session.add(
+            RadarCycle(
+                nominal_time=datetime(2026, 9, 16, 14, 0, tzinfo=UTC),
+                fetched_at=datetime(2026, 9, 16, 14, 0, tzinfo=UTC),
+                source_url="t",
+                sha256=b"\x00" * 32,
+                bytes=1,
+                frame_count=25,
+                status=CycleStatus.OK,
+            )
+        )
+        session.add(
+            Subscriber(
+                email="a@example.com",
+                email_hash=hash_email("a@example.com"),
+                created_at=datetime(2026, 9, 16, tzinfo=UTC),
+            )
+        )
+        session.commit()
+        engine = session.get_bind()
+
+    outbox = tmp_path / "outbox"
+    outbox.mkdir()
+    (outbox / "a.eml").write_text("x")
+
+    report = reset(engine, (outbox,))
+    assert report.radar_kept is True
+    assert not outbox.exists()
+
+    with db() as session:
+        assert session.query(Subscriber).count() == 0
+        assert session.query(RadarCycle).count() == 1  # kept
+
+    reset(engine, (), keep_radar=False)
+    with db() as session:
+        assert session.query(RadarCycle).count() == 0

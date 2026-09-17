@@ -141,7 +141,39 @@ ls var/outbox/
 - no duplicate `nominal_time` values, however many times you run the job
 - `var/raw/` holding archives, `var/overlays/obs/` filling one PNG per cycle
 
-## 8. If something breaks
+## 8. Starting over
+
+```sh
+make reset-local          # subscribers, alerts, notifications, overlays, outbox
+make reset-local ALL=1    # the above plus stored radar cycles and archives
+```
+
+**The default keeps the radar data, and that is the point.** Subscriptions cost a click to
+recreate; every stored cycle cost a request to a service DWD provides for free, and a 12 h timeline
+is 144 of them. Re-fetch only when you actually need to test ingestion itself.
+
+So the usual loop while testing the alerting path is:
+
+```sh
+make reset-local          # forget who subscribed and what was warned
+make serve                # sign yourself up again
+make run-ingest           # evaluate against the cycles you already have
+```
+
+Both forms refuse to touch anything that is not a local database — a hostname in `DATABASE_URL`
+aborts the command. Both also prompt before deleting; `--yes` skips that if you are scripting it.
+
+To go all the way back to nothing:
+
+```sh
+make reset-local ALL=1
+dropdb rainalert && createdb rainalert && make migrate   # or just: make migrate
+rm -rf .venv && make dev                                  # rebuild the environment too
+```
+
+`.env` is never touched by any of this — your configuration survives.
+
+## 9. If something breaks
 
 **`psycopg.OperationalError` / socket not found** — Homebrew's Postgres uses `/tmp` as its socket
 directory; Postgres.app uses `/tmp` too but a different port. `psql -c "show unix_socket_directories"`
@@ -159,7 +191,7 @@ which prints instead of writing.
 
 ---
 
-## What this does and does not prove
+## 10. What this does and does not prove
 
 **Does:** the decoder handles a real 25-frame archive; the politeness client talks to the real
 server; the projection, the state machine, the mail and the map all work on live data.
