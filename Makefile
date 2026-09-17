@@ -58,4 +58,4 @@ image-push:
 # Wipes local test state. Keeps radar archives - re-fetching them is 144 requests to DWD.
 # `make reset-local ALL=1` drops those too.
 reset-local:
-	$(PY) -m rainalert.cli reset-local $(if $(ALL),--all,)
+	$(PY) -m rainalert.cli reset-local $(if $(ALL),--all,) $(if $(YES),--yes,)

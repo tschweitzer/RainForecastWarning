@@ -1,4 +1,4 @@
-# Running the whole thing locally (macOS)
+# Running the whole thing locally (macOS or Linux)
 
 Everything works on a laptop with no cloud account, no domain and no mail provider: archives go to a
 directory, mail is written as `.eml` files you can open, and the map is served by the app itself.
@@ -12,31 +12,73 @@ not a demo — watch it rather than leaving it running.
 
 ## 1. Prerequisites
 
-macOS ships Python 3.9; this needs 3.11+.
+Python 3.11+ is required. macOS ships 3.9.
+
+Postgres is required rather than SQLite: the ingest path uses advisory locks and array columns, and
+testing those on SQLite would prove nothing. If you would rather not install it,
+`docker run -p 5432:5432 -e POSTGRES_PASSWORD=rainalert -e POSTGRES_USER=rainalert -e POSTGRES_DB=rainalert postgres:16`
+works just as well, and skips the whole of §1.1.
+
+**macOS:**
 
 ```sh
 brew install python@3.11 postgresql@16
 brew services start postgresql@16
 ```
 
-Postgres is required rather than SQLite: the ingest path uses advisory locks and array columns, and
-testing those on SQLite would prove nothing. If you would rather not install it,
-`docker run -p 5432:5432 -e POSTGRES_PASSWORD=rainalert -e POSTGRES_USER=rainalert -e POSTGRES_DB=rainalert postgres:16`
-works just as well.
+**Debian/Ubuntu:**
+
+```sh
+sudo apt-get install python3.11 python3.11-venv postgresql-16
+sudo systemctl start postgresql
+```
 
 ```sh
 git clone https://github.com/tschweitzer/RainForecastWarning
 cd RainForecastWarning
 make dev            # virtualenv + dependencies
-createdb rainalert  # Homebrew Postgres; with Docker the database already exists
 ```
+
+### 1.1 One extra step on Linux, none on macOS
+
+Both platforms authenticate local connections by *peer*: Postgres takes your operating-system
+username and looks for a database role of the same name. The two packages differ in whether such a
+role exists.
+
+Homebrew runs `initdb` as you, so your login is already a superuser and `createdb rainalert` simply
+works. Debian and Ubuntu run it as the `postgres` system user, so `postgres` is the only role there
+is - and `createdb rainalert` fails with:
+
+```
+createdb: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed:
+FATAL:  role "yourname" does not exist
+```
+
+That is not a broken install. Give yourself a role once:
+
+```sh
+sudo -u postgres createuser --createdb --login "$(whoami)"
+```
+
+Then, on either platform:
+
+```sh
+createdb rainalert  # with Docker the database already exists
+```
+
+If you would rather not own a database role, use the `postgres` account directly - `sudo -u postgres
+createdb -O postgres rainalert` - and put `postgresql+psycopg://postgres@/rainalert?host=/var/run/postgresql`
+in `DATABASE_URL` below, running everything with `sudo -u postgres`. The role is less trouble.
 
 ## 2. Configuration
 
 Create `.env` in the repository root:
 
 ```sh
+# macOS (Homebrew puts the socket in /tmp):
 DATABASE_URL=postgresql+psycopg://$(whoami)@/rainalert?host=/tmp
+# Debian/Ubuntu instead - a different socket directory, not a different database:
+# DATABASE_URL=postgresql+psycopg://$(whoami)@/rainalert?host=/var/run/postgresql
 # Docker instead: postgresql+psycopg://rainalert:rainalert@localhost:5432/rainalert
 
 ARCHIVE_DIR=./var/raw
@@ -146,6 +188,7 @@ ls var/outbox/
 ```sh
 make reset-local          # subscribers, alerts, notifications, overlays, outbox
 make reset-local ALL=1    # the above plus stored radar cycles and archives
+make reset-local YES=1    # skip the confirmation prompt, for scripts
 ```
 
 **The default keeps the radar data, and that is the point.** Subscriptions cost a click to
@@ -175,9 +218,13 @@ rm -rf .venv && make dev                                  # rebuild the environm
 
 ## 9. If something breaks
 
-**`psycopg.OperationalError` / socket not found** — Homebrew's Postgres uses `/tmp` as its socket
-directory; Postgres.app uses `/tmp` too but a different port. `psql -c "show unix_socket_directories"`
-tells you, or use a TCP DSN: `postgresql+psycopg://user@localhost:5432/rainalert`.
+**`role "yourname" does not exist`** — the Debian/Ubuntu package creates only the `postgres` role,
+and peer authentication looks for one named after your login. See §1.1; one `createuser` fixes it.
+
+**`psycopg.OperationalError` / socket not found** — the socket directory differs per package:
+Homebrew uses `/tmp`, Postgres.app uses `/tmp` on a different port, and Debian/Ubuntu use
+`/var/run/postgresql`. `psql -c "show unix_socket_directories"` tells you which, or side-step it
+with a TCP DSN: `postgresql+psycopg://user@localhost:5432/rainalert`.
 
 **`pip install` fails on `wradlib`** — it is a test-only dependency (the golden oracle for the
 decoder) and the heaviest thing here. The suite skips those tests when it is absent, so
