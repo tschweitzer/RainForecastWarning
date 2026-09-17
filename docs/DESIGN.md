@@ -1002,6 +1002,9 @@ and the politeness tests pass.
 development environment cannot reach. The pipeline has only been exercised end to end against a
 local server replaying a real archive. **The first live run is therefore itself a test**: watch the
 first few cycles rather than scheduling it and walking away.
+`docs/LOCAL.md` closes this without deploying — a laptop can reach DWD, and an afternoon of
+`make run-ingest` on a five-minute loop exercises the same path the Cloud Run job will, including
+the first real 25-frame archive the decoder has ever seen.
 *Deliberately deferred:* Prometheus metrics (the endpoint belongs to the API service in M3; for now
 the per-cycle numbers go to structured logs); the GCS store is written but unexercised, there being
 no bucket yet (M6); Alembic arrives with M3, when there is more than one table to migrate.
