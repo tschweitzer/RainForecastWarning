@@ -37,3 +37,13 @@ verify:
 
 rerender:
 	$(VENV)/bin/python -m rainalert.cli rerender
+
+pin-base:
+	@docker pull python:3.11-slim >/dev/null && \
+	 docker inspect --format="FROM python:3.11-slim@{{index .RepoDigests 0}}" python:3.11-slim | sed "s|python:3.11-slim@python:3.11-slim|python:3.11-slim|"
+
+image-push:
+	@test -n "$(REGION)" || (echo "usage: make image-push REGION=europe-west3 PROJECT=rainchecker-195519" && exit 2)
+	gcloud builds submit --tag $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD)
+	@echo "deploy by digest:" && gcloud artifacts docker images describe \
+	  $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD) --format="value(image_summary.fully_qualified_digest)"

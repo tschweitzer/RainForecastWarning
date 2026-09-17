@@ -29,12 +29,13 @@ from sqlalchemy.orm import Session
 
 from rainalert import subscriptions as svc
 from rainalert.api.mail import confirmation_message, deletion_receipt
+from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check
 from rainalert.config import Settings, get_settings
 from rainalert.db.models import Subscriber, Subscription, TokenPurpose
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
-from rainalert.storage import LocalOverlayStore, OverlayStore
+from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
 from rainalert.tokens import hash_email, verify_unsubscribe_token
 
@@ -82,6 +83,10 @@ def create_app(
     notifier = notifier or build_notifier(settings.notifier, settings)
     if overlay_store is None and settings.overlay_dir:
         overlay_store = LocalOverlayStore(settings.overlay_dir)
+    elif overlay_store is None and settings.overlay_bucket:
+        overlay_store = GCSOverlayStore(
+            settings.overlay_bucket, settings.overlay_public_base_url or ""
+        )
 
     app = FastAPI(title="RainAlert", docs_url=None, redoc_url=None)
     app.state.settings = settings
@@ -174,6 +179,21 @@ def create_app(
         """
         session.execute(sql_text("SELECT 1"))
         return {"status": "ready"}
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics(request: Request, session: Session = Depends(get_session)) -> Response:
+        """Prometheus metrics, behind a bearer token.
+
+        Cloud Run has no notion of an internal-only route, so "internal" has to be expressed in the
+        request. With no token configured the endpoint 404s - indistinguishable from not existing,
+        which is the right answer for a monitoring surface nobody has set up yet.
+        """
+        if not settings.metrics_token:
+            raise HTTPException(status.HTTP_404_NOT_FOUND)
+        offered = request.headers.get("authorization", "")
+        if not secrets.compare_digest(offered, f"Bearer {settings.metrics_token}"):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
+        return Response(render_metrics(session, settings), media_type="text/plain; version=0.0.4")
 
     # ---- subscribe ------------------------------------------------------------------------
     @app.post("/api/v1/subscriptions", status_code=status.HTTP_202_ACCEPTED)

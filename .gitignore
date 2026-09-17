@@ -3,3 +3,11 @@ __pycache__/
 *.pyc
 var/
 .env
+terraform.tfvars
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+build/
+*.egg-info/
+dist/

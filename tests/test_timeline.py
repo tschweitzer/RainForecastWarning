@@ -246,3 +246,52 @@ def test_overlay_pruning_keeps_observed_longer_than_forecast(overlays):
     )
     assert removed == 2  # the old observed frame and the old forecast directory
     assert len(list((overlays.root / "obs").glob("*.png"))) == 1
+
+
+# --- metrics ---------------------------------------------------------------------------------
+
+
+def test_metrics_does_not_exist_without_a_token(client):
+    """ "Internal only" is not expressible on Cloud Run, so unconfigured means absent (F-13)."""
+    assert client.get("/metrics").status_code == 404
+
+
+def test_metrics_requires_the_token_when_configured(db, settings):
+    settings.metrics_token = "s3cret"
+    metrics_client = TestClient(
+        create_app(settings, session_factory=db, notifier=ConsoleNotifier())
+    )
+    assert metrics_client.get("/metrics").status_code == 401
+    assert (
+        metrics_client.get("/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    )
+    ok = metrics_client.get("/metrics", headers={"Authorization": "Bearer s3cret"})
+    assert ok.status_code == 200
+    assert "rainalert_cycle_age_seconds" in ok.text
+
+
+def test_a_future_stamped_cycle_is_its_own_alertable_condition(db, settings):
+    """A cycle in the future would read as the freshest data ever and silence staleness (F-7)."""
+    from rainalert.api.metrics import render
+
+    with db() as session:
+        add_cycles(session, 1, end=T0 + timedelta(days=1))
+        text = render(session, settings, now=T0)
+    assert "rainalert_cycle_age_negative 1" in text
+    # ...and the age itself is clamped rather than reported as negative
+    age = float(
+        next(
+            line.split()[1]
+            for line in text.splitlines()
+            if line.startswith("rainalert_cycle_age_seconds ")
+        )
+    )
+    assert age == 0.0
+
+
+def test_metrics_report_no_cycles_distinctly(db, settings):
+    from rainalert.api.metrics import render
+
+    with db() as session:
+        text = render(session, settings, now=T0)
+    assert "rainalert_cycle_age_seconds -1" in text

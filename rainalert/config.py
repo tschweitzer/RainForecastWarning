@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     #: Beyond this the page shows a "radar data is stale" banner instead of pretending.
     timeline_stale_after_minutes: int = 20
     overlay_dir: str | None = None
+    #: Production: a separate bucket from the archives, and the public base URL it is served on.
+    overlay_bucket: str | None = None
+    overlay_public_base_url: str | None = None
     overlay_obs_retention_hours: int = 14
     overlay_fc_retention_hours: int = 1
 
@@ -114,6 +117,11 @@ class Settings(BaseSettings):
     subscribe_limit_per_hour: int = 5
     location_limit_per_hour: int = 60
     rate_limit_retention_days: int = 7
+
+    #: Bearer token guarding /metrics. Unset means the endpoint does not exist at all - "internal
+    #: only" is not expressible on Cloud Run, where every route is reachable from the internet
+    #: unless something in the request says otherwise (SECURITY_REVIEW.md F-13).
+    metrics_token: str | None = None
 
     log_level: str = "INFO"
     metrics_path: str | None = Field(default=None, description="write Prometheus text here on exit")

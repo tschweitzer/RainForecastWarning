@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and fill in. Do not commit the filled-in copy.
+project_id      = "rainchecker-195519"
+region          = "europe-west3"
+
+# Until a domain exists: apply once with a placeholder, then set this to the api_url output
+# and apply again. Every emailed link is built from it.
+public_base_url = "https://rainalert-XXXXXXXX-ey.a.run.app"
+
+# The sending domain needs SPF, DKIM and DMARC before any of this is worth doing.
+mail_from     = "RainAlert <noreply@example.org>"
+smtp_host     = "smtp-relay.brevo.com"
+smtp_port     = 587
+smtp_username = "your-smtp-login"
+
+# By digest, not by tag. `make image-digest` prints it after a build.
+image = "europe-west3-docker.pkg.dev/rainchecker-195519/rainalert/rainalert@sha256:..."
+
+alert_email = "you@example.org"

@@ -1063,10 +1063,30 @@ as gaps, and the observed/forecast boundary is unmistakable.
 *Deliberately deferred:* the subscribe form still takes coordinates with a geolocation button
 rather than a draggable map marker; the timeline is the map feature that earns its keep first.
 
-**M6 — deploy.**
-Terraform/gcloud for all §6.1 resources, Secret Manager, SPF/DKIM/DMARC on the sending domain,
-monitoring alerts, runbook in `docs/RUNBOOK.md`.
+**M6 — deploy.** 🟡 *artifacts written 2026-09-17, nothing applied*
+Terraform for all §6.1 resources (project `rainchecker-195519`, `europe-west3`), Secret Manager,
+Cloud Run service + ingest job + migrate job, Cloud Scheduler at `4-59/5`, two buckets with
+lifecycle rules, monitoring alerts, `Dockerfile`, CI, and `docs/RUNBOOK.md`.
 *Done when:* the service has run unattended for a week with cycle age < 20 min at all times.
+
+*Decisions:* Terraform rather than shell scripts; CI runs lint and tests only, deploys are by hand
+from `make image-push` plus `terraform apply`.
+
+*What is verified and what is not.* The HCL parses, every security-critical setting the code reads
+is set by Terraform (cross-checked against the `Settings` model), and the image's dependency set is
+proven complete by installing the package into a clean environment and importing every runtime
+module. **Neither `docker` nor `terraform` can run in the development environment**, so the image
+has never been built and the plan has never been rendered. Expect the first `terraform apply` and
+the first build to need fixing; they are not "verified working".
+
+*Still blocked on prerequisites*, in the order they bite: the domain (Q-1), the mail provider and
+its credentials (Q-4), SPF/DKIM/DMARC on the sending domain, and the provider's DPA (Q-9). Only
+the last is a legal rather than technical blocker, and it applies from the first friend's address.
+
+*Known gaps, listed in the runbook:* the cycle-age SLI is not on a Cloud Monitoring dashboard (it
+lives in the database, which Monitoring cannot see; the two alert policies catch the same failure
+from outside); Leaflet and OSM tiles are still third-party; Cloud Run's request logs still carry
+confirm and unsubscribe tokens for 30 days by default.
 
 **M7 — later (not v1).** Mobile app + FCM/APNs, user-editable rule UI, "all clear" mails, multiple
 locations per subscriber, additional countries/sources.

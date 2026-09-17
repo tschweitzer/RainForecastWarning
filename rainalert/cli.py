@@ -115,7 +115,12 @@ def ingest(args: argparse.Namespace) -> int:
     from rainalert.jobs.ingest import ingest_once, prune_archives, prune_overlays
     from rainalert.notify import build_notifier
     from rainalert.radar.client import DWDClient
-    from rainalert.storage import GCSArchiveStore, LocalArchiveStore, LocalOverlayStore
+    from rainalert.storage import (
+        GCSArchiveStore,
+        GCSOverlayStore,
+        LocalArchiveStore,
+        LocalOverlayStore,
+    )
 
     settings = get_settings()
     logging.basicConfig(
@@ -151,7 +156,12 @@ def ingest(args: argparse.Namespace) -> int:
     )
 
     notifier = build_notifier(settings.notifier, settings)
-    overlays = LocalOverlayStore(settings.overlay_dir) if settings.overlay_dir else None
+    if settings.overlay_dir:
+        overlays = LocalOverlayStore(settings.overlay_dir)
+    elif settings.overlay_bucket:
+        overlays = GCSOverlayStore(settings.overlay_bucket, settings.overlay_public_base_url or "")
+    else:
+        overlays = None
     with client, session_factory() as session:
         outcome = ingest_once(
             session, client, store, settings, notifier=notifier, overlays=overlays

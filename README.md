@@ -3,9 +3,12 @@
 A cloud service that warns you by email shortly before it starts raining at your location,
 using DWD radar nowcast data (Germany).
 
-**Status:** M0–M5 code complete. **The service works end to end**: it ingests DWD radar, evaluates
-each subscriber's location, emails a warning before rain arrives, and shows a rain map with a
-−12 h … +2 h timeline slider. What is left is deployment (M6).
+**Status:** M0–M5 code complete; M6 deployment artifacts written but never applied. The service
+works end to end locally: it ingests DWD radar, evaluates each subscriber's location, emails a
+warning before rain arrives, and shows a rain map with a −12 h … +2 h timeline slider.
+
+Deploying needs a domain, a mail provider with SPF/DKIM/DMARC, and its DPA accepted — see
+[docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 - **[docs/DESIGN.md](docs/DESIGN.md)** — requirements, decisions log, architecture, data model,
   alert state machine, API, privacy, testing strategy and milestones.
@@ -16,7 +19,7 @@ each subscriber's location, emails a warning before rain arrives, and shows a ra
 
 ```sh
 make dev     # virtualenv + dependencies
-make test    # 164 tests, including a golden comparison against wradlib
+make test    # 169 tests, including a golden comparison against wradlib
 make lint
 
 .venv/bin/python -m rainalert.cli probe \
@@ -69,7 +72,7 @@ Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/map` then sho
 make rerender          # rebuild map overlays from archives already held (no DWD traffic)
 ```
 
-Next up is **M6**: deployment — and before any public use, vendoring Leaflet and picking a tile
-provider, so the map page stops telling third parties who is looking at it.
+Deployment lives in [`infra/`](infra/) (Terraform) with the procedure and failure modes in
+[docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 Data basis: Deutscher Wetterdienst (DWD), radar product RV, CC BY 4.0.

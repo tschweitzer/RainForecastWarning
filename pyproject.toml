@@ -17,6 +17,7 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "alembic>=1.13",
+    "pillow>=10.0",
 ]
 
 [project.optional-dependencies]

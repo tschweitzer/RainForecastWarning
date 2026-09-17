@@ -2,6 +2,8 @@
 
 import ast
 import pathlib
+import re
+import sys
 
 import pytest
 
@@ -69,3 +71,55 @@ def test_migrations_match_the_models(postgres_url, monkeypatch):
         pytest.fail(f"models and migrations have drifted: {exc}")
     finally:
         get_settings.cache_clear()
+
+
+def test_every_runtime_import_is_a_declared_dependency():
+    """The container installs from pyproject alone, so an undeclared import is a crash at runtime.
+
+    Regression: Pillow was used by the overlay renderer and never declared. The local venv had it
+    from a manual install, so every test passed while the image would have built cleanly and then
+    died on first render.
+    """
+    import tomllib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+    def normalise(name: str) -> str:
+        # PEP 503: distribution names treat -, _ and . as equivalent, so pydantic_settings the
+        # import and pydantic-settings the distribution are the same thing.
+        return re.sub(r"[-_.]+", "-", name).lower()
+
+    names = {
+        normalise(d.split("[")[0].split(">")[0].split("=")[0].split("<")[0].strip())
+        for d in declared
+    }
+    # Import name -> distribution name, where they differ.
+    aliases = {
+        "pil": "pillow",
+        "psycopg": "psycopg",
+        "yaml": "pyyaml",
+        "dateutil": "python-dateutil",
+    }
+    stdlib = set(sys.stdlib_module_names)
+
+    third_party: set[str] = set()
+    for path in RUNTIME.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [node.module or ""] if node.level == 0 else []
+            else:
+                continue
+            for mod in mods:
+                top = mod.split(".")[0].lower()
+                if top and top not in stdlib and top != "rainalert":
+                    third_party.add(normalise(aliases.get(top, top)))
+
+    missing = sorted(
+        name
+        for name in third_party
+        # google-cloud-storage is imported lazily inside the GCS adapters and is an optional extra.
+        if name not in names and name not in {"google", "wradlib"}
+    )
+    assert missing == [], f"imported but not declared in pyproject: {missing}"

@@ -131,3 +131,42 @@ class GCSArchiveStore:
 
     def prune(self, older_than: datetime) -> int:
         return 0  # lifecycle rule owns this
+
+
+class GCSOverlayStore:
+    """Production overlay store.
+
+    Deliberately a *different bucket* from the archives, not just a different prefix. The overlays
+    are served to browsers and the raw DWD archives are not; putting them side by side is how a
+    "make the overlays public" step ends up publishing everything next to them
+    (SECURITY_REVIEW.md F-9). Retention is a lifecycle rule per prefix, so prune() is a no-op.
+    """
+
+    def __init__(self, bucket: str, public_base_url: str) -> None:
+        from google.cloud import storage  # lazy: local runs need no cloud SDK
+
+        self._bucket = storage.Client().bucket(bucket)
+        self._base = public_base_url.rstrip("/")
+
+    def _upload(self, name: str, png: bytes) -> str:
+        blob = self._bucket.blob(name)
+        # Overlays are immutable once written - a cycle's frame never changes - so they can be
+        # cached hard. The manifest is what expires.
+        blob.cache_control = "public, max-age=3600, immutable"
+        blob.upload_from_string(png, content_type="image/png")
+        return f"{self._base}/{name}"
+
+    def put_observed(self, nominal_time: datetime, png: bytes) -> str:
+        return self._upload(_obs_name(nominal_time), png)
+
+    def put_forecast(self, nominal_time: datetime, lead_minutes: int, png: bytes) -> str:
+        return self._upload(_fc_name(nominal_time, lead_minutes), png)
+
+    def url_for_observed(self, nominal_time: datetime) -> str:
+        return f"{self._base}/{_obs_name(nominal_time)}"
+
+    def url_for_forecast(self, nominal_time: datetime, lead_minutes: int) -> str:
+        return f"{self._base}/{_fc_name(nominal_time, lead_minutes)}"
+
+    def prune(self, observed_before: datetime, forecast_before: datetime) -> int:
+        return 0  # lifecycle rules own this
