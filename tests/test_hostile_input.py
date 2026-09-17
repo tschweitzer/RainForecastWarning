@@ -95,13 +95,29 @@ def test_forged_header_fields_are_rejected(field, replacement, match):
         decode_frame(header + b"\x00" * 4)
 
 
+@pytest.mark.parametrize(
+    ("content", "label"),
+    [
+        (b"not an archive at all", "garbage"),
+        (b"<html><body>502 Bad Gateway</body></html>", "an error page served as an archive"),
+        (b"", "an empty file"),
+    ],
+)
+def test_damaged_archives_raise_the_documented_type(tmp_path, content, label):
+    """tarfile.ReadError is not an OSError, so a caller catching RVFormatError would still die."""
+    path = tmp_path / "bad.tar.bz2"
+    path.write_bytes(content)
+    with pytest.raises(RVFormatError):
+        read_frames(path)
+
+
 def test_member_shorter_than_declared_is_rejected(tmp_path):
     path = tmp_path / "short.tar.bz2"
     path.write_bytes(_archive([("DE1200_RV2609161355_000", 2640195)]))
     # Truncate the compressed stream: the member cannot deliver what it declared.
     raw = path.read_bytes()
     path.write_bytes(raw[: len(raw) // 2])
-    with pytest.raises(Exception):  # noqa: B017 - either EOFError from bz2 or our rejection
+    with pytest.raises(RVFormatError):
         read_frames(path)
 
 

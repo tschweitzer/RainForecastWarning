@@ -1048,11 +1048,20 @@ picture: we know it is not raining here and we know rain is coming. Only the `no
 silent, which is the case that matters — rain already falling tells us nothing about whether the
 subscriber has just walked into it.
 
-**M5 — map UI.**
-Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, backfill/re-render job, subscribe
-page with map picker, rain timeline overlay, slider, staleness banner, attribution.
-*Done when:* the slider animates −12 h … +2 h smoothly on a phone over mobile data, gaps render as
-gaps, and the observed/forecast boundary is unmistakable.
+**M5 — map UI.** 🟡 *code complete 2026-09-17*
+Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, re-render job, `/map` page with
+the slider, staleness banner, gap rendering, legend and attribution. 164 tests.
+Verified against real data: the rendered overlay agrees with the source grid at six German cities
+(6/6), and the manifest labels observed and forecast frames, reports gaps, and flags staleness.
+*Measured, better than the estimate:* a frame is **24 KB**, not the ~150 KB assumed, because most
+of the image is transparent - a full 168-frame timeline is ~4 MB rather than ~25 MB, and one
+cycle's overlays are ~90 KB. The windowed loading stays anyway: it is still the right shape on a
+phone, and it is what keeps a slider drag from fetching 168 images at once.
+*Done when:* the slider animates -12 h ... +2 h smoothly on a phone over mobile data, gaps render
+as gaps, and the observed/forecast boundary is unmistakable.
+*Outstanding:* the phone half - the page has been driven by HTTP, not by a thumb on a real device.
+*Deliberately deferred:* the subscribe form still takes coordinates with a geolocation button
+rather than a draggable map marker; the timeline is the map feature that earns its keep first.
 
 **M6 — deploy.**
 Terraform/gcloud for all §6.1 resources, Secret Manager, SPF/DKIM/DMARC on the sending domain,
@@ -1085,6 +1094,7 @@ owns them:
 | F-14–F-16 `/forecast` amplification, rule-parameter abuse, web hardening | M3/M5 | CSP `frame-ancestors`, `Referrer-Policy`, CSRF, mail header injection, session model |
 | F-17 location updates silently suppress alerting for a moving user | M7 | D-17 resets state on a >1 km move; an app updating location often could keep a user permanently in `UNKNOWN` |
 | F-18 supply chain and deploy path | M6 | Pin dependencies, pin base image by digest |
+| **Leaflet and OSM tiles are third-party** | M6 | The map page loads Leaflet from unpkg and tiles from OpenStreetMap, so every visitor's browser reveals its IP to both. For a service whose privacy story is data minimisation that is inconsistent: **vendor Leaflet into `static/` and choose a tile provider before any public use**, then drop `MAP_SCRIPT_SRC`/`MAP_IMG_SRC` back to `'self'`. This environment cannot reach unpkg, so it could not be vendored here |
 
 ## 19. Open questions
 

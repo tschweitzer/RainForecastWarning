@@ -40,7 +40,12 @@ Vorhersage bis zwei Stunden voraus.</p>
   kommen keine weiteren Mails.
 </div>
 
-<script>
+{% if has_map %}
+<p style="margin-top:1.25rem"><a href="/map">Regenradar ansehen →</a> (12 Stunden zurück,
+zwei Stunden voraus)</p>
+{% endif %}
+
+<script nonce="{{ request.state.csp_nonce }}">
 document.getElementById('locate').addEventListener('click', function () {
   if (!navigator.geolocation) { return; }
   navigator.geolocation.getCurrentPosition(function (pos) {

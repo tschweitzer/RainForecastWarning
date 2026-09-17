@@ -26,7 +26,8 @@ from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.db.session import pipeline_lock
 from rainalert.radar.client import BreakerOpen, BudgetExhausted, DWDClient, FetchError
 from rainalert.radar.decoder import RVFormatError, RVFrame, read_frames
-from rainalert.storage import ArchiveStore
+from rainalert.radar.overlay import build_projection, render_frame
+from rainalert.storage import ArchiveStore, OverlayStore
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,25 @@ def validate_cycle(frames: list[RVFrame], settings: Settings, now: datetime) -> 
         raise CycleRejected(f"national max {peak:.1f} mm/5min is implausible")
 
 
+def render_overlays(frames: list[RVFrame], overlays: OverlayStore) -> int:
+    """Render the map frames for one cycle (§11.1).
+
+    The analysis frame goes to the long-lived ``obs`` prefix because the 12 h timeline needs every
+    past one; the forecast frames go to the short-lived ``fc`` prefix because only the newest
+    cycle's forecast is ever shown.
+    """
+    projection = build_projection()
+    rendered = 0
+    for frame in frames:
+        png = render_frame(frame, projection)
+        if frame.lead_minutes == 0:
+            overlays.put_observed(frame.nominal_time, png)
+        else:
+            overlays.put_forecast(frame.nominal_time, frame.lead_minutes, png)
+        rendered += 1
+    return rendered
+
+
 def ingest_once(
     session: Session,
     client: DWDClient,
@@ -95,6 +115,7 @@ def ingest_once(
     settings: Settings,
     now: datetime | None = None,
     notifier=None,
+    overlays: OverlayStore | None = None,
 ) -> IngestOutcome:
     """Run one cycle. Safe to call concurrently: the lock and the unique constraint both hold."""
     now = now or datetime.now(UTC)
@@ -164,6 +185,14 @@ def ingest_once(
         )
         session.commit()
 
+        # Rendering and evaluation both run here, against the frames already in memory (§6).
+        # Rendering first and separately: a rendering failure must not cost anyone a warning.
+        if overlays is not None:
+            try:
+                render_overlays(frames, overlays)
+            except Exception:
+                logger.exception("overlay rendering failed for cycle %s", nominal)
+
         # Evaluation runs inside the same job, against the frames already in memory (§6).
         if notifier is not None:
             cycle = session.execute(
@@ -231,3 +260,11 @@ def _record_rejected(
 def prune_archives(store: ArchiveStore, settings: Settings, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     return store.prune(now - timedelta(hours=settings.raw_retention_hours))
+
+
+def prune_overlays(overlays: OverlayStore, settings: Settings, now: datetime | None = None) -> int:
+    now = now or datetime.now(UTC)
+    return overlays.prune(
+        now - timedelta(hours=settings.overlay_obs_retention_hours),
+        now - timedelta(hours=settings.overlay_fc_retention_hours),
+    )

@@ -3,9 +3,9 @@
 A cloud service that warns you by email shortly before it starts raining at your location,
 using DWD radar nowcast data (Germany).
 
-**Status:** M0–M4 code complete. **The service works end to end**: it ingests DWD radar, evaluates
-each subscriber's location, and emails a warning before rain arrives. What is left is the map UI
-(M5) and deployment (M6).
+**Status:** M0–M5 code complete. **The service works end to end**: it ingests DWD radar, evaluates
+each subscriber's location, emails a warning before rain arrives, and shows a rain map with a
+−12 h … +2 h timeline slider. What is left is deployment (M6).
 
 - **[docs/DESIGN.md](docs/DESIGN.md)** — requirements, decisions log, architecture, data model,
   alert state machine, API, privacy, testing strategy and milestones.
@@ -16,7 +16,7 @@ each subscriber's location, and emails a warning before rain arrives. What is le
 
 ```sh
 make dev     # virtualenv + dependencies
-make test    # 143 tests, including a golden comparison against wradlib
+make test    # 164 tests, including a golden comparison against wradlib
 make lint
 
 .venv/bin/python -m rainalert.cli probe \
@@ -63,6 +63,13 @@ make run-ingest        # fetch a cycle, evaluate every subscriber, send what is 
 make verify            # score past warnings against what the radar then saw
 ```
 
-Next up is **M5**: the map with the −12 h … +2 h timeline slider.
+Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/map` then shows the timeline.
+
+```sh
+make rerender          # rebuild map overlays from archives already held (no DWD traffic)
+```
+
+Next up is **M6**: deployment — and before any public use, vendoring Leaflet and picking a tile
+provider, so the map page stops telling third parties who is looking at it.
 
 Data basis: Deutscher Wetterdienst (DWD), radar product RV, CC BY 4.0.

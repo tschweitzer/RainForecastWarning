@@ -43,6 +43,73 @@ class LocalArchiveStore:
         return removed
 
 
+class OverlayStore(Protocol):
+    def put_observed(self, nominal_time: datetime, png: bytes) -> str: ...
+
+    def put_forecast(self, nominal_time: datetime, lead_minutes: int, png: bytes) -> str: ...
+
+    def url_for_observed(self, nominal_time: datetime) -> str: ...
+
+    def url_for_forecast(self, nominal_time: datetime, lead_minutes: int) -> str: ...
+
+    def prune(self, observed_before: datetime, forecast_before: datetime) -> int: ...
+
+
+def _obs_name(nominal_time: datetime) -> str:
+    return f"obs/{nominal_time:%Y%m%dT%H%M}.png"
+
+
+def _fc_name(nominal_time: datetime, lead_minutes: int) -> str:
+    return f"fc/{nominal_time:%Y%m%dT%H%M}/{lead_minutes:03d}.png"
+
+
+class LocalOverlayStore:
+    """Development store. Served by the API itself from /overlays/... .
+
+    Observed and forecast frames live under different prefixes because they have different
+    lifetimes and different audiences - the 12 h timeline needs every past analysis frame, while
+    only the newest cycle's forecast is ever shown (D-7).
+    """
+
+    def __init__(self, root: str | Path, base_url: str = "/overlays") -> None:
+        self.root = Path(root)
+        self.base_url = base_url.rstrip("/")
+        (self.root / "obs").mkdir(parents=True, exist_ok=True)
+        (self.root / "fc").mkdir(parents=True, exist_ok=True)
+
+    def _write(self, name: str, png: bytes) -> str:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(png)
+        return f"{self.base_url}/{name}"
+
+    def put_observed(self, nominal_time: datetime, png: bytes) -> str:
+        return self._write(_obs_name(nominal_time), png)
+
+    def put_forecast(self, nominal_time: datetime, lead_minutes: int, png: bytes) -> str:
+        return self._write(_fc_name(nominal_time, lead_minutes), png)
+
+    def url_for_observed(self, nominal_time: datetime) -> str:
+        return f"{self.base_url}/{_obs_name(nominal_time)}"
+
+    def url_for_forecast(self, nominal_time: datetime, lead_minutes: int) -> str:
+        return f"{self.base_url}/{_fc_name(nominal_time, lead_minutes)}"
+
+    def prune(self, observed_before: datetime, forecast_before: datetime) -> int:
+        removed = 0
+        for path in (self.root / "obs").glob("*.png"):
+            if path.stem < f"{observed_before:%Y%m%dT%H%M}":
+                path.unlink()
+                removed += 1
+        for directory in (self.root / "fc").iterdir():
+            if directory.is_dir() and directory.name < f"{forecast_before:%Y%m%dT%H%M}":
+                for path in directory.glob("*.png"):
+                    path.unlink()
+                    removed += 1
+                directory.rmdir()
+        return removed
+
+
 class GCSArchiveStore:
     """Production store. Retention is a bucket lifecycle rule (D-7), so prune() is a no-op.
 

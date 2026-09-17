@@ -34,3 +34,6 @@ migrate:
 
 verify:
 	$(VENV)/bin/python -m rainalert.cli verify
+
+rerender:
+	$(VENV)/bin/python -m rainalert.cli rerender

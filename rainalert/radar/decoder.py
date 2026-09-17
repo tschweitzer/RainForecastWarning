@@ -203,21 +203,31 @@ def read_frames(archive: Path | str | bytes) -> list[RVFrame]:
     source: dict = (
         {"fileobj": io.BytesIO(archive)} if isinstance(archive, bytes) else {"name": archive}
     )
-    with tarfile.open(mode="r:*", **source) as tar:
-        members = [m for m in tar.getmembers() if m.isfile()]
-        _check_limits(members)
-        for member in members:
-            handle = tar.extractfile(member)
-            if handle is None:
-                continue
-            # Bounded read: one byte more than declared, so a member that lies about its size is
-            # caught rather than streamed into memory.
-            blob = handle.read(member.size + 1)
-            if len(blob) != member.size:
-                raise RVArchiveRejected(
-                    f"member {member.name!r} declared {member.size} bytes, delivered {len(blob)}"
-                )
-            frames.append(decode_frame(blob))
+    # Anything that is not a readable bz2 tar - truncation, corruption, a plain HTML error page
+    # served where an archive was expected - surfaces as RVFormatError like every other bad input.
+    # tarfile.ReadError is not an OSError, so callers catching the documented type would otherwise
+    # still die on it.
+    try:
+        with tarfile.open(mode="r:*", **source) as tar:
+            members = [m for m in tar.getmembers() if m.isfile()]
+            _check_limits(members)
+            for member in members:
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                # Bounded read: one byte more than declared, so a member that lies about its size
+                # is caught rather than streamed into memory.
+                blob = handle.read(member.size + 1)
+                if len(blob) != member.size:
+                    raise RVArchiveRejected(
+                        f"member {member.name!r} declared {member.size} bytes, "
+                        f"delivered {len(blob)}"
+                    )
+                frames.append(decode_frame(blob))
+    except tarfile.TarError as exc:
+        raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
+    except EOFError as exc:
+        raise RVArchiveRejected(f"archive ends mid-stream: {exc}") from exc
     frames.sort(key=lambda f: (f.nominal_time, f.lead_minutes))
     return frames
 

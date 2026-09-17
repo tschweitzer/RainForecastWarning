@@ -112,10 +112,10 @@ def ingest(args: argparse.Namespace) -> int:
 
     from rainalert.config import get_settings
     from rainalert.db.session import create_all, make_engine, make_session_factory
-    from rainalert.jobs.ingest import ingest_once, prune_archives
+    from rainalert.jobs.ingest import ingest_once, prune_archives, prune_overlays
     from rainalert.notify import build_notifier
     from rainalert.radar.client import DWDClient
-    from rainalert.storage import GCSArchiveStore, LocalArchiveStore
+    from rainalert.storage import GCSArchiveStore, LocalArchiveStore, LocalOverlayStore
 
     settings = get_settings()
     logging.basicConfig(
@@ -151,12 +151,20 @@ def ingest(args: argparse.Namespace) -> int:
     )
 
     notifier = build_notifier(settings.notifier, settings)
+    overlays = LocalOverlayStore(settings.overlay_dir) if settings.overlay_dir else None
     with client, session_factory() as session:
-        outcome = ingest_once(session, client, store, settings, notifier=notifier)
+        outcome = ingest_once(
+            session, client, store, settings, notifier=notifier, overlays=overlays
+        )
         if args.prune:
+            log = logging.getLogger("rainalert.jobs.ingest")
             removed = prune_archives(store, settings)
             if removed:
-                logging.getLogger("rainalert.jobs.ingest").info("pruned %d archives", removed)
+                log.info("pruned %d archives", removed)
+            if overlays is not None:
+                removed = prune_overlays(overlays, settings)
+                if removed:
+                    log.info("pruned %d overlay frames", removed)
 
     print(f"{outcome.status}: {outcome.nominal_time or ''} {outcome.reason or ''}".strip())
     # Halted ingestion means nobody gets warned: that is a non-zero exit so the scheduler notices.
@@ -186,6 +194,28 @@ def verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def rerender(args: argparse.Namespace) -> int:
+    """Rebuild the map timeline from stored archives. Touches DWD not at all."""
+    import logging
+
+    from rainalert.config import get_settings
+    from rainalert.jobs.backfill import rerender_observed
+    from rainalert.storage import LocalOverlayStore
+
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level)
+    if not settings.archive_dir or not settings.overlay_dir:
+        print("set ARCHIVE_DIR and OVERLAY_DIR", file=sys.stderr)
+        return 2
+    report = rerender_observed(
+        settings.archive_dir, LocalOverlayStore(settings.overlay_dir), args.limit
+    )
+    print(
+        f"{report.rendered} frame(s) from {report.archives} archive(s), {report.failed} unreadable"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rainalert")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -206,6 +236,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("verify", help="score past warnings against what the radar then saw")
     v.set_defaults(func=verify)
+
+    b = sub.add_parser(
+        "rerender", help="rebuild map overlays from archives already held (no DWD traffic)"
+    )
+    b.add_argument("--limit", type=int, default=None, help="only the newest N archives")
+    b.set_defaults(func=rerender)
     return parser
 
 

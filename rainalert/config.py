@@ -63,6 +63,14 @@ class Settings(BaseSettings):
     #: the day's sending quota so the genuine alerts later never arrive.
     blast_radius_max: int = 25
 
+    # --- Map timeline (D-22, §11.1) -----------------------------------------------------------
+    timeline_past_hours: int = 12
+    #: Beyond this the page shows a "radar data is stale" banner instead of pretending.
+    timeline_stale_after_minutes: int = 20
+    overlay_dir: str | None = None
+    overlay_obs_retention_hours: int = 14
+    overlay_fc_retention_hours: int = 1
+
     # --- Retention (D-7, D-23) --------------------------------------------------------------
     raw_retention_hours: int = 48
     evaluation_retention_hours: int = 48

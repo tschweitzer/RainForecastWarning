@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Regenradar{% endblock %}
+{% block body %}
+<h1>Regenradar</h1>
+<p class="lede">Die letzten 12 Stunden und die nächsten zwei. Ziehen oder abspielen.</p>
+
+<div id="banner" class="note" hidden></div>
+<div id="map" style="height:62vh;min-height:320px;border-radius:10px;border:1px solid var(--line)"></div>
+
+<div class="controls">
+  <button type="button" id="play" aria-label="Abspielen">▶</button>
+  <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit">
+</div>
+<p id="stamp" class="stamp">…</p>
+<div id="legend" class="legend"></div>
+
+<p style="margin-top:1.5rem"><a href="/">Zur Anmeldung</a></p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  .controls { display:flex; gap:.75rem; align-items:center; margin-top:1rem; }
+  .controls button { margin:0; width:3rem; }
+  .controls input[type=range] { flex:1; }
+  .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; }
+  .stamp .kind { color:var(--muted); }
+  .stamp .future { color:var(--accent); font-weight:600; }
+  .legend { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.9rem;
+            font-size:.78rem; color:var(--muted); }
+  .legend span { display:inline-flex; align-items:center; gap:.3rem; }
+  .legend i { width:.9rem; height:.9rem; border-radius:3px; display:inline-block; }
+</style>
+<script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var map = L.map('map', { zoomControl: true }).setView([51.2, 10.4], 6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 12, attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  var layer = null, frames = [], gaps = [], bounds = null, timer = null;
+  var cache = new Map();            // url -> Image, LRU-evicted
+  var MAX_CACHED = 40;              // 168 frames is far more than a phone should hold
+  var WINDOW = 6;                   // how far either side of the cursor to prefetch
+
+  var slider = document.getElementById('slider');
+  var stamp = document.getElementById('stamp');
+  var banner = document.getElementById('banner');
+  var play = document.getElementById('play');
+
+  function preload(url) {
+    if (cache.has(url)) { return cache.get(url); }
+    var img = new Image();
+    img.src = url;
+    cache.set(url, img);
+    while (cache.size > MAX_CACHED) { cache.delete(cache.keys().next().value); }
+    return img;
+  }
+
+  function gapAt(offset) {
+    return gaps.some(function (g) {
+      return offset >= g.from_offset_minutes && offset <= g.to_offset_minutes;
+    });
+  }
+
+  function label(frame) {
+    var when = new Date(frame.valid_time);
+    var time = when.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    var rel = frame.offset_minutes === 0 ? 'jetzt'
+      : (frame.offset_minutes > 0 ? '+' + frame.offset_minutes + ' min'
+                                  : frame.offset_minutes + ' min');
+    var kind = frame.kind === 'forecast'
+      ? '<span class="future">Vorhersage</span>'
+      : '<span class="kind">gemessen</span>';
+    return time + ' Uhr · ' + rel + ' · ' + kind;
+  }
+
+  function show(index) {
+    var frame = frames[index];
+    if (!frame) { return; }
+    stamp.innerHTML = label(frame);
+
+    if (gapAt(frame.offset_minutes)) {
+      // Deliberately blank rather than holding the previous image: pretending the radar saw
+      // something it did not is exactly the failure this service must not have.
+      if (layer) { map.removeLayer(layer); layer = null; }
+      stamp.innerHTML += ' · <span class="kind">keine Daten</span>';
+      return;
+    }
+    var img = preload(frame.url);
+    if (layer) { layer.setUrl(frame.url); } else {
+      layer = L.imageOverlay(frame.url, bounds, { opacity: 0.75 }).addTo(map);
+    }
+    if (!layer._map) { layer.addTo(map); }
+    for (var d = -WINDOW; d <= WINDOW; d++) {
+      var neighbour = frames[index + d];
+      if (neighbour && !gapAt(neighbour.offset_minutes)) { preload(neighbour.url); }
+    }
+    void img;
+  }
+
+  function stop() { if (timer) { clearInterval(timer); timer = null; play.textContent = '▶'; } }
+
+  play.addEventListener('click', function () {
+    if (timer) { stop(); return; }
+    play.textContent = '❚❚';
+    var start = frames.findIndex(function (f) { return f.offset_minutes >= -60; });
+    if (+slider.value >= frames.length - 1) { slider.value = Math.max(0, start); }
+    timer = setInterval(function () {
+      var next = +slider.value + 1;
+      if (next >= frames.length) { next = Math.max(0, start); }
+      slider.value = next;
+      show(next);
+    }, 125);
+  });
+  slider.addEventListener('input', function () { stop(); show(+slider.value); });
+
+  fetch('/api/v1/overlays/timeline').then(function (r) { return r.json(); }).then(function (data) {
+    frames = data.frames;
+    gaps = data.gaps || [];
+    bounds = data.bounds;
+
+    if (!frames.length) {
+      banner.hidden = false;
+      banner.textContent = 'Noch keine Radardaten vorhanden.';
+      return;
+    }
+    if (data.stale) {
+      banner.hidden = false;
+      banner.textContent = 'Die Radardaten sind ' + Math.round(data.age_minutes) +
+        ' Minuten alt – das Bild zeigt nicht die aktuelle Lage.';
+    }
+
+    slider.max = frames.length - 1;
+    var nowIndex = frames.findIndex(function (f) { return f.offset_minutes === 0; });
+    slider.value = nowIndex < 0 ? 0 : nowIndex;
+    show(+slider.value);
+
+    document.getElementById('legend').innerHTML = (data.colorscale || []).map(function (s) {
+      var c = s.rgba;
+      return '<span><i style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' +
+        (c[3] / 255).toFixed(2) + ')"></i>' + s.from_mm_5min.toFixed(2) + '</span>';
+    }).join('') + '<span>mm / 5 min</span>';
+  });
+})();
+</script>
+{% endblock %}
