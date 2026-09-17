@@ -1,43 +1,49 @@
 VENV := .venv
 
-.PHONY: dev test lint fmt probe
+# Tool paths, overridable so CI can use the ones pip put on PATH instead of a virtualenv:
+#   make lint RUFF=ruff
+#   make test PY=python
+PY   := $(VENV)/bin/python
+RUFF := $(VENV)/bin/ruff
+
+.PHONY: dev test lint fmt probe run-ingest serve migrate verify rerender pin-base image-push reset-local
 
 dev:
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -e '.[dev]'
 
 test:
-	$(VENV)/bin/python -m pytest -q
+	$(PY) -m pytest -q
 
 lint:
-	$(VENV)/bin/ruff check rainalert tests
-	$(VENV)/bin/ruff format --check rainalert tests
+	$(RUFF) check rainalert tests
+	$(RUFF) format --check rainalert tests
 
 fmt:
-	$(VENV)/bin/ruff format rainalert tests
-	$(VENV)/bin/ruff check --fix rainalert tests
+	$(RUFF) format rainalert tests
+	$(RUFF) check --fix rainalert tests
 
 # Example: make probe LAT=50.11 LON=8.68
 probe:
-	$(VENV)/bin/python -m rainalert.cli probe tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 \
+	$(PY) -m rainalert.cli probe tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 \
 		--lat $(LAT) --lon $(LON)
 
 # Reads .env for configuration. Schema comes from `make migrate`, not from --create-tables:
 # two ways of creating the same tables is how a schema and its migrations drift apart.
 run-ingest:
-	$(VENV)/bin/python -m rainalert.cli ingest --prune
+	$(PY) -m rainalert.cli ingest --prune
 
 serve:
-	$(VENV)/bin/uvicorn --factory rainalert.api.app:create_app --reload --port 8000
+	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload --port 8000
 
 migrate:
-	$(VENV)/bin/alembic upgrade head
+	$(PY) -m alembic upgrade head
 
 verify:
-	$(VENV)/bin/python -m rainalert.cli verify
+	$(PY) -m rainalert.cli verify
 
 rerender:
-	$(VENV)/bin/python -m rainalert.cli rerender
+	$(PY) -m rainalert.cli rerender
 
 pin-base:
 	@docker pull python:3.11-slim >/dev/null && \
@@ -52,4 +58,4 @@ image-push:
 # Wipes local test state. Keeps radar archives - re-fetching them is 144 requests to DWD.
 # `make reset-local ALL=1` drops those too.
 reset-local:
-	$(VENV)/bin/python -m rainalert.cli reset-local $(if $(ALL),--all,)
+	$(PY) -m rainalert.cli reset-local $(if $(ALL),--all,)

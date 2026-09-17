@@ -84,6 +84,7 @@ def test_every_runtime_import_is_a_declared_dependency():
 
     root = pathlib.Path(__file__).resolve().parent.parent
     declared = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+
     def normalise(name: str) -> str:
         # PEP 503: distribution names treat -, _ and . as equivalent, so pydantic_settings the
         # import and pydantic-settings the distribution are the same thing.

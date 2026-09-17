@@ -24,7 +24,10 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "wradlib>=2.0",   # test-only oracle for the decoder and grid (D-21) - never imported at runtime
-    "ruff>=0.5",
+    # Pinned to a compatible release, not >=. The formatter's output changes between minor
+    # versions, so an open range means CI can fail on code nobody touched - which is both
+    # confusing and trains you to ignore lint failures.
+    "ruff~=0.16.7",
 ]
 # Production only; the local archive store needs no cloud SDK.
 gcs = ["google-cloud-storage>=2.16"]
