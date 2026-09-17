@@ -44,17 +44,10 @@ jobs:
       - name: Test
         env:
           TEST_DATABASE_URL: postgresql+psycopg://rainalert:rainalert@localhost:5432/rainalert_test
+          # The suite skips the database tests when TEST_DATABASE_URL is unset, so a broken
+          # service container would look like a green build. This makes that skip a failure.
+          REQUIRE_DATABASE_TESTS: "1"
         run: make test PY=python
-
-      # The suite skips the database tests when TEST_DATABASE_URL is unset, so a broken service
-      # container would look like a green build. Assert they actually ran.
-      - name: Assert the database tests were not skipped
-        env:
-          TEST_DATABASE_URL: postgresql+psycopg://rainalert:rainalert@localhost:5432/rainalert_test
-        run: |
-          pytest -q --collect-only tests/test_ingest.py >/dev/null
-          pytest tests/test_ingest.py -q 2>&1 | tee /tmp/out
-          grep -qv "skipped" /tmp/out || (echo "database tests skipped in CI" && exit 1)
 
   build:
     runs-on: ubuntu-latest

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-FIXTURES = Path(__file__).parent / "fixtures"
+from tests.helpers import FIXTURES
 
 
 @pytest.fixture(scope="session")
@@ -25,6 +25,10 @@ def postgres_url() -> str:
 
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
+        # Skipping is right on a laptop with no Postgres, but in CI it would turn a broken
+        # service container into a green build. There, the skip has to be a failure instead.
+        if os.environ.get("REQUIRE_DATABASE_TESTS"):
+            pytest.fail("REQUIRE_DATABASE_TESTS is set but TEST_DATABASE_URL is not")
         pytest.skip("TEST_DATABASE_URL not set")
     return url
 

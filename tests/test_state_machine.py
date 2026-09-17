@@ -245,7 +245,7 @@ def test_mask_cache_is_actually_shared_between_subscribers():
     """
     from rainalert.alerting.sampler import MaskCache, sample
     from rainalert.radar.decoder import read_frames
-    from tests.conftest import FIXTURES
+    from tests.helpers import FIXTURES
 
     frames = read_frames(FIXTURES / "DE1200_RV2609161355_trimmed.tar.bz2")
     cache = MaskCache()

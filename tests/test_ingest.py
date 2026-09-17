@@ -10,7 +10,7 @@ from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.jobs.ingest import CycleRejected, ingest_once, prune_archives, validate_cycle
 from rainalert.radar.decoder import read_frames
 from rainalert.storage import LocalArchiveStore
-from tests.test_client import Recorder, make_client
+from tests.helpers import Recorder, make_client
 
 NOW = datetime(2026, 9, 16, 14, 0, tzinfo=UTC)  # just after the fixture's 13:55 cycle
 

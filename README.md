@@ -38,7 +38,8 @@ make run-ingest ARCHIVE_DIR=./var/raw
 
 It fetches the latest cycle conditionally, refuses anything that is not a plausible national
 composite, archives the raw bytes, and records exactly one row per nominal time. The ingest tests
-need a real Postgres and skip without `TEST_DATABASE_URL`.
+need a real Postgres and skip without `TEST_DATABASE_URL`. Set `REQUIRE_DATABASE_TESTS=1`
+to turn that skip into a failure - CI does, so a broken database cannot pass as green.
 
 Running the web service:
 
