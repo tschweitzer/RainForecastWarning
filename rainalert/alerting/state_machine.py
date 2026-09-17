@@ -73,8 +73,16 @@ def advance(current: StateView, reading: Reading, policy: Policy, now: datetime)
         dry_since = current.dry_since  # keep the earlier timestamp: the timer is cumulative
 
     if state is AlertState.UNKNOWN:
-        nxt = AlertState.RAINING if reading.now_wet else AlertState.DRY
-        return Transition(nxt, dry_since, 0, False, "observed")
+        if reading.now_wet:
+            # Rain is already falling here. We have no idea whether it just started or has been
+            # going for an hour, so there is nothing useful to warn about - only note the state.
+            return Transition(AlertState.RAINING, None, 0, False, "observed")
+        if reading.first_hit_lead_minutes is not None:
+            # Dry here, rain approaching: that is exactly the thing worth saying, and we know
+            # enough to say it. Waiting a cycle would leave every new subscription - and every
+            # subscription that has just moved - blind for five minutes for no benefit.
+            return Transition(AlertState.WARNED, dry_since, 0, True, "alert")
+        return Transition(AlertState.DRY, dry_since, 0, False, "observed")
 
     if state is AlertState.DRY:
         if reading.now_wet:

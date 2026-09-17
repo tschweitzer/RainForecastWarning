@@ -33,7 +33,14 @@ def state(s, **kw):
     ("start", "read", "expect_state", "expect_alert", "label"),
     [
         (AlertState.UNKNOWN, reading(now_wet=True), AlertState.RAINING, False, "unknown + wet"),
-        (AlertState.UNKNOWN, reading(), AlertState.DRY, False, "unknown + dry"),
+        (AlertState.UNKNOWN, reading(), AlertState.DRY, False, "unknown + dry, nothing coming"),
+        (
+            AlertState.UNKNOWN,
+            reading(first_hit=20),
+            AlertState.WARNED,
+            True,
+            "unknown + dry + rain coming",
+        ),
         (AlertState.DRY, reading(first_hit=20), AlertState.WARNED, True, "dry + rain coming"),
         (AlertState.DRY, reading(now_wet=True), AlertState.RAINING, False, "dry + rain overhead"),
         (AlertState.DRY, reading(), AlertState.DRY, False, "dry + nothing"),
@@ -52,6 +59,23 @@ def test_transition_table(start, read, expect_state, expect_alert, label):
     result = advance(state(start), read, POLICY, T0)
     assert result.next_state is expect_state, label
     assert result.alert is expect_alert, label
+
+
+def test_a_new_subscription_is_not_blind_for_its_first_cycle():
+    """Dry here with rain approaching is a complete picture: say so now, not in five minutes.
+
+    The same path covers a subscription that has just moved, which D-17 resets to UNKNOWN.
+    """
+    result = advance(state(AlertState.UNKNOWN), reading(first_hit=20), POLICY, T0)
+    assert result.alert is True
+    assert result.next_state is AlertState.WARNED
+
+
+def test_a_new_subscription_in_existing_rain_stays_quiet():
+    """Rain already falling tells us nothing about whether they just walked into it."""
+    result = advance(state(AlertState.UNKNOWN), reading(now_wet=True, first_hit=20), POLICY, T0)
+    assert result.alert is False
+    assert result.next_state is AlertState.RAINING
 
 
 def test_a_warning_is_sent_once_not_once_per_cycle():

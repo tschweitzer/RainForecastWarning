@@ -607,7 +607,8 @@ instead of suppressing one.
 
 | From | Condition | To | Mail? |
 |---|---|---|---|
-| `UNKNOWN` | `now_wet` | `RAINING` | no — first observation, nothing to warn about |
+| `UNKNOWN` | `now_wet` | `RAINING` | no — rain is already falling and we cannot tell for how long, so there is nothing useful to say |
+| `UNKNOWN` | not `now_wet` and `first_hit` exists | `WARNED` | **yes** — dry here, rain approaching: we already know enough |
 | `UNKNOWN` | not `now_wet` | `DRY` | no |
 | `DRY` | `first_hit` exists and not `now_wet` | `WARNED` | **yes** (unless suppressed) |
 | `DRY` | `now_wet` (rain started without a prior warning, e.g. formed overhead) | `RAINING` | no |
@@ -1040,11 +1041,12 @@ covered by tests but not yet by an actual stored day.
 *Deliberately deferred:* `dry_clear_minutes` is a constant rather than per-subscription; the
 onset-field optimisation stays unbuilt (§8.1).
 
-**One consequence of the §9 table worth knowing:** a brand-new subscription starts in `UNKNOWN` and
-its first cycle only *observes*, so the earliest possible warning is one cycle (five minutes) after
-confirming - and likewise after a location move. That is deliberate (it is what stops us warning
-about rain someone has just walked into), but it does mean the service is blind for the first five
-minutes of any subscription.
+**On `UNKNOWN`:** an earlier revision had the first cycle only *observe*, which left every new
+subscription — and every subscription that had just moved — blind for five minutes. It now warns
+immediately when the first observation is dry with rain approaching, because that is a complete
+picture: we know it is not raining here and we know rain is coming. Only the `now_wet` case stays
+silent, which is the case that matters — rain already falling tells us nothing about whether the
+subscriber has just walked into it.
 
 **M5 — map UI.**
 Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, backfill/re-render job, subscribe
