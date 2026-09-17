@@ -22,9 +22,10 @@ probe:
 	$(VENV)/bin/python -m rainalert.cli probe tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 \
 		--lat $(LAT) --lon $(LON)
 
+# Reads .env for configuration. Schema comes from `make migrate`, not from --create-tables:
+# two ways of creating the same tables is how a schema and its migrations drift apart.
 run-ingest:
-	ARCHIVE_DIR=$(or $(ARCHIVE_DIR),./var/raw) \
-	$(VENV)/bin/python -m rainalert.cli ingest --create-tables --prune
+	$(VENV)/bin/python -m rainalert.cli ingest --prune
 
 serve:
 	$(VENV)/bin/uvicorn --factory rainalert.api.app:create_app --reload --port 8000

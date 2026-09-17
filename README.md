@@ -72,6 +72,9 @@ Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/map` then sho
 make rerender          # rebuild map overlays from archives already held (no DWD traffic)
 ```
 
+**Want to try it?** [docs/LOCAL.md](docs/LOCAL.md) runs the whole service on a laptop against the
+real DWD server — no cloud account, no domain, no mail provider. Mail is written as `.eml` files.
+
 Deployment lives in [`infra/`](infra/) (Terraform) with the procedure and failure modes in
 [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
