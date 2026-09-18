@@ -45,7 +45,13 @@ class IngestOutcome:
     reason: str | None = None
 
 
-def validate_cycle(frames: list[RVFrame], settings: Settings, now: datetime) -> None:
+def validate_cycle(
+    frames: list[RVFrame],
+    settings: Settings,
+    now: datetime,
+    *,
+    max_age_hours: float | None = None,
+) -> None:
     """Refuse a cycle that cannot be what it claims to be.
 
     Raises :class:`CycleRejected`. Note what this is *not* protecting against: DWD being wrong about
@@ -67,7 +73,12 @@ def validate_cycle(frames: list[RVFrame], settings: Settings, now: datetime) -> 
     ahead = (nominal - now).total_seconds() / 60.0
     if ahead > settings.cycle_max_future_minutes:
         raise CycleRejected(f"nominal time is {ahead:.0f} min in the future")
-    if -ahead > settings.cycle_max_age_hours * 60:
+    # Backfill passes its own window here. Live ingest must refuse an old cycle - serving it as
+    # current is how stale rain gets warned about - but a backfill is asking for old cycles on
+    # purpose, and still refuses anything older than it asked for. The future check is not
+    # relaxed by either.
+    age_limit = settings.cycle_max_age_hours if max_age_hours is None else max_age_hours
+    if -ahead > age_limit * 60:
         raise CycleRejected(f"nominal time is {-ahead / 60:.1f} h in the past")
 
     leads = sorted(f.lead_minutes for f in frames)

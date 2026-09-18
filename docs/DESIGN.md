@@ -740,10 +740,27 @@ holding the previous image, which would fake continuity across a radar outage.
 - If the latest cycle is older than 20 minutes, the page shows a clear "radar data is stale" banner
   instead of pretending.
 
-**Backfill.** A fresh deployment has no history, so the timeline starts empty and fills at one frame
-per 5 minutes. `rainalert backfill --hours 12` fetches past cycles **sequentially** (one request at a
-time, ≥ 2 s apart, byte budget and all other §4.3 rules honoured) and renders their analysis
-overlays. A separate re-render path rebuilds observed overlays from the 48 h raw archives without
+**Backfill.** *Implemented 2026-09-18.* A fresh deployment has no history, so the timeline starts
+empty and fills at one frame per 5 minutes. `rainalert backfill --hours 12` fetches the cycles the
+timeline is missing **sequentially** — one request at a time, oldest first, with a **jittered
+1–15 s pause** between each (the spec said ≥ 2 s; the wider jittered band averages four times
+that, and two instances starting together do not walk the archive in step). All other §4.3 rules
+are honoured unchanged: same byte budget, same circuit breaker, same response-size cap. It prints
+the plan — how many cycles, how long, roughly how many MB — and asks before it starts, because
+nobody should learn the size of a burst by watching a log scroll.
+
+Three things it deliberately does not do. It **never evaluates alerts**: backfilled cycles are
+history, and warning about them would mail every subscriber about rain that stopped hours ago,
+once per cycle — `fetch_missing` takes no notifier at all, which is the cheapest way to guarantee
+that. It **never retries a 404**: a cycle past DWD's retention window is counted and skipped, and
+asking four more times would not bring it back. And it **refuses a file whose header disagrees
+with the name requested** — a check live ingest cannot make, since `_LATEST` carries no
+expectation.
+
+The age check in `validate_cycle` is widened to the window asked for and only that; the
+future check, the mixed-stamp check and the plausibility band all still apply.
+
+A separate re-render path rebuilds observed overlays from the 48 h raw archives without
 touching DWD at all — prefer it whenever the archive still has the cycle.
 *How far back the `rv/` directory actually keeps files is an **M0 VERIFY** item*; if DWD only retains
 a few hours, backfill can fill only that much and the rest accrues over time.

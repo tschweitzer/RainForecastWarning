@@ -232,6 +232,30 @@ built around (DESIGN.md §4.3). After an hour or two, `http://localhost:8000/map
 to slide through, and this is also the closest thing to M2's "24 h unattended" criterion that can be
 done without deploying.
 
+### Filling the timeline you did not run for
+
+One `make run-ingest` captures one five-minute frame, so a timeline you have been feeding by hand
+is mostly gaps - and they are drawn as gaps on purpose, because holding the previous image across
+a hole would fake continuity across what might have been a radar outage.
+
+DWD keeps a rolling ~48 h of timestamped archives (`DWD_RV_FORMAT.md` §3), so the gaps are still
+fetchable:
+
+```sh
+make backfill DRY_RUN=1   # what it would fetch, how long, how much
+make backfill             # last 12 h, asks before it starts
+make backfill HOURS=3
+```
+
+**This is the only command here that makes a burst of requests to DWD**, so it is the slowest one
+on purpose: strictly one at a time, oldest first, with a jittered 1-15 s pause between each, inside
+the same byte budget and behind the same circuit breaker as everything else. A 12 h fill is about
+145 requests and takes half an hour. It stops and says so if the budget runs out or the breaker
+opens, and a cycle DWD no longer keeps is counted and skipped rather than retried.
+
+Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would
+mail every subscriber about rain that stopped hours ago, once per cycle.
+
 ## 7. What "working" looks like
 
 ```sh

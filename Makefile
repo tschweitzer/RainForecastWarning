@@ -7,7 +7,7 @@ PY   := $(VENV)/bin/python
 RUFF := $(VENV)/bin/ruff
 
 ALL_TARGETS := dev test lint fmt probe run-ingest serve migrate verify rerender pin-base \
-	image-push reset-local outbox
+	image-push reset-local outbox backfill
 .PHONY: $(ALL_TARGETS)
 
 dev:
@@ -61,6 +61,15 @@ PORT ?= 8000
 serve:
 	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload \
 		--host $(HOST) --port $(PORT)
+
+# Fills the map timeline by fetching past cycles from DWD. Deliberately slow - one request at a
+# time, 1-15 s apart - and it prints the plan and asks before it starts.
+#   make backfill                 # last 12 h
+#   make backfill HOURS=3         # less
+#   make backfill DRY_RUN=1       # just the plan
+backfill:
+	@$(PY) -m rainalert.cli backfill $(if $(HOURS),--hours $(HOURS),) \
+		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,) $(if $(YES),--yes,)
 
 # Prints the links from the newest local mails, decoded. `cat`ing the .eml does not work:
 # it is quoted-printable, so the token reads `=3D...` and wraps mid-string.

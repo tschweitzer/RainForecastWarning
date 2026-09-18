@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -25,6 +26,18 @@ from typing import Self
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+#: `DE1200_RV2609181435.tar.bz2` and nothing else - no separators, no escapes, no traversal.
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_]+\.tar\.bz2")
+
+
+def archive_name(nominal_time: datetime) -> str:
+    """The timestamped file name DWD publishes for a cycle (DWD_RV_FORMAT.md 1).
+
+    Note the two-digit year: the directory listing uses `YYMMDDHHMM`, not `YYYY`.
+    """
+    return f"DE1200_RV{nominal_time.astimezone(UTC):%y%m%d%H%M}.tar.bz2"
 
 
 class FetchError(RuntimeError):
@@ -37,6 +50,15 @@ class ResponseTooLarge(FetchError):
 
 class BudgetExhausted(FetchError):
     """A byte budget is spent. Ingestion is halted - which means nobody gets warned."""
+
+
+class ArchiveNotFound(FetchError):
+    """404. The cycle is past DWD's retention window, or never existed.
+
+    Separate from FetchError because it must never be retried: five attempts with exponential
+    backoff against a file that is genuinely gone is five pointless requests and several minutes
+    of waiting, which is the opposite of polite.
+    """
 
 
 class BreakerOpen(FetchError):
@@ -97,7 +119,8 @@ class DWDClient:
         sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
-        self.url = base_url.rstrip("/") + "/" + latest_name
+        self.base_url = base_url.rstrip("/")
+        self.url = self.base_url + "/" + latest_name
         self.max_response_bytes = max_response_bytes
         self.max_attempts = max_attempts
         self.backoff_base = backoff_base_seconds
@@ -136,6 +159,22 @@ class DWDClient:
         Giving up is correct: the next cycle fires in five minutes and will try again. Retrying
         harder here only risks hammering DWD during an incident on their side.
         """
+        return self._fetch(self.url, etag, last_modified)
+
+    def fetch_named(self, name: str) -> FetchResult:
+        """Fetch one timestamped archive by file name, for backfilling past cycles.
+
+        The name is built from a datetime by ``archive_name`` and never from anything a user
+        typed; it is checked here anyway, because a path separator or an escape in a URL this
+        code builds is the kind of thing that is obvious only in hindsight.
+        """
+        if not _SAFE_NAME.fullmatch(name):
+            raise ValueError(f"refusing to fetch {name!r}: not a plain archive name")
+        return self._fetch(f"{self.base_url}/{name}")
+
+    def _fetch(
+        self, url: str, etag: str | None = None, last_modified: str | None = None
+    ) -> FetchResult:
         if self.breaker_open:
             raise BreakerOpen(f"circuit breaker open until {self._breaker_until:%H:%M:%S}")
         self._budget.check(self._now())
@@ -149,10 +188,12 @@ class DWDClient:
         last_error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                result = self._attempt(headers, attempt)
+                result = self._attempt(url, headers, attempt)
             except ResponseTooLarge:
                 self._record_failure()
                 raise  # never retry: the same oversized bytes are still there
+            except ArchiveNotFound:
+                raise  # the file is not there; asking again four more times will not change that
             except (httpx.HTTPError, FetchError) as exc:
                 last_error = exc
                 if attempt < self.max_attempts:
@@ -164,8 +205,8 @@ class DWDClient:
         self._record_failure()
         raise FetchError(f"giving up after {self.max_attempts} attempts: {last_error}")
 
-    def _attempt(self, headers: dict[str, str], attempt: int) -> FetchResult:
-        with self._client.stream("GET", self.url, headers=headers) as response:
+    def _attempt(self, url: str, headers: dict[str, str], attempt: int) -> FetchResult:
+        with self._client.stream("GET", url, headers=headers) as response:
             if response.status_code == 304:
                 response.close()
                 return FetchResult(None, response.headers.get("etag"), None, True, attempt)
@@ -175,6 +216,9 @@ class DWDClient:
                 if retry_after and retry_after.isdigit():
                     self._sleep(min(float(retry_after), 120.0))
                 raise FetchError(f"server said {response.status_code}")
+            if response.status_code == 404:
+                response.close()
+                raise ArchiveNotFound(url.rsplit("/", 1)[-1])
             if response.status_code != 200:
                 response.close()
                 raise FetchError(f"unexpected status {response.status_code}")

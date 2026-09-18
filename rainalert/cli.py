@@ -226,6 +226,88 @@ def rerender(args: argparse.Namespace) -> int:
     return 0
 
 
+def backfill(args: argparse.Namespace) -> int:
+    """Fetch the cycles the timeline is missing. The one command here that is meant to be slow."""
+    import logging
+
+    from rainalert.config import get_settings
+    from rainalert.db.session import make_engine, make_session_factory
+    from rainalert.jobs.backfill import (
+        JITTER_MAX_SECONDS,
+        JITTER_MIN_SECONDS,
+        fetch_missing,
+        missing_cycles,
+    )
+    from rainalert.radar.client import DWDClient
+    from rainalert.storage import LocalArchiveStore, LocalOverlayStore
+
+    settings = get_settings()
+    logging.basicConfig(level=settings.log_level)
+    if not settings.archive_dir:
+        print("set ARCHIVE_DIR", file=sys.stderr)
+        return 2
+
+    session_factory = make_session_factory(make_engine(settings.database_url))
+    with session_factory() as session:
+        wanted = missing_cycles(session, args.hours)
+        if args.limit:
+            wanted = wanted[: args.limit]
+        if not wanted:
+            print(f"nothing missing in the last {args.hours:g} h")
+            return 0
+
+        # Say what it is about to do before it does it. This is the one command that makes a
+        # burst of requests to somebody else's free service; nobody should learn its size by
+        # watching the log scroll.
+        low = len(wanted) * JITTER_MIN_SECONDS / 60
+        high = len(wanted) * JITTER_MAX_SECONDS / 60
+        print(
+            f"{len(wanted)} cycle(s) missing between {wanted[0]:%Y-%m-%d %H:%M} and "
+            f"{wanted[-1]:%H:%M} UTC\n"
+            f"one request each, {JITTER_MIN_SECONDS:g}-{JITTER_MAX_SECONDS:g}s apart: "
+            f"{low:.0f}-{high:.0f} minutes, roughly {len(wanted) * 0.5:.0f} MB from DWD"
+        )
+        if args.dry_run:
+            return 0
+        if not args.yes and input("continue? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("nothing fetched")
+            return 1
+
+        overlays = LocalOverlayStore(settings.overlay_dir) if settings.overlay_dir else None
+        with DWDClient(
+            base_url=settings.dwd_base_url,
+            latest_name=settings.dwd_latest_name,
+            user_agent=settings.dwd_user_agent,
+            max_response_bytes=settings.dwd_max_response_bytes,
+            hourly_byte_budget=settings.dwd_hourly_byte_budget,
+            daily_byte_budget=settings.dwd_daily_byte_budget,
+            max_attempts=settings.dwd_max_attempts,
+            backoff_base_seconds=settings.dwd_backoff_base_seconds,
+            timeout_seconds=settings.dwd_request_timeout_seconds,
+            breaker_threshold=settings.dwd_breaker_threshold,
+            breaker_cooldown_seconds=settings.dwd_breaker_cooldown_seconds,
+        ) as client:
+            report = fetch_missing(
+                session,
+                client,
+                LocalArchiveStore(settings.archive_dir),
+                settings,
+                hours=args.hours,
+                overlays=overlays,
+                limit=args.limit,
+            )
+
+    print(
+        f"fetched {report.fetched}, already held {report.already_held}, "
+        f"not on the server {report.not_retained}, rejected {report.rejected}, "
+        f"{report.bytes / 1e6:.1f} MB"
+    )
+    if report.halted:
+        print(f"halted early: {report.halted}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def outbox(args: argparse.Namespace) -> int:
     """Print the links from the newest file-notifier mails, decoded.
 
@@ -339,6 +421,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     r.set_defaults(func=reset_local)
+
+    f = sub.add_parser(
+        "backfill", help="fetch past cycles the timeline is missing (many requests, slowly)"
+    )
+    f.add_argument("--hours", type=float, default=12.0, help="how far back to fill (default 12)")
+    f.add_argument("--limit", type=int, default=None, help="at most this many cycles")
+    f.add_argument("--dry-run", action="store_true", help="print the plan and stop")
+    f.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    f.set_defaults(func=backfill)
 
     o = sub.add_parser(
         "outbox", help="print the links from the newest local mails, decoded and ready to open"
