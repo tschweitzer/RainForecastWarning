@@ -243,14 +243,14 @@ fetchable:
 
 ```sh
 make backfill DRY_RUN=1   # what it would fetch, how long, how much
-make backfill             # last 12 h, asks before it starts
+make backfill             # everything DWD still has (~48 h), asks before it starts
 make backfill HOURS=3
 ```
 
 **This is the only command here that makes a burst of requests to DWD**, so it is the slowest one
 on purpose: strictly one at a time, oldest first, with a jittered 1-7 s pause between each, inside
-the same byte budget and behind the same circuit breaker as everything else. A 12 h fill is about
-145 requests and takes about ten minutes. It stops and says so if the budget runs out or the breaker
+the same byte budget and behind the same circuit breaker as everything else. A full 48 h fill is
+577 requests, about 300 MB and roughly 40 minutes; `HOURS=12` is 145 requests and ten minutes. It stops and says so if the budget runs out or the breaker
 opens, and a cycle DWD no longer keeps is counted and skipped rather than retried.
 
 Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would
@@ -277,8 +277,8 @@ make reset-local YES=1    # skip the confirmation prompt, for scripts
 ```
 
 **The default keeps the radar data, and that is the point.** Subscriptions cost a click to
-recreate; every stored cycle cost a request to a service DWD provides for free, and a 12 h timeline
-is 144 of them. Re-fetch only when you actually need to test ingestion itself.
+recreate; every stored cycle cost a request to a service DWD provides for free, and a full timeline
+is 577 of them. Re-fetch only when you actually need to test ingestion itself.
 
 So the usual loop while testing the alerting path is:
 

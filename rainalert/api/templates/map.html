@@ -206,7 +206,13 @@
   });
   slider.addEventListener('input', function () { stop(); show(+slider.value); });
 
-  fetch('/api/v1/overlays/timeline').then(function (r) { return r.json(); }).then(function (data) {
+  // The full window is two days, which is 577 slider positions - excellent for looking back at
+  // yesterday's storm, poor for landing on a particular minute with a thumb. ?hours=6 narrows it;
+  // the server caps whatever is asked for at its own configured maximum.
+  var asked = new URLSearchParams(location.search).get('hours');
+  var url = '/api/v1/overlays/timeline' + (asked ? '?past_hours=' + encodeURIComponent(asked) : '');
+
+  fetch(url).then(function (r) { return r.json(); }).then(function (data) {
     frames = data.frames;
     gaps = data.gaps || [];
     bounds = data.bounds;

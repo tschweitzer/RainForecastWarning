@@ -406,3 +406,52 @@ def test_long_offsets_are_shown_as_hours(client):
     assert "' h'" in body
     # the old unconditional minutes formatting is gone
     assert "'+' + frame.offset_minutes + ' min'" not in body
+
+
+def test_the_window_defaults_to_everything_dwd_keeps():
+    """The slider should not throw away history that is free to have."""
+    from rainalert.config import DWD_RETENTION_HOURS, Settings
+
+    s = Settings(database_url="postgresql+psycopg://x", _env_file=None)
+    assert s.timeline_past_hours == DWD_RETENTION_HOURS
+    # Both retentions outlast the window, or the oldest frame on the slider 404s mid-look.
+    assert s.overlay_obs_retention_hours > s.timeline_past_hours
+    assert s.raw_retention_hours > s.timeline_past_hours
+
+
+def test_a_nonsense_window_does_not_empty_the_map(db, tmp_path):
+    """`past_hours or default` lets a negative through, and the window then starts after it ends.
+
+    The query returns nothing, so the map renders with no frames at all - which reads as "the
+    radar is down" rather than "you asked for a window that runs backwards".
+    """
+    from datetime import UTC, datetime
+
+    from rainalert.config import Settings
+    from rainalert.db.models import CycleStatus, RadarCycle
+    from rainalert.storage import LocalOverlayStore
+    from rainalert.timeline import build_timeline
+
+    now = datetime(2026, 9, 18, 12, 0, tzinfo=UTC)
+    settings = Settings(database_url="postgresql+psycopg://x", _env_file=None)
+    store = LocalOverlayStore(tmp_path / "ov")
+
+    with db() as session:
+        session.add(
+            RadarCycle(
+                nominal_time=now,
+                fetched_at=now,
+                source_url="x",
+                sha256=b"0" * 32,
+                bytes=1,
+                frame_count=25,
+                status=CycleStatus.OK,
+                archive_uri="file:///x",
+            )
+        )
+        session.commit()
+
+        for asked in (-5, -10000):
+            result = build_timeline(session, settings, store, asked, now=now)
+            observed = [f for f in result["frames"] if f["kind"] == "observed"]
+            assert observed, f"past_hours={asked} produced an empty map"

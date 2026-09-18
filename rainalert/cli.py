@@ -247,13 +247,14 @@ def backfill(args: argparse.Namespace) -> int:
         print("set ARCHIVE_DIR", file=sys.stderr)
         return 2
 
+    hours = args.hours if args.hours is not None else settings.timeline_past_hours
     session_factory = make_session_factory(make_engine(settings.database_url))
     with session_factory() as session:
-        wanted = missing_cycles(session, args.hours)
+        wanted = missing_cycles(session, hours)
         if args.limit:
             wanted = wanted[: args.limit]
         if not wanted:
-            print(f"nothing missing in the last {args.hours:g} h")
+            print(f"nothing missing in the last {hours:g} h")
             return 0
 
         # Say what it is about to do before it does it. This is the one command that makes a
@@ -262,8 +263,10 @@ def backfill(args: argparse.Namespace) -> int:
         low = len(wanted) * JITTER_MIN_SECONDS / 60
         high = len(wanted) * JITTER_MAX_SECONDS / 60
         print(
+            # Both ends carry their date: the window is two days by default, so "between
+            # 2026-09-16 19:40 and 19:40" reads as a mistake rather than as 48 hours.
             f"{len(wanted)} cycle(s) missing between {wanted[0]:%Y-%m-%d %H:%M} and "
-            f"{wanted[-1]:%H:%M} UTC\n"
+            f"{wanted[-1]:%Y-%m-%d %H:%M} UTC\n"
             f"one request each, {JITTER_MIN_SECONDS:g}-{JITTER_MAX_SECONDS:g}s apart: "
             f"{low:.0f}-{high:.0f} minutes, roughly {len(wanted) * 0.5:.0f} MB from DWD"
         )
@@ -292,7 +295,7 @@ def backfill(args: argparse.Namespace) -> int:
                 client,
                 LocalArchiveStore(settings.archive_dir),
                 settings,
-                hours=args.hours,
+                hours=hours,
                 overlays=overlays,
                 limit=args.limit,
             )
@@ -417,7 +420,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--all",
         action="store_true",
         help="also drop stored radar cycles and archives. Without this they are kept, because "
-        "re-fetching them is 144 requests to a service DWD provides for free.",
+        "re-fetching a full window is 577 requests to a service DWD provides for free.",
     )
     r.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     r.set_defaults(func=reset_local)
@@ -425,7 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser(
         "backfill", help="fetch past cycles the timeline is missing (many requests, slowly)"
     )
-    f.add_argument("--hours", type=float, default=12.0, help="how far back to fill (default 12)")
+    f.add_argument(
+        "--hours",
+        type=float,
+        default=None,
+        help="how far back to fill; defaults to everything DWD keeps (~48 h)",
+    )
     f.add_argument("--limit", type=int, default=None, help="at most this many cycles")
     f.add_argument("--dry-run", action="store_true", help="print the plan and stop")
     f.add_argument("--yes", action="store_true", help="skip the confirmation prompt")

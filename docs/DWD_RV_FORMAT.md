@@ -43,9 +43,15 @@ Identical size **and** mtime as the newest timestamped file. Consequences for th
 Oldest entry `…2609140925` (14-Sep 09:25), newest `…2609160920` (16-Sep 09:20) → a rolling window of
 **47 h 55 min**, ≈ 576 cycles per product.
 
-**This resolves the M0 backfill question and Q-8.** A 12 h timeline (D-22) can be fully backfilled at
-deploy time, and 24 h would also be within reach. Our own 48 h GCS raw retention (D-7) happens to
-mirror DWD's — there is no window in which DWD has a cycle we could still fetch but we have discarded.
+**This resolves the M0 backfill question and Q-8.** The map timeline now takes the whole window
+rather than the 12 h originally specified (D-22, revised 2026-09-18). `DWD_RETENTION_HOURS = 48` in
+`config.py` is the single place this measurement is written down; the timeline, the overlay
+retention and the raw retention are all derived from it. Our own retention is set two hours
+*longer* than DWD's, so there is no window in which DWD still has a cycle we have discarded, and
+the oldest frame on the slider cannot vanish under a prune while someone is looking at it.
+
+Nothing breaks if this number is wrong or DWD changes it: a cycle they no longer keep is a 404,
+which backfill counts and skips, and a slot with no cycle is drawn as a gap rather than faked.
 
 ## 4. Publication delay: ~3–5 minutes after nominal time
 

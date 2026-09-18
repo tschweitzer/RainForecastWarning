@@ -51,7 +51,12 @@ def build_timeline(
     now: datetime | None = None,
 ) -> dict:
     now = now or datetime.now(UTC)
+    # Clamped at both ends. The upper bound stops a caller asking for a window the store cannot
+    # serve; the lower one matters because `past_hours or default` lets a negative through, and a
+    # window that starts after it ends returns an empty map rather than an error - which reads as
+    # "the radar is down" (§4.3.1: input from outside is checked, not trusted).
     past_hours = min(past_hours or settings.timeline_past_hours, settings.timeline_past_hours)
+    past_hours = max(past_hours, 1)
 
     latest = session.execute(
         select(RadarCycle)

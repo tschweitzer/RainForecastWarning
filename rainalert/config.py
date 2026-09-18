@@ -12,6 +12,14 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: How far back DWD's rv/ directory reaches, measured rather than assumed: the listing of
+#: 2026-09-16 spanned 47 h 55 min, about 576 cycles (DWD_RV_FORMAT.md §3). Every window in this
+#: file is expressed against it, so if that ever changes there is one number to edit.
+#:
+#: Nothing depends on it being right. A cycle DWD no longer keeps is a 404, which backfill counts
+#: and skips, and a slot with no cycle is drawn as a gap rather than faked.
+DWD_RETENTION_HOURS = 48
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -64,18 +72,25 @@ class Settings(BaseSettings):
     blast_radius_max: int = 25
 
     # --- Map timeline (D-22, §11.1) -----------------------------------------------------------
-    timeline_past_hours: int = 12
+    #: The whole window DWD keeps. Anything less is throwing away history that is free to have,
+    #: and anything more is slots that can never be filled.
+    timeline_past_hours: int = DWD_RETENTION_HOURS
     #: Beyond this the page shows a "radar data is stale" banner instead of pretending.
     timeline_stale_after_minutes: int = 20
     overlay_dir: str | None = None
     #: Production: a separate bucket from the archives, and the public base URL it is served on.
     overlay_bucket: str | None = None
     overlay_public_base_url: str | None = None
-    overlay_obs_retention_hours: int = 14
+    #: Two hours past the timeline, so the oldest frame on the slider is never a 404 that
+    #: appeared because a prune ran while someone was looking at it.
+    overlay_obs_retention_hours: int = DWD_RETENTION_HOURS + 2
     overlay_fc_retention_hours: int = 1
 
     # --- Retention (D-7, D-23) --------------------------------------------------------------
-    raw_retention_hours: int = 48
+    #: Also past the timeline: re-rendering the oldest frame from raw has to stay possible, and
+    #: keeping less than DWD does would leave a window where they still have a cycle we have
+    #: discarded and would have to re-fetch.
+    raw_retention_hours: int = DWD_RETENTION_HOURS + 2
     evaluation_retention_hours: int = 48
 
     # --- Public identity (Q-1: the domain is not chosen yet) ---------------------------------
