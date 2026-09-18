@@ -360,3 +360,29 @@ def test_the_page_still_sends_no_referrer_by_default(client):
     """The override is per element. Everything else on the site keeps the strict header."""
     assert client.get("/").headers["Referrer-Policy"] == "no-referrer"
     assert client.get("/map").headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_playback_is_slow_enough_to_read(client):
+    """125 ms per frame ran the whole loop in under five seconds - flicker, not weather.
+
+    The floor matters more than the exact number: below roughly 300 ms there is no time to fixate
+    on where a shower is relative to a town, which is the only question the animation answers.
+    """
+    import re
+
+    body = client.get("/map").text
+    step = int(re.search(r"var STEP_MS = (\d+)", body).group(1))
+    assert 300 <= step <= 700, f"{step} ms per frame is outside the legible range"
+
+    # The last frame and t+0 are held longer: the end state, and the boundary where measurement
+    # becomes prediction.
+    last = int(re.search(r"var HOLD_LAST_MS = (\d+)", body).group(1))
+    now = int(re.search(r"var HOLD_NOW_MS = (\d+)", body).group(1))
+    assert last > step and now >= step
+
+
+def test_playback_cannot_stack_frames(client):
+    """setInterval queues another callback when a frame paints slowly; setTimeout cannot."""
+    body = client.get("/map").text
+    assert "setInterval(" not in body  # the call, not the word - the comment explains why
+    assert "clearTimeout(" in body  # and stop() clears the right kind of timer

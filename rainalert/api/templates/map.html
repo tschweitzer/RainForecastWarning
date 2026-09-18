@@ -146,19 +146,47 @@
     void img;
   }
 
-  function stop() { if (timer) { clearInterval(timer); timer = null; play.textContent = '▶'; } }
+  // Playback speed. The loop runs the last hour of radar plus the two-hour forecast, about 37
+  // frames, and at the 125 ms this used to use the whole thing was over in under five seconds -
+  // fast enough to look like flicker rather than weather.
+  //
+  // 500 ms is the middle of the range that works: below roughly 300 ms the eye has no time to
+  // fixate on where a shower is relative to a town, and above about 700 ms the frames stop
+  // reading as one moving thing and become a slideshow. Radar loops generally sit here.
+  var STEP_MS = 500;
+  // Two places deserve longer than a step. The end, so the last forecast frame - the answer to
+  // "will it reach me" - is still on screen when you look back at it rather than snapping away.
+  // And t+0, which is where measurement stops and prediction starts; it is the most important
+  // boundary on the timeline and nothing else marks it.
+  var HOLD_LAST_MS = 1800;
+  var HOLD_NOW_MS = 1000;
+
+  function stop() { if (timer) { clearTimeout(timer); timer = null; play.textContent = '▶'; } }
 
   play.addEventListener('click', function () {
     if (timer) { stop(); return; }
     play.textContent = '❚❚';
     var start = frames.findIndex(function (f) { return f.offset_minutes >= -60; });
     if (+slider.value >= frames.length - 1) { slider.value = Math.max(0, start); }
-    timer = setInterval(function () {
+
+    // A self-scheduling timeout rather than setInterval, so a frame can be held longer than a
+    // step. setInterval cannot vary its period, and it also stacks callbacks if a frame is slow
+    // to paint, which on a phone turns a pause into a stutter and then a jump.
+    function hold(index) {
+      if (index >= frames.length - 1) { return HOLD_LAST_MS; }
+      if (frames[index] && frames[index].offset_minutes === 0) { return HOLD_NOW_MS; }
+      return STEP_MS;
+    }
+
+    function tick() {
       var next = +slider.value + 1;
       if (next >= frames.length) { next = Math.max(0, start); }
       slider.value = next;
       show(next);
-    }, 125);
+      timer = setTimeout(tick, hold(next));
+    }
+
+    timer = setTimeout(tick, STEP_MS);
   });
   slider.addEventListener('input', function () { stop(); show(+slider.value); });
 
