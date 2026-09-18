@@ -135,11 +135,19 @@ Things that would be genuinely interesting to hit here, and what they mean:
 This is the one test I could never run — **it closes M1's acceptance criterion**:
 
 ```sh
-.venv/bin/python -m rainalert.cli probe "$(ls -t var/raw/*.tar.bz2 | head -1)" \
-    --lat 50.1109 --lon 8.6821          # your own coordinates
+make probe LAT=50.1109 LON=8.6821       # your own coordinates
 ```
 
-(`probe` takes one archive, so pick the newest rather than globbing.)
+That probes the newest cycle `make run-ingest` stored, and prints which one. `probe` takes a
+single archive - a shell glob would hand it several and it would refuse - so to check an older
+cycle name it: `make probe LAT=... LON=... ARCHIVE=var/raw/DE1200_RV2609180745.tar.bz2`.
+
+The long form, if you would rather not go through make:
+
+```sh
+.venv/bin/python -m rainalert.cli probe "$(ls -t var/raw/*.tar.bz2 | head -1)" \
+    --lat 50.1109 --lon 8.6821
+```
 
 Compare the output against [DWD's own radar viewer](https://www.dwd.de/DE/leistungen/radarbild_film/radarbild_film.html)
 or RegenRadar for the same moment. The `+0` row should match what the map shows over your location

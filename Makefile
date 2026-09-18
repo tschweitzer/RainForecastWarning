@@ -23,10 +23,19 @@ fmt:
 	$(RUFF) format rainalert tests
 	$(RUFF) check --fix rainalert tests
 
-# Example: make probe LAT=50.11 LON=8.68
+# Probes the newest cycle `make run-ingest` stored, falling back to the test fixture when
+# nothing has been ingested yet. Probing the fixture by default was worse than useless: it is a
+# trimmed three-frame archive from one fixed day, so it answers a question nobody asked.
+#   make probe LAT=48.15 LON=11.56
+#   make probe LAT=48.15 LON=11.56 ARCHIVE=var/raw/DE1200_RV2609180745.tar.bz2
+ARCHIVE_DIR ?= var/raw
+ARCHIVE ?= $(firstword $(shell ls -t $(ARCHIVE_DIR)/*.tar.bz2 2>/dev/null) \
+	tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2)
 probe:
-	$(PY) -m rainalert.cli probe tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 \
-		--lat $(LAT) --lon $(LON)
+	@test -n "$(LAT)" -a -n "$(LON)" || { \
+		echo "usage: make probe LAT=48.15 LON=11.56 [ARCHIVE=path]"; exit 2; }
+	@echo "probing $(ARCHIVE)"
+	@$(PY) -m rainalert.cli probe $(ARCHIVE) --lat $(LAT) --lon $(LON)
 
 # Reads .env for configuration. Schema comes from `make migrate`, not from --create-tables:
 # two ways of creating the same tables is how a schema and its migrations drift apart.
