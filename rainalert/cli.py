@@ -309,12 +309,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _explain_connection_failure() -> None:
+def _explain_connection_failure(reason: str) -> None:
     """Say what to change, rather than where SQLAlchemy gave up.
 
-    Every command here opens a database, so a mistyped DATABASE_URL surfaces as a hundred lines
-    of connection-pool traceback. The mistake is almost always one of two things, and neither is
-    visible in that traceback.
+    Every command here opens a database, so a misconfigured DATABASE_URL surfaces as a hundred
+    lines of connection-pool traceback whose one useful line is at the bottom. Postgres has
+    already said what is wrong; this turns its sentence into the edit that fixes it.
     """
     from urllib.parse import parse_qs, urlparse
 
@@ -329,25 +329,52 @@ def _explain_connection_failure() -> None:
 
     parsed = urlparse(url)
     socket_dir = (parse_qs(parsed.query).get("host") or [""])[0]
+    user = parsed.username or ""
+    where = (
+        f"the unix socket in {socket_dir!r}"
+        if socket_dir
+        else (f"{parsed.hostname or '?'}:{parsed.port or 5432}")
+    )
 
-    print("\ncould not connect to the database.", file=sys.stderr)
-    if socket_dir:
-        print(
-            f"DATABASE_URL points at the unix socket in {socket_dir!r}. Two things put it there:\n"
-            f"  - the server is not running    -> macOS: brew services start postgresql@16\n"
-            f"                                    Linux: sudo systemctl start postgresql\n"
-            f"  - the socket is somewhere else -> Homebrew uses /tmp, Debian and Ubuntu use\n"
-            f"                                    /var/run/postgresql. Ask Postgres which:\n"
-            f'                                    psql -c "show unix_socket_directories"\n'
-            "Then fix the ?host=... in .env (docs/LOCAL.md 1.1).",
-            file=sys.stderr,
+    def say(text: str) -> None:
+        print(text, file=sys.stderr)
+
+    say(f"\ncould not connect to the database. DATABASE_URL points at {where}.")
+
+    if "$(" in url or "${" in url:
+        # .env is read literally by python-dotenv; a shell substitution survives as text.
+        say(
+            f"  The username is literally {user!r}. .env is not a shell script - it is read as\n"
+            "  written, so $(whoami) is never expanded. Put your actual login name in it."
+        )
+    elif "Peer authentication failed" in reason:
+        say(
+            f"  Postgres matched your OS user against a role named {user!r} and refused.\n"
+            "  Either that is not your login name, or the role does not exist:\n"
+            f'    sudo -u postgres createuser --createdb --login "$(whoami)"'
+        )
+    elif "does not exist" in reason and "database" in reason:
+        say(
+            "  The server is reachable; that database has not been created:\n    createdb rainalert"
+        )
+    elif "does not exist" in reason and "role" in reason:
+        say(
+            "  The server is reachable; that role does not exist:\n"
+            '    sudo -u postgres createuser --createdb --login "$(whoami)"'
+        )
+    elif socket_dir:
+        say(
+            "  Nothing is listening there. Two things put it there:\n"
+            "    - the server is not running    -> macOS: brew services start postgresql@16\n"
+            "                                      Linux: sudo systemctl start postgresql\n"
+            "    - the socket is somewhere else -> Homebrew uses /tmp, Debian and Ubuntu use\n"
+            "                                      /var/run/postgresql. Ask Postgres which:\n"
+            '                                      psql -d postgres -c "show unix_socket_directories"'
         )
     else:
-        print(
-            f"DATABASE_URL points at {parsed.hostname or '?'}:{parsed.port or 5432}. "
-            "Check the server is running and reachable there.",
-            file=sys.stderr,
-        )
+        say("  Check the server is running and reachable there.")
+
+    say("docs/LOCAL.md 1.1 covers all of these.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -363,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
         if "connection is bad" not in first and "connection failed" not in first:
             raise
         print(first, file=sys.stderr)
-        _explain_connection_failure()
+        _explain_connection_failure(first)
         return 1
 
 

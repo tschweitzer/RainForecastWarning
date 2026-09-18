@@ -61,6 +61,33 @@ def test_unreachable_database_is_explained_not_dumped(monkeypatch, tmp_path, cap
     assert "Traceback" not in err
 
 
+def test_a_shell_substitution_in_env_is_named_as_the_cause(monkeypatch, tmp_path, capsys):
+    """.env is read literally, so `$(whoami)` reaches Postgres as a username.
+
+    Postgres then says "Peer authentication failed for user ..." - true, and no help at all
+    unless you notice what the name is.
+    """
+    _env(monkeypatch, tmp_path, f"postgresql+psycopg://$(whoami)@/rainalert?host={tmp_path}")
+    assert main(["ingest"]) == 1
+    err = capsys.readouterr().err
+    assert "not a shell script" in err
+    assert "$(whoami)" in err
+
+
+def test_env_files_really_are_read_literally(tmp_path, monkeypatch):
+    """The premise of the message above. If dotenv ever learned to expand, it should fail here."""
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=postgresql+psycopg://$(whoami)@/db\nSECRET_KEY=x\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    for var in ("DATABASE_URL", "SECRET_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    from rainalert.config import Settings
+
+    assert "$(whoami)" in Settings().database_url
+
+
 def test_an_unreachable_host_is_explained_without_socket_advice(monkeypatch, tmp_path, capsys):
     """A TCP DSN gets the TCP diagnosis; socket directories are irrelevant noise there."""
     _env(monkeypatch, tmp_path, "postgresql+psycopg://me:pw@127.0.0.1:1/rainalert")

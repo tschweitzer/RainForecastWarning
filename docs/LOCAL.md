@@ -72,13 +72,21 @@ in `DATABASE_URL` below, running everything with `sudo -u postgres`. The role is
 
 ## 2. Configuration
 
-Create `.env` in the repository root:
+Create `.env` in the repository root. **It is not a shell script** - it is read exactly as
+written, so `$(whoami)` survives as those exact characters and Postgres tries to log you in
+under that name. Write your login out, or let the shell write the line for you:
 
 ```sh
-# macOS (Homebrew puts the socket in /tmp):
-DATABASE_URL=postgresql+psycopg://$(whoami)@/rainalert?host=/tmp
+echo "DATABASE_URL=postgresql+psycopg://$(whoami)@/rainalert?host=/var/run/postgresql" >> .env
+```
+
+The rest is typed by hand:
+
+```ini
+# Your login name, spelled out. macOS - Homebrew puts the socket in /tmp:
+DATABASE_URL=postgresql+psycopg://yourname@/rainalert?host=/tmp
 # Debian/Ubuntu instead - a different socket directory, not a different database:
-# DATABASE_URL=postgresql+psycopg://$(whoami)@/rainalert?host=/var/run/postgresql
+# DATABASE_URL=postgresql+psycopg://yourname@/rainalert?host=/var/run/postgresql
 # Docker instead: postgresql+psycopg://rainalert:rainalert@localhost:5432/rainalert
 
 ARCHIVE_DIR=./var/raw
@@ -218,12 +226,19 @@ rm -rf .venv && make dev                                  # rebuild the environm
 
 ## 9. If something breaks
 
+**`Peer authentication failed for user "$(whoami)"`** — read the name in the message: `.env` is
+read literally, so the shell substitution was stored verbatim. Put your real login name in it.
+
 **`role "yourname" does not exist`** — the Debian/Ubuntu package creates only the `postgres` role,
 and peer authentication looks for one named after your login. See §1.1; one `createuser` fixes it.
 
+**`database "yourname" does not exist` from a bare `psql`** — not a fault, and nothing to do with
+this project. `psql` connects to a database named after you unless told otherwise, and you have no
+such database. Name one: `psql -d postgres -c ...`.
+
 **`psycopg.OperationalError` / socket not found** — the socket directory differs per package:
 Homebrew uses `/tmp`, Postgres.app uses `/tmp` on a different port, and Debian/Ubuntu use
-`/var/run/postgresql`. `psql -c "show unix_socket_directories"` tells you which, or side-step it
+`/var/run/postgresql`. `psql -d postgres -c "show unix_socket_directories"` tells you which, or side-step it
 with a TCP DSN: `postgresql+psycopg://user@localhost:5432/rainalert`.
 
 **`pip install` fails on `wradlib`** — it is a test-only dependency (the golden oracle for the
