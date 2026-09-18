@@ -386,3 +386,23 @@ def test_playback_cannot_stack_frames(client):
     body = client.get("/map").text
     assert "setInterval(" not in body  # the call, not the word - the comment explains why
     assert "clearTimeout(" in body  # and stop() clears the right kind of timer
+
+
+def test_every_frame_is_labelled_with_its_date(client):
+    """The slider reaches 12 h back, so it crosses midnight most evenings.
+
+    Shown on every frame rather than only when the day changes: a label that gains a date only
+    sometimes is one you have to read twice to be sure it has not.
+    """
+    body = client.get("/map").text
+    assert "toLocaleDateString('de-DE'" in body
+    assert "weekday: 'short'" in body  # 'Do.' says yesterday faster than '17.' does
+
+
+def test_long_offsets_are_shown_as_hours(client):
+    """-720 min is a number you have to divide before it means anything."""
+    body = client.get("/map").text
+    assert "function relative(" in body
+    assert "' h'" in body
+    # the old unconditional minutes formatting is gone
+    assert "'+' + frame.offset_minutes + ' min'" not in body

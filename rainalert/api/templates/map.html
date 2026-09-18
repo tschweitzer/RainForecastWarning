@@ -23,6 +23,8 @@
   .controls input[type=range] { flex:1; }
   .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; }
   .stamp .kind { color:var(--muted); }
+  /* Present on every frame, so it must not compete with the time for attention. */
+  .stamp .day { color:var(--muted); }
   .stamp .future { color:var(--accent); font-weight:600; }
   .legend { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.9rem;
             font-size:.78rem; color:var(--muted); }
@@ -110,16 +112,30 @@
     });
   }
 
+  // Minutes up to an hour and a half, hours beyond it. The slider reaches twelve hours back,
+  // where "-720 min" is a number you have to divide before it means anything.
+  function relative(minutes) {
+    if (minutes === 0) { return 'jetzt'; }
+    var sign = minutes < 0 ? '-' : '+';
+    var abs = Math.abs(minutes);
+    if (abs <= 90) { return sign + abs + ' min'; }
+    return sign + Math.floor(abs / 60) + ':' + String(abs % 60).padStart(2, '0') + ' h';
+  }
+
   function label(frame) {
     var when = new Date(frame.valid_time);
     var time = when.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    var rel = frame.offset_minutes === 0 ? 'jetzt'
-      : (frame.offset_minutes > 0 ? '+' + frame.offset_minutes + ' min'
-                                  : frame.offset_minutes + ' min');
+    // The date is always shown, not only when the window crosses midnight. A label that gains a
+    // date only sometimes is one you have to read twice to be sure it has not - and the weekday
+    // is what makes "yesterday evening" obvious without doing arithmetic on the day number.
+    var day = when.toLocaleDateString('de-DE', {
+      weekday: 'short', day: '2-digit', month: '2-digit'
+    });
     var kind = frame.kind === 'forecast'
       ? '<span class="future">Vorhersage</span>'
       : '<span class="kind">gemessen</span>';
-    return time + ' Uhr · ' + rel + ' · ' + kind;
+    return '<span class="day">' + day + '</span> ' + time + ' Uhr · '
+      + relative(frame.offset_minutes) + ' · ' + kind;
   }
 
   function show(index) {
