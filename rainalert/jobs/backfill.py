@@ -47,7 +47,7 @@ CYCLE_MINUTES = 5
 #: instances starting together do not walk the archive in lockstep, and so the pattern does not
 #: look like a machine gun with a metronome.
 JITTER_MIN_SECONDS = 1.0
-JITTER_MAX_SECONDS = 15.0
+JITTER_MAX_SECONDS = 7.0
 
 
 @dataclass

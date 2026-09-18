@@ -743,8 +743,10 @@ holding the previous image, which would fake continuity across a radar outage.
 **Backfill.** *Implemented 2026-09-18.* A fresh deployment has no history, so the timeline starts
 empty and fills at one frame per 5 minutes. `rainalert backfill --hours 12` fetches the cycles the
 timeline is missing **sequentially** — one request at a time, oldest first, with a **jittered
-1–15 s pause** between each (the spec said ≥ 2 s; the wider jittered band averages four times
-that, and two instances starting together do not walk the archive in step). All other §4.3 rules
+1–7 s pause** between each (the spec said ≥ 2 s; this averages twice that, and two instances
+starting together do not walk the archive in step). The band was 1–15 s on the first
+implementation, which made a 12 h fill take up to 36 minutes for no benefit DWD would notice -
+the point of the jitter is to be unlike a metronome, not to be slow for its own sake. All other §4.3 rules
 are honoured unchanged: same byte budget, same circuit breaker, same response-size cap. It prints
 the plan — how many cycles, how long, roughly how many MB — and asks before it starts, because
 nobody should learn the size of a burst by watching a log scroll.

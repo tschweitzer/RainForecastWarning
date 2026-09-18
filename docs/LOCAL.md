@@ -248,9 +248,9 @@ make backfill HOURS=3
 ```
 
 **This is the only command here that makes a burst of requests to DWD**, so it is the slowest one
-on purpose: strictly one at a time, oldest first, with a jittered 1-15 s pause between each, inside
+on purpose: strictly one at a time, oldest first, with a jittered 1-7 s pause between each, inside
 the same byte budget and behind the same circuit breaker as everything else. A 12 h fill is about
-145 requests and takes half an hour. It stops and says so if the budget runs out or the breaker
+145 requests and takes about ten minutes. It stops and says so if the budget runs out or the breaker
 opens, and a cycle DWD no longer keeps is counted and skipped rather than retried.
 
 Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would
