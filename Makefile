@@ -6,7 +6,9 @@ VENV := .venv
 PY   := $(VENV)/bin/python
 RUFF := $(VENV)/bin/ruff
 
-.PHONY: dev test lint fmt probe run-ingest serve migrate verify rerender pin-base image-push reset-local
+ALL_TARGETS := dev test lint fmt probe run-ingest serve migrate verify rerender pin-base \
+	image-push reset-local
+.PHONY: $(ALL_TARGETS)
 
 dev:
 	python3 -m venv $(VENV)
@@ -31,9 +33,16 @@ fmt:
 ARCHIVE_DIR ?= var/raw
 ARCHIVE ?= $(firstword $(shell ls -t $(ARCHIVE_DIR)/*.tar.bz2 2>/dev/null) \
 	tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2)
+# A path written after the target is a *make goal*, not an argument: make tries to build it,
+# says "Nothing to be done", and probe reads ARCHIVE instead - answering about a different
+# archive than the one named, without saying so.
+STRAY := $(filter-out $(ALL_TARGETS),$(MAKECMDGOALS))
 probe:
 	@test -n "$(LAT)" -a -n "$(LON)" || { \
 		echo "usage: make probe LAT=48.15 LON=11.56 [ARCHIVE=path]"; exit 2; }
+	@test -z "$(STRAY)" || { \
+		echo "make does not pass $(STRAY) to probe - name it with ARCHIVE=$(firstword $(STRAY))"; \
+		exit 2; }
 	@echo "probing $(ARCHIVE)"
 	@$(PY) -m rainalert.cli probe $(ARCHIVE) --lat $(LAT) --lon $(LON)
 

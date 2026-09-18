@@ -989,19 +989,26 @@ before writing code.*
 `decoder.py`, `grid.py`, `rainalert probe --lat 50.1 --lon 8.7` prints the lead values with valid
 times. Tests §16.1, §16.2, §16.4 plus the dropout regression (§16.1b) — 32 tests, lint clean.
 Grid verified against wradlib over all 1 320 000 cells.
-*Remaining for the acceptance criterion:* probe output still needs to be eyeballed against a public
-radar map during real rain. The fixtures prove internal consistency, not that the map is right.
+*Acceptance criterion met 2026-09-18.* Probe output was checked against DWD's own radar display
+during real rain at 48.1891 N 12.8532 E, cycle 11:05 UTC: 25 frames, 17 sites reporting, full
+coverage, raining at +0 (0.17 mm/5 min) and tapering to nothing by +50. The two independent things
+this confirms are the grid and the clock - the point resolved to row 273, col 769 and the values
+there match what DWD draws over that spot, and 11:05 UTC printed as 13:05 local. The fixtures had
+only ever proved internal consistency.
 
-**M2 — ingest pipeline.** 🟡 *code complete 2026-09-16, acceptance run outstanding*
+**M2 — ingest pipeline.** 🟡 *code complete 2026-09-16; first live run 2026-09-18, 24 h run outstanding*
 Politeness client, archiving, `radar_cycles`, idempotency, advisory lock, the §4.3.1 validation
 gates, retention. `make run-ingest` runs one cycle; 76 tests pass, including 14 politeness tests and
 an ingest suite against a real Postgres.
 *Done when:* 24 h of unattended running produces exactly 288 cycle rows, zero duplicate downloads,
 and the politeness tests pass.
-*Outstanding:* the 24 h run — and any run at all against the real `opendata.dwd.de`, which the
-development environment cannot reach. The pipeline has only been exercised end to end against a
-local server replaying a real archive. **The first live run is therefore itself a test**: watch the
-first few cycles rather than scheduling it and walking away.
+*First live run: 2026-09-18.* `make run-ingest` against the real `opendata.dwd.de` returned 200
+and stored a 25-frame cycle in one attempt - the decoder, the politeness rules and the nominal-time
+arithmetic all met the live product for the first time and held. Two bugs surfaced that no test
+had: `LocalArchiveStore` could not take the relative `ARCHIVE_DIR` the documentation prescribes
+(every fixture used an absolute `tmp_path`), and `make probe` was hardwired to a test fixture.
+*Outstanding:* the 24 h run - 288 cycle rows, zero duplicate downloads. **Watch the first few
+cycles rather than scheduling it and walking away.**
 `docs/LOCAL.md` closes this without deploying — a laptop can reach DWD, and an afternoon of
 `make run-ingest` on a five-minute loop exercises the same path the Cloud Run job will, including
 the first real 25-frame archive the decoder has ever seen.
