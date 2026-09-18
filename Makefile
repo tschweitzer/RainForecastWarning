@@ -51,8 +51,16 @@ probe:
 run-ingest:
 	$(PY) -m rainalert.cli ingest --prune
 
+# Binds loopback. On a remote box, prefer an SSH tunnel over HOST=0.0.0.0: this dev server has
+# no TLS, a placeholder SECRET_KEY, and an open subscription form.
+#   gcloud compute ssh <vm> -- -L 8000:localhost:8000     then browse http://localhost:8000
+# If you do bind publicly, set PUBLIC_BASE_URL to the address you actually browse, or every
+# confirmation link the app writes will point at localhost.
+HOST ?= 127.0.0.1
+PORT ?= 8000
 serve:
-	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload --port 8000
+	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload \
+		--host $(HOST) --port $(PORT)
 
 migrate:
 	$(PY) -m alembic upgrade head

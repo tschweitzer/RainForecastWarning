@@ -162,6 +162,22 @@ less.
 make serve          # http://localhost:8000
 ```
 
+### On a machine that is not the one with the browser
+
+`make serve` binds loopback, so a remote VM will refuse the connection from outside. Reach it
+through an SSH tunnel rather than opening the port:
+
+```sh
+gcloud compute ssh <vm> -- -L 8000:localhost:8000    # then browse http://localhost:8000
+ssh -L 8000:localhost:8000 user@host                 # any other box
+```
+
+`make serve HOST=0.0.0.0` does bind publicly, but think before using it: this server has no TLS,
+its `SECRET_KEY` is the placeholder from §2, and the subscription form is open to whoever finds
+the address. Set `PUBLIC_BASE_URL` to the address you actually browse if you do - every
+confirmation and unsubscribe link is built from it, and they will otherwise point at a localhost
+that is not yours.
+
 Subscribe with any address at your own coordinates. The confirmation mail lands in `var/outbox/` as
 a `.eml` — open it (double-clicking opens it in Mail.app) and click the link, or:
 
