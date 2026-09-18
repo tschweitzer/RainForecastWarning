@@ -12,12 +12,15 @@ Vorhersage bis zwei Stunden voraus.</p>
   <div class="row">
     <div>
       <label for="lat">Breite</label>
-      <input type="number" id="lat" name="lat" step="0.0001" min="47" max="56" required
+      {# step="any": a coordinate pasted from a mapping site has six or seven decimals, and
+         step="0.0001" made the browser reject it as invalid. Precision is reduced on the server,
+         where it is also enforced - it is not the visitor's job to round. #}
+      <input type="number" id="lat" name="lat" step="any" min="47" max="56" required
              placeholder="50.1109">
     </div>
     <div>
       <label for="lon">Länge</label>
-      <input type="number" id="lon" name="lon" step="0.0001" min="5" max="16" required
+      <input type="number" id="lon" name="lon" step="any" min="5" max="16" required
              placeholder="8.6821">
     </div>
   </div>

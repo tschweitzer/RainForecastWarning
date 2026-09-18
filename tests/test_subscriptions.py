@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from rainalert import subscriptions as svc
 from rainalert.api.app import create_app
@@ -300,3 +301,41 @@ def test_tokens_are_never_stored_in_plaintext(db, settings, notifier):
         hashes = {bytes(t.token_hash) for t in session.query(AuthToken).all()}
         assert confirmed.api_token.encode() not in b"".join(hashes)
         assert all(t.purpose in set(TokenPurpose) for t in session.query(AuthToken).all())
+
+
+def test_a_pasted_coordinate_is_accepted_and_reduced(client, db):
+    """Seven decimals from a mapping site must not be refused - or stored.
+
+    The form used to carry step="0.0001", so the browser rejected the value before it was ever
+    sent. That put the rounding in the one place it could not be enforced, and made a legitimate
+    paste look like a typo.
+    """
+    r = client.post(
+        "/api/v1/subscriptions",
+        json={"email": "paste@example.com", "lat": 48.153330, "lon": 11.557428},
+    )
+    assert r.status_code in (200, 201, 202), r.text
+
+    with db() as session:
+        sub = session.execute(select(Subscription)).scalars().one()
+        assert (sub.lat, sub.lon) == (48.1533, 11.5574)
+
+
+def test_precision_beyond_the_policy_is_never_stored(client, db):
+    """The minimisation has to hold for a caller who skips the form entirely."""
+    client.post(
+        "/api/v1/subscriptions",
+        json={"email": "precise@example.com", "lat": 48.15333012345, "lon": 11.55742898765},
+    )
+    with db() as session:
+        sub = session.execute(select(Subscription)).scalars().one()
+        # Storing 1 cm of someone's location for a service that samples a 1 km grid is
+        # collecting what cannot be used.
+        assert len(str(sub.lat).split(".")[1]) <= 4
+        assert len(str(sub.lon).split(".")[1]) <= 4
+
+
+def test_the_form_does_not_constrain_decimals(client):
+    body = client.get("/").text
+    assert 'step="any"' in body
+    assert 'name="lat" step="0.0001"' not in body

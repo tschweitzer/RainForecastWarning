@@ -401,7 +401,7 @@ CREATE TABLE subscriptions (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   subscriber_id          uuid NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
   status                 subscription_status NOT NULL DEFAULT 'pending',
-  lat                    double precision NOT NULL,
+  lat                    double precision NOT NULL,   -- rounded to 4 dp at the API edge
   lon                    double precision NOT NULL,
   location_updated_at    timestamptz NOT NULL DEFAULT now(),
   grid_row               integer,             -- cached projection of (lat,lon)
@@ -797,6 +797,12 @@ a private project this is personal data under GDPR.
 - **Legal basis:** consent (Art. 6(1)(a)), obtained via double opt-in; the confirmation timestamp and
   source IP hash are the consent record.
 - **Data minimisation:** store only email, coordinates, rule settings, and the alerts actually sent.
+  **Coordinates are rounded to four decimals (~11 m) at the API edge**, in the request models, so
+  no route can store more by accident. The service samples a radius mask on a 1 km radar grid, so
+  even 100 m cannot change an answer - the seven decimals a phone reports, or the six a mapping
+  site copies, are precise personal location data that nothing here reads. This was a browser-side
+  `step="0.0001"` until 2026-09-18, which enforced nothing against a caller who skipped the form
+  and rejected legitimate pastes as invalid.
   No location history (the location is overwritten in place — D-16), no IP logs beyond a hashed value
   for rate limiting, retained 7 days. The per-cycle `evaluations` log is purged after 48 h (D-23): an
   indefinite 5-minute-resolution series per subscriber would be a presence log, which is more personal

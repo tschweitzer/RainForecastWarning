@@ -24,7 +24,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -70,6 +70,19 @@ def tile_origin(tile_url: str) -> str:
     return f"{parsed.scheme}://{host}"
 
 
+#: Decimal places kept for a stored coordinate. Four is about 11 m, which is already far finer
+#: than anything the service can act on: it samples a radius mask on a 1 km radar grid, so even
+#: 100 m cannot change an answer. A phone reports seven decimals and a paste from a mapping site
+#: often carries six; keeping them would be storing precise personal location data that no part of
+#: this system reads. Rounding happens here, at the edge, so no route can store more by accident
+#: (GDPR data minimisation, DESIGN.md 13).
+COORD_DECIMALS = 4
+
+
+def _round_coord(value: float) -> float:
+    return round(value, COORD_DECIMALS)
+
+
 class SubscribeRequest(BaseModel):
     # allow_inf_nan=False: json.loads accepts the bare token NaN, and a NaN latitude that reaches
     # the database is re-evaluated every cycle forever (SECURITY_REVIEW.md F-3).
@@ -82,12 +95,16 @@ class SubscribeRequest(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 
+    _round = field_validator("lat", "lon")(_round_coord)
+
 
 class LocationRequest(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
 
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
+
+    _round = field_validator("lat", "lon")(_round_coord)
 
 
 def create_app(
