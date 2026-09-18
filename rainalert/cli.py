@@ -226,6 +226,45 @@ def rerender(args: argparse.Namespace) -> int:
     return 0
 
 
+def outbox(args: argparse.Namespace) -> int:
+    """Print the links from the newest file-notifier mails, decoded.
+
+    A .eml is quoted-printable, so the confirmation link in the raw file reads
+    ``token=3DHFbOJa...c=`` and continues on the next line - copying what `cat` shows produces a
+    token that is wrong twice over. On a desktop a mail client hides that; on a headless box
+    nothing does, and the failure looks like the token is invalid rather than mistranscribed.
+    """
+    import email
+    import email.policy
+    import re
+
+    from rainalert.config import get_settings
+
+    settings = get_settings()
+    if not settings.mail_outbox_dir:
+        print("MAIL_OUTBOX_DIR is not set (NOTIFIER=file writes there)", file=sys.stderr)
+        return 2
+
+    directory = Path(settings.mail_outbox_dir)
+    if not directory.is_dir():
+        print(f"no outbox at {directory}", file=sys.stderr)
+        return 2
+
+    mails = sorted(directory.glob("*.eml"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not mails:
+        print(f"no mail in {directory}")
+        return 0
+
+    for path in mails[: args.count]:
+        message = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
+        body = message.get_content()
+        print(f"{message['To']}   {message['Subject']}")
+        for url in re.findall(r"https?://\S+", body):
+            print(f"  {url}")
+        print()
+    return 0
+
+
 def reset_local(args: argparse.Namespace) -> int:
     """Put local state back to empty so a test can start from nothing."""
     import logging
@@ -300,6 +339,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     r.set_defaults(func=reset_local)
+
+    o = sub.add_parser(
+        "outbox", help="print the links from the newest local mails, decoded and ready to open"
+    )
+    o.add_argument("-n", "--count", type=int, default=1, help="how many mails (newest first)")
+    o.set_defaults(func=outbox)
 
     b = sub.add_parser(
         "rerender", help="rebuild map overlays from archives already held (no DWD traffic)"

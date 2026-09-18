@@ -7,7 +7,7 @@ PY   := $(VENV)/bin/python
 RUFF := $(VENV)/bin/ruff
 
 ALL_TARGETS := dev test lint fmt probe run-ingest serve migrate verify rerender pin-base \
-	image-push reset-local
+	image-push reset-local outbox
 .PHONY: $(ALL_TARGETS)
 
 dev:
@@ -61,6 +61,11 @@ PORT ?= 8000
 serve:
 	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload \
 		--host $(HOST) --port $(PORT)
+
+# Prints the links from the newest local mails, decoded. `cat`ing the .eml does not work:
+# it is quoted-printable, so the token reads `=3D...` and wraps mid-string.
+outbox:
+	@$(PY) -m rainalert.cli outbox $(if $(N),-n $(N),)
 
 migrate:
 	$(PY) -m alembic upgrade head

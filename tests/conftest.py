@@ -5,6 +5,21 @@ import pytest
 from tests.helpers import FIXTURES
 
 
+@pytest.fixture(autouse=True)
+def _fresh_settings():
+    """`get_settings` is lru_cached - one Settings per process, which is right in production.
+
+    In a test run it means the first test to call it fixes the configuration for every test
+    after, so a later test reads another test's environment and passes or fails for reasons that
+    have nothing to do with it. Clear it around each test.
+    """
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session")
 def wet_cycle() -> Path:
     """2026-09-16 13:55 UTC - a rainy cycle, frames _000/_060/_120."""

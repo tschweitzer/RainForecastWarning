@@ -185,12 +185,24 @@ the address. Set `PUBLIC_BASE_URL` to the address you actually browse if you do 
 confirmation and unsubscribe link is built from it, and they will otherwise point at a localhost
 that is not yours.
 
-Subscribe with any address at your own coordinates. The confirmation mail lands in `var/outbox/` as
-a `.eml` — open it (double-clicking opens it in Mail.app) and click the link, or:
+Subscribe with any address at your own coordinates. The confirmation mail lands in `var/outbox/`
+as a `.eml`. **Do not read the link out of the raw file** - a `.eml` is quoted-printable, so the
+token appears as `token=3D...` and wraps across a line break. Copying what `cat` shows gives a
+token that is wrong twice, and the page then says the token is invalid, which is true but
+misleading. Let the CLI decode it:
 
 ```sh
-open var/outbox/*.eml
+make outbox              # newest mail, links decoded and ready to open
+make outbox N=5          # the last five
 ```
+
+On a desktop a mail client decodes it for you, so `open var/outbox/*.eml` works there too.
+
+**The subscription is not active until that link is opened.** A fresh signup is `pending`; the
+dispatcher only evaluates `active` and `unhealthy` rows, so an unconfirmed one is never warned
+about - and `unconfirmed_purge_hours` (24 h by default) deletes it. If the server is on another
+machine, the link points at whatever `PUBLIC_BASE_URL` says, so set that to the address you
+actually browse or the link will send you to your own laptop.
 
 Then run `make run-ingest` twice more. If rain is approaching your location you will get a warning
 `.eml`. If it is dry, temporarily lower the bar to see the machinery work:
