@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     mail_from: str = "RainAlert <rainalert@localhost>"
     mail_reply_to: str | None = None
 
+    # --- Basemap (Q-10: the tile provider is not chosen yet) ----------------------------------
+    #: Leaflet tile template, e.g. "https://tiles.example.com/{z}/{x}/{y}.png?key=...".
+    #: Empty by default, and deliberately so: the obvious choice, tile.openstreetmap.org, is a
+    #: volunteer-run service whose usage policy excludes applications, and it blocks them. Using
+    #: it would be taking something that was not offered. With no provider set the map draws the
+    #: radar over a plain background with a graticule and a few cities for orientation, which is
+    #: enough to read a rain field and costs nobody anything.
+    map_tile_url: str = ""
+    #: Required by every provider worth using, and by their licence. Shown in the map's corner.
+    map_tile_attribution: str = ""
+
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
     #: console | file | smtp | push. SMTP reaches every provider worth using, so choosing one is
     #: a matter of credentials rather than code.

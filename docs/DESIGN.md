@@ -76,7 +76,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-16 | One subscriber (identified by email) → **one subscription** → **one location**, updatable | See D-17 for the consequence |
 | D-17 | A location change of more than 1 km resets the alert state to `UNKNOWN` | Otherwise moving into existing rain produces a bogus "rain starting" mail |
 | D-18 | Audience: private (me + friends); designed so going public later is a config/paperwork change, not a rewrite | Still: double opt-in, one-click unsubscribe, deletion endpoint |
-| D-19 | Frontend: server-rendered HTML, no build step; Leaflet + OSM for the map | Non-technical friends must be able to subscribe |
+| D-19 | Frontend: server-rendered HTML, no build step; Leaflet for the map, basemap tiles from a configured provider or none (§11.1) | Non-technical friends must be able to subscribe |
 | D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
 | D-22 | The slider spans **−12 h … +2 h**. Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast |
@@ -683,7 +683,7 @@ scale, replaceable later.
 
 Server-rendered Jinja2, no build step, no SPA. Pages:
 
-- **`/` — subscribe.** Leaflet map (OSM tiles), "use my location" button (browser geolocation),
+- **`/` — subscribe.** Leaflet map (basemap only if `MAP_TILE_URL` is set), "use my location" button (browser geolocation),
   draggable marker, email field, consent checkbox with a one-line purpose statement, submit.
   **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
@@ -748,9 +748,19 @@ touching DWD at all — prefer it whenever the archive still has the cycle.
 *How far back the `rv/` directory actually keeps files is an **M0 VERIFY** item*; if DWD only retains
 a few hours, backfill can fill only that much and the rest accrues over time.
 
-**OSM tile policy:** the OpenStreetMap public tile servers are a donated resource with a usage policy
-that forbids heavy use. Fine for a private map picker with correct `User-Agent`/referrer; before any
-public launch, switch to a proper tile provider (see **Q-5**).
+**Basemap tiles: resolved 2026-09-18, and not the way this section assumed.** The text below used
+to read "fine for a private map picker"; it was wrong. OpenStreetMap's tile servers are volunteer
+funded and their usage policy excludes applications outright, not merely heavy ones - and they
+enforce it. A single developer instance was blocked, which is how this was found.
+
+So there is no default provider. `MAP_TILE_URL` is empty unless configured, and with nothing set
+the map draws the radar over a graticule with a dozen cities marked, which is enough to read a
+rain field. Borrowing a donated service by default would have been taking something that was not
+offered, and would have shifted the moment of failure from a developer's screen to a user's.
+
+`Content-Security-Policy: img-src` is derived from whatever `MAP_TILE_URL` is set to, so the
+policy can never be broader than the provider in use, and names no origin at all by default.
+Choosing a provider (**Q-5**) is now a deployment decision with no code in it.
 
 ---
 
@@ -1124,7 +1134,7 @@ owns them:
 | F-14–F-16 `/forecast` amplification, rule-parameter abuse, web hardening | M3/M5 | CSP `frame-ancestors`, `Referrer-Policy`, CSRF, mail header injection, session model |
 | F-17 location updates silently suppress alerting for a moving user | M7 | D-17 resets state on a >1 km move; an app updating location often could keep a user permanently in `UNKNOWN` |
 | F-18 supply chain and deploy path | M6 | Pin dependencies, pin base image by digest |
-| **Leaflet and OSM tiles are third-party** | M6 | The map page loads Leaflet from unpkg and tiles from OpenStreetMap, so every visitor's browser reveals its IP to both. For a service whose privacy story is data minimisation that is inconsistent: **vendor Leaflet into `static/` and choose a tile provider before any public use**, then drop `MAP_SCRIPT_SRC`/`MAP_IMG_SRC` back to `'self'`. This environment cannot reach unpkg, so it could not be vendored here |
+| **Leaflet is loaded from a CDN** | M6 | *Half resolved 2026-09-18.* The tile half is gone: there is no default basemap, so no tile server sees anyone's IP unless an operator configures one, and `img-src` follows that choice. Leaflet itself still comes from unpkg, so every visitor's browser still reveals its IP there. **Vendor Leaflet into `static/` before any public use** and drop `MAP_SCRIPT_SRC` back to `'self'`. Neither this environment nor the dev VM could reach unpkg to vendor it |
 
 ## 19. Open questions
 

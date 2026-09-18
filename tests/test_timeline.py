@@ -295,3 +295,43 @@ def test_metrics_report_no_cycles_distinctly(db, settings):
     with db() as session:
         text = render(session, settings, now=T0)
     assert "rainalert_cycle_age_seconds -1" in text
+
+
+def test_the_map_borrows_no_tiles_by_default(client):
+    """tile.openstreetmap.org is volunteer-run and its policy excludes applications.
+
+    It blocks them, too - which is how this was found. Shipping a default that leans on it is
+    taking something that was not offered, so there is no default provider at all.
+    """
+    body = client.get("/map").text
+    assert "openstreetmap.org" not in body
+    assert "L.tileLayer" in body  # still there, for whoever configures one
+    # and the map is still readable: orientation without a basemap
+    assert "graticule()" in body
+    assert "Muenchen" in body
+
+
+def test_csp_allows_only_the_configured_tile_origin(client):
+    """The policy follows the provider in use, so it can never be wider than the provider."""
+    policy = client.get("/map").headers["Content-Security-Policy"]
+    img = next(d for d in policy.split(";") if d.strip().startswith("img-src"))
+    assert "openstreetmap" not in img
+    assert "https:" not in img.replace("https://", "")  # no blanket https: source
+
+
+def test_tile_origin_never_widens_past_the_provider():
+    from rainalert.api.app import tile_origin
+
+    assert tile_origin("") == ""
+    assert (
+        tile_origin("https://tiles.example.com/{z}/{x}/{y}.png?key=k")
+        == "https://tiles.example.com"
+    )
+    assert (
+        tile_origin("https://{s}.tiles.example.com/{z}/{x}/{y}.png")
+        == "https://*.tiles.example.com"
+    )
+    # Nothing that is not an http(s) origin may reach the policy.
+    assert tile_origin("javascript:alert(1)") == ""
+    assert tile_origin("data:image/png;base64,AAAA") == ""
+    assert tile_origin("not a url") == ""

@@ -17,6 +17,7 @@ import logging
 import secrets
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -48,8 +49,25 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 #: privacy story is data minimisation. **Vendor Leaflet into static/ before deploying** (M6) and
 #: drop these two origins back to 'self'.
 MAP_SCRIPT_SRC = "https://unpkg.com"
-#: OpenStreetMap tiles. Same note applies: a tile provider sees every pan and zoom.
-MAP_IMG_SRC = "https://tile.openstreetmap.org https://*.tile.openstreetmap.org"
+
+
+def tile_origin(tile_url: str) -> str:
+    """The one origin img-src should allow for basemap tiles, or nothing.
+
+    Derived from the configured template rather than hard-coded, so the policy can never be
+    broader than the provider actually in use - and is empty when there is no provider, which is
+    the default. A tile server sees every pan and zoom, so this is worth keeping narrow.
+    """
+    if not tile_url:
+        return ""
+    parsed = urlparse(tile_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    host = parsed.netloc
+    # {s}.tiles.example.com is Leaflet's subdomain placeholder; allow the siblings, not the web.
+    if host.startswith("{s}."):
+        return f"{parsed.scheme}://*.{host[4:]}"
+    return f"{parsed.scheme}://{host}"
 
 
 class SubscribeRequest(BaseModel):
@@ -153,7 +171,7 @@ def create_app(
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}' {MAP_SCRIPT_SRC}; "
             f"style-src 'self' 'unsafe-inline' {MAP_SCRIPT_SRC}; "
-            f"img-src 'self' data: {MAP_IMG_SRC}; "
+            f"img-src 'self' data: {tile_origin(settings.map_tile_url)}; "
             "connect-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )

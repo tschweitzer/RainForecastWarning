@@ -28,14 +28,53 @@
             font-size:.78rem; color:var(--muted); }
   .legend span { display:inline-flex; align-items:center; gap:.3rem; }
   .legend i { width:.9rem; height:.9rem; border-radius:3px; display:inline-block; }
+  /* Place labels for the no-basemap case: readable, but never louder than the radar. */
+  .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
+           color:#456; font-size:.68rem; font-weight:600; }
+  .place::before { display:none; }
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   var map = L.map('map', { zoomControl: true }).setView([51.2, 10.4], 6);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 12, attribution: '&copy; OpenStreetMap'
-  }).addTo(map);
+
+  var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
+  if (TILE_URL) {
+    L.tileLayer(TILE_URL, {
+      maxZoom: 12, attribution: {{ (settings.map_tile_attribution or '')|tojson }}
+    }).addTo(map);
+  } else {
+    // No provider configured. Rather than borrow someone's tiles, give the radar enough
+    // reference to be readable on its own: a degree graticule and a handful of cities.
+    graticule();
+    cities();
+  }
+
+  function graticule() {
+    var style = { color: '#8aa', weight: 0.5, opacity: 0.5, interactive: false };
+    for (var lat = 46; lat <= 56; lat++) {
+      L.polyline([[lat, 3], [lat, 18]], style).addTo(map);
+    }
+    for (var lon = 4; lon <= 18; lon++) {
+      L.polyline([[46, lon], [56, lon]], style).addTo(map);
+    }
+  }
+
+  function cities() {
+    // Enough spread to locate yourself anywhere in the DE1200 grid.
+    var places = [
+      ['Hamburg', 53.551, 9.994], ['Berlin', 52.520, 13.405], ['Hannover', 52.376, 9.732],
+      ['Dortmund', 51.514, 7.466], ['Leipzig', 51.340, 12.375], ['Koeln', 50.938, 6.960],
+      ['Dresden', 51.051, 13.739], ['Frankfurt', 50.110, 8.682], ['Nuernberg', 49.452, 11.077],
+      ['Stuttgart', 48.776, 9.183], ['Muenchen', 48.135, 11.582], ['Bremen', 53.079, 8.802],
+      ['Rostock', 54.093, 12.131], ['Freiburg', 47.999, 7.842]
+    ];
+    places.forEach(function (p) {
+      L.circleMarker([p[1], p[2]], {
+        radius: 2.5, color: '#456', weight: 1, fillOpacity: 1, interactive: false
+      }).addTo(map).bindTooltip(p[0], { permanent: true, direction: 'right', className: 'place' });
+    });
+  }
 
   var layer = null, frames = [], gaps = [], bounds = null, timer = null;
   var cache = new Map();            // url -> Image, LRU-evicted

@@ -94,6 +94,13 @@ OVERLAY_DIR=./var/overlays
 NOTIFIER=file
 MAIL_OUTBOX_DIR=./var/outbox
 PUBLIC_BASE_URL=http://localhost:8000
+
+# No basemap by default. OpenStreetMap's tile servers are volunteer-run and their usage policy
+# excludes applications - they will block you, and they are right to. The map draws the radar
+# over a graticule with cities marked, which is enough to read a rain field. To use a provider
+# you have signed up with:
+# MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
+# MAP_TILE_ATTRIBUTION=&copy; Example Maps
 SECRET_KEY=local-development-only
 
 # Identify yourself honestly to DWD. This is a real request to a public service, and the
