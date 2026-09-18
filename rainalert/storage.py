@@ -24,8 +24,15 @@ def _name(nominal_time: datetime) -> str:
 
 
 class LocalArchiveStore:
+    """Development store, on the filesystem.
+
+    The root is resolved to an absolute path on the way in. ``ARCHIVE_DIR`` is normally written
+    relative (``./var/raw``), ``Path.as_uri`` refuses a relative path, and a process that changes
+    directory would otherwise start writing somewhere else entirely.
+    """
+
     def __init__(self, root: str | Path) -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def put(self, nominal_time: datetime, blob: bytes) -> str:
@@ -72,7 +79,7 @@ class LocalOverlayStore:
     """
 
     def __init__(self, root: str | Path, base_url: str = "/overlays") -> None:
-        self.root = Path(root)
+        self.root = Path(root).resolve()  # as above: relative roots move with the process
         self.base_url = base_url.rstrip("/")
         (self.root / "obs").mkdir(parents=True, exist_ok=True)
         (self.root / "fc").mkdir(parents=True, exist_ok=True)
