@@ -101,6 +101,16 @@ PUBLIC_BASE_URL=http://localhost:8000
 # you have signed up with:
 # MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
 # MAP_TILE_ATTRIBUTION=&copy; Example Maps
+#
+# On OpenStreetMap's own servers during development: their policy asks that the application be
+# identifiable, attributed, and light. The first is handled - the tile layer overrides this
+# site's `Referrer-Policy: no-referrer` so tiles carry the origin - and the second is the
+# attribution line below, which is required and must stay. The third is on you: one browser
+# looking at a map is light, an unattended reload loop is not, and maxZoom stays at 12 because
+# 1 km radar has nothing to show below it. For anything public, use a provider you pay or have
+# signed up with; the policy excludes applications, and a deployed service is one.
+# MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
+# MAP_TILE_ATTRIBUTION=&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
 SECRET_KEY=local-development-only
 
 # Identify yourself honestly to DWD. This is a real request to a public service, and the

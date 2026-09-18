@@ -335,3 +335,28 @@ def test_tile_origin_never_widens_past_the_provider():
     assert tile_origin("javascript:alert(1)") == ""
     assert tile_origin("data:image/png;base64,AAAA") == ""
     assert tile_origin("not a url") == ""
+
+
+def test_tiles_identify_the_page_to_the_provider(client, monkeypatch):
+    """The page sends Referrer-Policy: no-referrer, which also strips it from tile requests.
+
+    Tile services read that header to tell an application from an anonymous scraper, so without
+    an element-level override every tile arrives unidentified - which is what a provider blocks.
+    """
+    from rainalert.config import Settings, get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("MAP_TILE_URL", "https://tiles.example.com/{z}/{x}/{y}.png")
+    monkeypatch.setenv("DATABASE_URL", Settings().database_url)
+
+    body = client.get("/map").text
+    assert "referrerPolicy: 'strict-origin-when-cross-origin'" in body
+    # The origin alone, never a path or query: no token can ride out on a tile request.
+    assert "'unsafe-url'" not in body
+    assert "'origin-when-cross-origin'" not in body
+
+
+def test_the_page_still_sends_no_referrer_by_default(client):
+    """The override is per element. Everything else on the site keeps the strict header."""
+    assert client.get("/").headers["Referrer-Policy"] == "no-referrer"
+    assert client.get("/map").headers["Referrer-Policy"] == "no-referrer"

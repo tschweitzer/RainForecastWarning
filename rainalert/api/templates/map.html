@@ -41,7 +41,16 @@
   var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
   if (TILE_URL) {
     L.tileLayer(TILE_URL, {
-      maxZoom: 12, attribution: {{ (settings.map_tile_attribution or '')|tojson }}
+      maxZoom: 12,
+      attribution: {{ (settings.map_tile_attribution or '')|tojson }},
+      // This page sends `Referrer-Policy: no-referrer`, which strips the Referer from tile
+      // requests too - so every tile arrives at the provider unidentified. Tile services read
+      // that header: OpenStreetMap's policy requires a Referer or a User-Agent naming the
+      // application, and a browser's User-Agent names only the browser; key-restricted
+      // providers match their allow-list against it. The element attribute overrides the
+      // document policy for these requests only, and strict-origin-when-cross-origin sends the
+      // origin alone - never a path or a query, so no token can ride along.
+      referrerPolicy: 'strict-origin-when-cross-origin'
     }).addTo(map);
   } else {
     // No provider configured. Rather than borrow someone's tiles, give the radar enough
