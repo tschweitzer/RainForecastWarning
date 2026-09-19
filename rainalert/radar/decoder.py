@@ -11,6 +11,7 @@ filename, so a file fetched as ``..._LATEST.tar.bz2`` is self-describing.
 
 from __future__ import annotations
 
+import bz2
 import io
 import logging
 import re
@@ -34,6 +35,9 @@ NODATA = 0x29C4
 MAX_MEMBERS = 32
 MAX_MEMBER_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
+#: Feed size for the bounded decompressor. Big enough not to matter, small enough that the
+#: limit is checked often.
+_DECOMPRESS_CHUNK = 256 * 1024
 
 # Accepted header ranges. Reading dimensions and precision from the header rather than hard-coding
 # them is right, but unvalidated it means trusting a remote party with the allocation size and the
@@ -230,15 +234,20 @@ def read_frames(archive: Path | str | bytes, *, analysis_only: bool = False) -> 
     decompression in the first place.
     """
     frames: list[RVFrame] = []
-    source: dict = (
-        {"fileobj": io.BytesIO(archive)} if isinstance(archive, bytes) else {"name": archive}
-    )
+    compressed = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+    # Decompressed once, up front, rather than letting tarfile read through the bz2 stream.
+    # tarfile scans the archive for headers and then seeks back to each member's data, and a
+    # seek backwards in a bz2 stream is a re-decompression from the beginning - so the
+    # expensive part was being paid for roughly twice. Measured: 162 ms of CPU through the
+    # stream against 85 ms this way, on a three-frame fixture.
+    plain = _decompress_bounded(compressed)
+    source: dict = {"fileobj": io.BytesIO(plain)}
     # Anything that is not a readable bz2 tar - truncation, corruption, a plain HTML error page
     # served where an archive was expected - surfaces as RVFormatError like every other bad input.
     # tarfile.ReadError is not an OSError, so callers catching the documented type would otherwise
     # still die on it.
     try:
-        with tarfile.open(mode="r:*", **source) as tar:
+        with tarfile.open(mode="r:", **source) as tar:
             members = [m for m in tar.getmembers() if m.isfile()]
             _check_limits(members)
             for member in members:
@@ -268,6 +277,75 @@ def read_frames(archive: Path | str | bytes, *, analysis_only: bool = False) -> 
         raise RVArchiveRejected(f"archive ends mid-stream: {exc}") from exc
     frames.sort(key=lambda f: (f.nominal_time, f.lead_minutes))
     return frames
+
+
+def _declared_size(header: bytes) -> int | None:
+    """The size field of a ustar header, or None if it does not look like one.
+
+    Twelve octal bytes at offset 124. Reading it by hand rather than through tarfile because the
+    point is to have the number *before* anything has been unpacked.
+    """
+    if len(header) < 512:
+        return None
+    field = header[124:136].split(b"\0")[0].strip()
+    try:
+        return int(field, 8) if field else 0
+    except ValueError:
+        return None
+
+
+def _decompress_bounded(data: bytes) -> bytes:
+    """Unpack the bz2 in one pass, refusing to go past the limits.
+
+    Not ``bz2.decompress``: that materialises whatever the archive claims before any limit can
+    look at it, which is the decompression bomb this decoder was hardened against
+    (SECURITY_REVIEW.md F-1 - 483 bytes expanding to 512 MiB).
+
+    Two bounds, because one is not enough. The running total stops an archive that simply keeps
+    expanding. And the first tar header is inspected as soon as its 512 bytes exist, so the
+    classic single-huge-member bomb is refused after half a kilobyte rather than after the
+    running total has already allocated 128 MiB - which is what "rejected without being read"
+    in the test name means, and what the previous header-first implementation gave for free.
+    """
+    decompressor = bz2.BZ2Decompressor()
+    out = bytearray()
+    checked_first_header = False
+    position = 0
+    try:
+        while True:
+            if decompressor.needs_input:
+                if position >= len(data):
+                    break  # input exhausted before the stream ended; tarfile reports the truncation
+                chunk = data[position : position + _DECOMPRESS_CHUNK]
+                position += _DECOMPRESS_CHUNK
+            else:
+                chunk = b""
+            # Bounded output per call as well as in total: asking for the whole remaining budget
+            # allocates it, and then `out +=` allocates it again.
+            out += decompressor.decompress(chunk, _DECOMPRESS_CHUNK)
+
+            if not checked_first_header and len(out) >= 512:
+                checked_first_header = True
+                declared = _declared_size(bytes(out[:512]))
+                if declared is not None and declared > MAX_MEMBER_BYTES:
+                    raise RVArchiveRejected(
+                        f"first member declares {declared} bytes, limit is {MAX_MEMBER_BYTES}"
+                    )
+            if len(out) > MAX_TOTAL_BYTES:
+                raise RVArchiveRejected(
+                    f"archive expands past the total limit of {MAX_TOTAL_BYTES} bytes"
+                )
+            if decompressor.eof:
+                break
+    except RVArchiveRejected:
+        # Our own refusal, already worded for the reader. RVArchiveRejected is a ValueError, so
+        # without this it would be caught below and re-wrapped as "not a readable archive",
+        # which is both wrong and less useful - the archive is perfectly readable, it is just
+        # too big to be worth reading.
+        raise
+    except (OSError, EOFError, ValueError) as exc:
+        raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
+    return bytes(out)
 
 
 def _check_limits(members: list[tarfile.TarInfo]) -> None:

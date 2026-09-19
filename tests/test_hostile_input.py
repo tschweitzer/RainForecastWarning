@@ -15,6 +15,7 @@ import pytest
 from rainalert.radar.decoder import (
     MAX_MEMBER_BYTES,
     MAX_MEMBERS,
+    MAX_TOTAL_BYTES,
     RVArchiveRejected,
     RVFormatError,
     decode_frame,
@@ -49,13 +50,39 @@ def _archive(members: list[tuple[str, int]], payload: bytes = b"\x00") -> bytes:
 
 
 def test_decompression_bomb_is_rejected_without_being_read(tmp_path):
-    """483 bytes on the wire, 512 MiB declared. Must be refused, not decoded."""
+    """483 bytes on the wire, 512 MiB declared. Must be refused, not decoded.
+
+    The refusal now happens during decompression rather than after reading the tar headers:
+    the decoder unpacks the bz2 itself, in bounded chunks, and stops at MAX_TOTAL_BYTES. That
+    is strictly earlier than the old check on declared member sizes, so the bomb never reaches
+    a buffer at all - but it is also why this asserts on the limit rather than on the wording
+    of the member-size message.
+    """
     bomb = tmp_path / "bomb.tar.bz2"
     bomb.write_bytes(_archive([("DE1200_RV2609161355_000", 512 * 1024 * 1024)]))
     assert bomb.stat().st_size < 4096  # tiny on the wire, by construction
 
-    with pytest.raises(RVArchiveRejected, match="limit is"):
+    with pytest.raises(RVArchiveRejected, match="limit"):
         read_frames(bomb)
+
+
+def test_the_bomb_never_allocates_more_than_the_limit(tmp_path):
+    """The point of the bound is the memory, not the message."""
+    import tracemalloc
+
+    bomb = tmp_path / "bomb.tar.bz2"
+    bomb.write_bytes(_archive([("DE1200_RV2609161355_000", 512 * 1024 * 1024)]))
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(RVArchiveRejected):
+            read_frames(bomb)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # 512 MiB was declared. Anything near that means the bound did not hold.
+    assert peak < 2 * MAX_TOTAL_BYTES, f"peaked at {peak / 1e6:.0f} MB"
 
 
 def test_too_many_members_is_rejected(tmp_path):

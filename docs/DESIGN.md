@@ -234,6 +234,20 @@ as "no rain".
    `VV`, format version `VS`, and the secondary-data / flag definitions).
 2. Read the payload as `numpy.uint16` little-endian, reshape to `(rows, cols)` taken **from the
    header**, not from constants.
+**Decompress once (2026-09-19).** `read_frames` unpacks the bz2 itself, in bounded chunks, and
+hands the plain tar to `tarfile`. Letting `tarfile` read the compressed stream directly cost the
+decompression roughly twice: it scans for member headers and then seeks back to each member's
+data, and a backwards seek in a bz2 stream restarts decompression from the beginning. Measured on
+the three-frame fixture: 204 ms of CPU before, 122 ms after. Unpacking is ~80% of the cost of
+reading a cycle, so this is the only part of the decoder worth tuning; the numpy conversion is the
+other 20%.
+
+The bound matters as much as the saving. `bz2.decompress` would materialise whatever the archive
+claims before any limit could look at it, which is exactly the bomb of F-1, so the decompressor is
+fed in chunks with a capped output per call, the running total is checked against
+`MAX_TOTAL_BYTES`, and the first tar header is inspected as soon as its 512 bytes exist. The 483 B
+→ 512 MiB bomb is refused after half a kilobyte, with a measured peak allocation of 0.52 MB.
+
 3. Apply the **precision factor from the header's `PR` field** (e.g. `E-02` → ×0.01) to convert raw
    counts to millimetres per 5-minute interval. Do not hard-code the exponent.
 4. Identify no-data by **comparing against the sentinel `0x29C4`**, before any bit masking. Missing is
