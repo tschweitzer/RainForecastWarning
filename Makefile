@@ -7,8 +7,15 @@ PY   := $(VENV)/bin/python
 RUFF := $(VENV)/bin/ruff
 
 ALL_TARGETS := dev test lint fmt probe run-ingest serve migrate verify rerender pin-base \
-	image-push reset-local outbox backfill
+	image-push reset-local outbox backfill serve-bg backfill-bg ingest-loop-bg stop status logs
 .PHONY: $(ALL_TARGETS)
+
+# --- Running detached, for a box you only reach over ssh -----------------------------------
+# Every background target writes a pid to var/run/<name>.pid and appends to var/log/<name>.log,
+# so `make stop NAME=<name>` works from a later session that knows nothing about the first.
+RUN_DIR := var/run
+LOG_DIR := var/log
+INGEST_INTERVAL ?= 300
 
 dev:
 	python3 -m venv $(VENV)
@@ -61,6 +68,89 @@ PORT ?= 8000
 serve:
 	$(PY) -m uvicorn --factory rainalert.api.app:create_app --reload \
 		--host $(HOST) --port $(PORT)
+
+# The same server, detached, surviving the ssh session that started it.
+#   make serve-bg HOST=0.0.0.0     then    make logs NAME=serve / make stop NAME=serve
+# No --reload: the reloader runs the app in a *child* process, so killing the pid we recorded
+# would leave the real server holding the port.
+serve-bg:
+	@$(call start_detached,serve,$(PY) -m uvicorn --factory rainalert.api.app:create_app \
+		--host $(HOST) --port $(PORT))
+
+# A full backfill is half an hour of downloading; it has no business dying with your terminal.
+backfill-bg:
+	@$(call start_detached,backfill,$(PY) -m rainalert.cli backfill --yes \
+		$(if $(HOURS),--hours $(HOURS),) $(if $(LIMIT),--limit $(LIMIT),))
+
+# One ingest every INGEST_INTERVAL seconds (default 300, the publication cadence). This is what
+# M2's "24 h unattended" criterion needs.
+ingest-loop-bg:
+	@$(call start_detached,ingest-loop,env PY=$(PY) INGEST_INTERVAL=$(INGEST_INTERVAL) \
+		scripts/ingest-loop.sh)
+
+stop:
+	@test -n "$(NAME)" || { echo "usage: make stop NAME=serve|backfill|ingest-loop"; exit 2; }
+	@test -f $(RUN_DIR)/$(NAME).pid || { echo "$(NAME) is not running (no pid file)"; exit 1; }
+	@pid=$$(cat $(RUN_DIR)/$(NAME).pid); \
+	if kill -0 $$pid 2>/dev/null; then \
+		kill -TERM -$$pid 2>/dev/null || kill -TERM $$pid; \
+		echo "asked $(NAME) (pid $$pid) and its children to stop"; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 $$pid 2>/dev/null || break; sleep 1; done; \
+		if kill -0 $$pid 2>/dev/null; then \
+			kill -9 -$$pid 2>/dev/null || kill -9 $$pid; echo "had to kill -9 $$pid"; \
+		fi; \
+	else \
+		echo "$(NAME) was not running (stale pid $$pid)"; \
+	fi; \
+	rm -f $(RUN_DIR)/$(NAME).pid
+
+# One shell, not two: each recipe line gets its own, so an `exit 0` on the first would end that
+# line and make would cheerfully run the next against a glob that matched nothing.
+status:
+	@if ! ls $(RUN_DIR)/*.pid >/dev/null 2>&1; then \
+		echo "nothing started by make is running"; \
+	else \
+		for f in $(RUN_DIR)/*.pid; do \
+			n=$$(basename $$f .pid); pid=$$(cat $$f); \
+			if kill -0 $$pid 2>/dev/null; then echo "$$n  running  pid $$pid"; \
+			else echo "$$n  stopped  stale pid $$pid"; fi; \
+		done; \
+	fi
+
+logs:
+	@test -n "$(NAME)" || { echo "usage: make logs NAME=serve|backfill|ingest-loop"; exit 2; }
+	@tail -f $(LOG_DIR)/$(NAME).log
+
+# `setsid sh -c 'echo $$ > pid; exec cmd'` puts the job in a session of its own and records the
+# leader's pid - which is also the process *group* id, because exec keeps both.
+#
+# The group is the point. The ingest loop runs a python child per cycle; killing only the loop's
+# shell leaves that child running, reparented to init, invisible to `make status` and still
+# talking to DWD. Recording the group lets stop take the whole tree.
+#
+# All three streams are redirected: when ssh goes away the pty goes with it, and a process still
+# holding it gets EIO on its next write rather than carrying on quietly. nohup covers the SIGHUP
+# that arrives first.
+define start_detached
+	mkdir -p $(RUN_DIR) $(LOG_DIR); \
+	if [ -f $(RUN_DIR)/$(1).pid ] && kill -0 $$(cat $(RUN_DIR)/$(1).pid) 2>/dev/null; then \
+		echo "$(1) is already running (pid $$(cat $(RUN_DIR)/$(1).pid)); make stop NAME=$(1)"; \
+		exit 1; \
+	fi; \
+	rm -f $(RUN_DIR)/$(1).pid; \
+	nohup setsid sh -c 'echo $$$$ > $(RUN_DIR)/$(1).pid; exec $(2)' \
+		>> $(LOG_DIR)/$(1).log 2>&1 < /dev/null & \
+	for i in 1 2 3 4 5 6 7 8 9 10; do \
+		[ -s $(RUN_DIR)/$(1).pid ] && break; sleep 0.2; \
+	done; \
+	sleep 1; \
+	if [ -s $(RUN_DIR)/$(1).pid ] && kill -0 $$(cat $(RUN_DIR)/$(1).pid) 2>/dev/null; then \
+		echo "$(1) started (pid $$(cat $(RUN_DIR)/$(1).pid)) -> $(LOG_DIR)/$(1).log"; \
+	else \
+		echo "$(1) exited immediately; last lines of $(LOG_DIR)/$(1).log:"; \
+		tail -5 $(LOG_DIR)/$(1).log; rm -f $(RUN_DIR)/$(1).pid; exit 1; \
+	fi
+endef
 
 # Fills the map timeline by fetching past cycles from DWD. Deliberately slow - one request at a
 # time, 1-15 s apart - and it prints the plan and asks before it starts.

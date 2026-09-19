@@ -257,6 +257,40 @@ opens, and a cycle DWD no longer keeps is counted and skipped rather than retrie
 Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would
 mail every subscriber about rain that stopped hours ago, once per cycle.
 
+### Running it when you only have ssh
+
+Anything started from an ssh session dies with that session. These targets do not: each one puts
+its job in a process group of its own, records the leader's pid in `var/run/<name>.pid` and
+appends output to `var/log/<name>.log`.
+
+```sh
+make serve-bg HOST=0.0.0.0     # the web service
+make backfill-bg               # the long download, unattended
+make ingest-loop-bg            # one ingest every 5 min - this is M2's 24 h criterion
+
+make status                    # what is running
+make logs NAME=serve           # tail -f the log
+make stop NAME=ingest-loop     # stop it, and its children
+```
+
+`make stop` kills the whole process group rather than the one pid. That matters for the ingest
+loop: it runs a python child per cycle, and killing only the loop would leave that child running,
+reparented to init, invisible to `make status` and still talking to DWD.
+
+Two details worth knowing. `serve-bg` runs without `--reload`, because the reloader runs the app
+in a child process and the pid we record would not be the server holding the port - use plain
+`make serve` while you are editing code. And if the command dies at once, the target says so and
+prints the tail of the log rather than leaving a pid file that claims otherwise.
+
+`INGEST_INTERVAL=60 make ingest-loop-bg` shortens the loop for a quick test; DWD publishes every
+five minutes, so anything below 300 fetches nothing new and just re-asks.
+
+For something that should also survive a reboot, cron is the smaller tool:
+
+```sh
+( crontab -l 2>/dev/null; echo "4-59/5 * * * * cd ~/RainForecastWarning && make run-ingest >> var/log/ingest.log 2>&1" ) | crontab -
+```
+
 ## 7. What "working" looks like
 
 ```sh
