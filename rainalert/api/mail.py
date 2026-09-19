@@ -14,9 +14,20 @@ from rainalert.tokens import unsubscribe_token
 ATTRIBUTION = "Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0"
 
 
-def confirmation_message(settings: Settings, to: str, token: str) -> OutboundMessage:
+def confirmation_message(
+    settings: Settings, to: str, token: str, *, channel: str = "email"
+) -> OutboundMessage:
+    """The double opt-in message, worded for the channel it goes out on.
+
+    Same token, same endpoint, same one-use rule. What differs is only what the reader is being
+    asked to believe: on email, that somebody typed *their address*, which may not have been
+    them. On a push topic there is no such doubt - the topic did not exist until they asked for
+    it, and it reached their phone - so the message says what the tap is for rather than warning
+    about a stranger.
+    """
     link = f"{settings.public_base_url.rstrip('/')}/confirm?token={token}"
-    text = f"""Hallo,
+    if channel == "email":
+        text = f"""Hallo,
 
 jemand hat diese Adresse fuer eine Regenwarnung angemeldet.
 
@@ -31,10 +42,24 @@ gespeichert und es werden keine weiteren Mails verschickt.
 --
 {ATTRIBUTION}
 """
+    else:
+        text = f"""Diese Benachrichtigung beweist, dass die Warnungen dich erreichen.
+
+Zum Aktivieren antippen, oder diesen Link oeffnen:
+{link}
+
+Gueltig {settings.confirm_token_ttl_hours} Stunden, einmal benutzbar. Ohne Bestaetigung wird
+nichts gespeichert und es kommt nichts weiter.
+
+--
+{ATTRIBUTION}
+"""
     return OutboundMessage(
         to=to,
         subject="Regenwarnung bestaetigen",
         text=text,
+        # Push has nowhere to put a link except here. Email ignores it and uses the body.
+        click_url=link,
         headers={
             "From": settings.mail_from,
             # Tells well-behaved automation this is not a human conversation.
@@ -43,11 +68,16 @@ gespeichert und es werden keine weiteren Mails verschickt.
     )
 
 
-def deletion_receipt(settings: Settings, to: str) -> OutboundMessage:
+def deletion_receipt(settings: Settings, to: str, *, channel: str = "email") -> OutboundMessage:
+    """Sent to the channel being deleted, as the last thing that channel ever receives.
+
+    On ntfy this is also the subscriber's cue to unsubscribe the topic in their app: we stop
+    publishing, but only they can stop listening.
+    """
     text = f"""Hallo,
 
 deine Regenwarnung wurde geloescht. Adresse, Standort und Verlauf sind entfernt.
-
+{"Dieses Thema kannst du jetzt in der App abbestellen - es kommt nichts mehr." if channel == "ntfy" else ""}
 Du kannst dich jederzeit neu anmelden:
 {settings.public_base_url.rstrip("/")}/
 
@@ -112,8 +142,11 @@ Abmelden: {unsubscribe_url}
     if settings.mail_reply_to:
         headers["Reply-To"] = settings.mail_reply_to
     return OutboundMessage(
-        to=subscriber.email,
+        to=subscriber.address,
         subject=f"Regen in etwa {lead} Minuten",
         text=text,
+        # On push this is where the reader lands when they tap the warning. The map, so the
+        # first thing they see is the rain that is coming rather than a sign-up form.
+        click_url=f"{settings.public_base_url.rstrip('/')}/map",
         headers=headers,
     )

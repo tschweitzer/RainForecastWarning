@@ -214,6 +214,41 @@ about - and `unconfirmed_purge_hours` (24 h by default) deletes it. If the serve
 machine, the link points at whatever `PUBLIC_BASE_URL` says, so set that to the address you
 actually browse or the link will send you to your own laptop.
 
+### Testing warnings without any mail at all
+
+`NOTIFIER=ntfy` sends the warning to your phone instead of to a file. No domain, no provider, no
+credentials - which is why it works today while the mail questions are still open, and why it is
+the quickest way to close M5.
+
+```ini
+NOTIFIER=ntfy
+# NTFY_SERVER=https://ntfy.sh      # the default; see the warning below
+```
+
+Install the ntfy app, sign up on the page with "Push aufs Handy" selected, and it shows you a
+topic and a QR code. Subscribe to the topic, then tap the test notification that arrives - that
+tap is the confirmation, and it replaces opening an inbox. Two taps, no `.eml` decoding.
+
+**The public ntfy.sh sees your message text and topic name**, and a rain warning names a place
+and a time. Fine for a throwaway topic during development; self-host it (`NTFY_SERVER`) for
+anything else.
+
+If you would rather exercise the real mail path, point the SMTP notifier at a local catcher -
+this runs the same code that will run in production, which the `.eml` file never does:
+
+```sh
+curl -sL https://github.com/axllent/mailpit/releases/latest/download/mailpit-linux-amd64.tar.gz \
+  | tar xz mailpit && ./mailpit          # SMTP on 1025, web UI on 8025
+```
+
+```ini
+NOTIFIER=smtp
+SMTP_HOST=127.0.0.1
+SMTP_PORT=1025
+SMTP_USE_TLS=false
+```
+
+
 Then run `make run-ingest` twice more. If rain is approaching your location you will get a warning
 `.eml`. If it is dry, temporarily lower the bar to see the machinery work:
 

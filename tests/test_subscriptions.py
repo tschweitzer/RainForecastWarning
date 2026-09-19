@@ -118,7 +118,7 @@ def test_resubscribing_supersedes_the_previous_token(client, notifier, db):
 def test_expired_confirmation_is_refused(db, settings, notifier):
     with db() as session:
         result = svc.subscribe(
-            session, settings, email="a@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
+            session, settings, address="a@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
         )
         later = datetime.now(UTC) + timedelta(hours=settings.confirm_token_ttl_hours + 1)
         with pytest.raises(svc.ValidationError, match="expired"):
@@ -282,7 +282,7 @@ def test_security_headers_are_present(client):
 def test_unconfirmed_signups_are_purged(db, settings):
     with db() as session:
         svc.subscribe(
-            session, settings, email="ghost@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
+            session, settings, address="ghost@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
         )
         later = datetime.now(UTC) + timedelta(hours=settings.unconfirmed_purge_hours + 1)
         assert svc.purge_unconfirmed(session, settings, now=later) == 1
@@ -292,7 +292,7 @@ def test_unconfirmed_signups_are_purged(db, settings):
 def test_tokens_are_never_stored_in_plaintext(db, settings, notifier):
     with db() as session:
         result = svc.subscribe(
-            session, settings, email="a@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
+            session, settings, address="a@example.com", lat=FRANKFURT[0], lon=FRANKFURT[1]
         )
         stored = session.query(AuthToken).one()
         assert result.confirm_token.encode() not in bytes(stored.token_hash)

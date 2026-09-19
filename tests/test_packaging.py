@@ -165,7 +165,7 @@ def test_reset_keeps_radar_data_by_default(db, tmp_path):
 
     from rainalert.db.models import CycleStatus, RadarCycle, Subscriber
     from rainalert.jobs.reset import reset
-    from rainalert.tokens import hash_email
+    from rainalert.tokens import hash_address
 
     with db() as session:
         session.add(
@@ -181,8 +181,8 @@ def test_reset_keeps_radar_data_by_default(db, tmp_path):
         )
         session.add(
             Subscriber(
-                email="a@example.com",
-                email_hash=hash_email("a@example.com"),
+                address="a@example.com",
+                address_hash=hash_address("email", "a@example.com"),
                 created_at=datetime(2026, 9, 16, tzinfo=UTC),
             )
         )

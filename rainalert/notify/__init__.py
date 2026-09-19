@@ -17,6 +17,7 @@ from rainalert.notify.base import (
 )
 from rainalert.notify.console import ConsoleNotifier
 from rainalert.notify.file import FileNotifier
+from rainalert.notify.ntfy import NtfyNotifier
 from rainalert.notify.smtp import SMTPNotifier
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ __all__ = [
     "DeliveryResult",
     "FileNotifier",
     "Notifier",
+    "NtfyNotifier",
     "OutboundMessage",
     "PushNotifier",
     "SMTPNotifier",
@@ -48,6 +50,12 @@ def build_notifier(kind: str, settings: "Settings") -> Notifier:
             password=settings.smtp_password,
             use_tls=settings.smtp_use_tls,
             timeout=settings.smtp_timeout_seconds,
+        )
+    if kind == "ntfy":
+        return NtfyNotifier(
+            server=settings.ntfy_server,
+            token=settings.ntfy_token,
+            timeout=settings.ntfy_timeout_seconds,
         )
     if kind == "push":
         return PushNotifier()

@@ -7,6 +7,7 @@ web server and reused by the future mobile app unchanged.
 from __future__ import annotations
 
 import math
+import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from rainalert.config import Settings
 from rainalert.db.models import (
     AuthToken,
+    Channel,
     Subscriber,
     Subscription,
     SubscriptionStatus,
@@ -26,7 +28,7 @@ from rainalert.db.models import (
 from rainalert.radar.grid import OutsideGrid, cell_of
 from rainalert.tokens import (
     expiry,
-    hash_email,
+    hash_address,
     hash_ip,
     hash_token,
     new_token,
@@ -56,6 +58,10 @@ class SubscribeResult:
     confirm_token: str | None
     subscriber_id: uuid.UUID | None
     already_active: bool
+    #: The address the confirmation goes to. For email it is what the caller supplied; for ntfy
+    #: it is the topic generated here, which the caller has to show the subscriber because
+    #: nothing can reach them until their app is subscribed to it.
+    address: str | None = None
 
 
 def validate_location(lat: float, lon: float) -> tuple[float, float]:
@@ -81,29 +87,58 @@ def validate_timezone(name: str) -> str:
     return name
 
 
+#: 128 bits, url-safe. Enough that an ntfy topic cannot be found by trying.
+NTFY_TOPIC_BYTES = 16
+
+
+def new_ntfy_topic(prefix: str = "rainalert") -> str:
+    """A push topic nobody can guess.
+
+    Topics on a public ntfy server are a flat, unauthenticated namespace: anyone who knows a
+    topic can subscribe to it, and a rain warning says where and when it will rain for the person
+    who gets it. A topic anyone can guess is therefore a location leak, which is why this is
+    generated rather than chosen - `rainalert-muenchen` would be readable, memorable, and someone
+    else's within a week.
+    """
+    return f"{prefix}-{secrets.token_urlsafe(NTFY_TOPIC_BYTES)}"
+
+
 def subscribe(
     session: Session,
     settings: Settings,
     *,
-    email: str,
     lat: float,
     lon: float,
+    channel: Channel = Channel.EMAIL,
+    address: str | None = None,
     client_ip: str | None = None,
     user_agent: str | None = None,
     now: datetime | None = None,
 ) -> SubscribeResult:
-    """Start a double opt-in. Returns the confirmation token for the caller to mail.
+    """Start a double opt-in. Returns the confirmation token for the caller to deliver.
 
-    Nothing is ever sent to an address that has not confirmed, which is what stops this endpoint
-    being usable as a mail relay or to bomb a third party.
+    Nothing is ever sent to an address that has not confirmed. For email that is what stops this
+    endpoint being usable as a mail relay or to bomb a third party. For a push topic there is no
+    third party to protect - the topic did not exist until now - but the confirmation earns its
+    place for a different reason: it proves the channel actually reaches the subscriber. A rain
+    warning that silently goes nowhere is worse than none, because they stop watching the sky.
+
+    ``address`` is required for email and ignored for ntfy, where the topic is generated here.
     """
     now = now or datetime.now(UTC)
-    email = email.strip().lower()
     lat, lon = validate_location(lat, lon)
 
-    digest = hash_email(email)
+    if channel == Channel.EMAIL:
+        if not address:
+            raise ValidationError("an email address is required")
+        address = address.strip().lower()
+    else:
+        # Never taken from the request: see new_ntfy_topic.
+        address = new_ntfy_topic(settings.ntfy_topic_prefix)
+
+    digest = hash_address(channel.value, address)
     subscriber = session.execute(
-        select(Subscriber).where(Subscriber.email_hash == digest)
+        select(Subscriber).where(Subscriber.address_hash == digest)
     ).scalar_one_or_none()
 
     if subscriber and subscriber.confirmed_at:
@@ -112,8 +147,9 @@ def subscribe(
 
     if subscriber is None:
         subscriber = Subscriber(
-            email=email,
-            email_hash=digest,
+            channel=channel,
+            address=address,
+            address_hash=digest,
             created_at=now,
             consent_ip_hash=hash_ip(client_ip, settings.secret_key) if client_ip else None,
             consent_user_agent=(user_agent or "")[:256] or None,
@@ -160,7 +196,7 @@ def subscribe(
         )
     )
     session.commit()
-    return SubscribeResult(token, subscriber.id, already_active=False)
+    return SubscribeResult(token, subscriber.id, already_active=False, address=address)
 
 
 @dataclass

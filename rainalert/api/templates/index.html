@@ -1,13 +1,33 @@
 {% extends "base.html" %}
 {% block body %}
+<style>
+  .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
+  .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
+  .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
+                   font-weight:normal; }
+  .ntfy-steps .topic { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                       word-break:break-all; background:var(--code,#0001); padding:.4rem .6rem;
+                       border-radius:6px; }
+  .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px; }
+</style>
 <h1>Regenwarnung</h1>
-<p class="lede">Eine E-Mail, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
+<p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
 Vorhersage bis zwei Stunden voraus.</p>
 
 <form id="signup">
-  <label for="email">E-Mail</label>
-  <input type="email" id="email" name="email" required autocomplete="email"
-         placeholder="du@example.org">
+  <fieldset class="channel">
+    <legend>Wie sollen wir dich warnen?</legend>
+    <label><input type="radio" name="channel" value="ntfy" checked> Push aufs Handy (ntfy)</label>
+    <label><input type="radio" name="channel" value="email"> E-Mail</label>
+  </fieldset>
+
+  {# Hidden for push, and not merely ignored: the request is refused if an address arrives on
+     the ntfy channel, so leaving it fillable would let someone believe it had been stored. #}
+  <div id="email-field" hidden>
+    <label for="email">E-Mail</label>
+    <input type="email" id="email" name="email" autocomplete="email"
+           placeholder="du@example.org">
+  </div>
 
   <div class="row">
     <div>
@@ -56,22 +76,88 @@ document.getElementById('locate').addEventListener('click', function () {
     document.getElementById('lon').value = pos.coords.longitude.toFixed(4);
   });
 });
+function chosenChannel() {
+  var picked = document.querySelector('input[name=channel]:checked');
+  return picked ? picked.value : 'ntfy';
+}
+
+function syncChannelFields() {
+  var isEmail = chosenChannel() === 'email';
+  var field = document.getElementById('email-field');
+  field.hidden = !isEmail;
+  // required only when it is the channel, or the browser refuses to submit a hidden empty field
+  document.getElementById('email').required = isEmail;
+}
+Array.prototype.forEach.call(
+  document.querySelectorAll('input[name=channel]'),
+  function (radio) { radio.addEventListener('change', syncChannelFields); }
+);
+syncChannelFields();
+
 document.getElementById('signup').addEventListener('submit', async function (event) {
   event.preventDefault();
   var out = document.getElementById('result');
+  var channel = chosenChannel();
   out.textContent = 'Wird gesendet …';
+
+  var body = {
+    channel: channel,
+    lat: parseFloat(document.getElementById('lat').value),
+    lon: parseFloat(document.getElementById('lon').value)
+  };
+  if (channel === 'email') { body.email = document.getElementById('email').value; }
+
   var response = await fetch('/api/v1/subscriptions', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      email: document.getElementById('email').value,
-      lat: parseFloat(document.getElementById('lat').value),
-      lon: parseFloat(document.getElementById('lon').value)
-    })
+    body: JSON.stringify(body)
   });
-  out.textContent = response.ok
-    ? 'Fast fertig – schau in dein Postfach und bestätige die Anmeldung.'
-    : 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+
+  if (!response.ok) {
+    out.textContent = 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+    return;
+  }
+  if (channel === 'email') {
+    out.textContent = 'Fast fertig – schau in dein Postfach und bestätige die Anmeldung.';
+    return;
+  }
+
+  // Push: the subscriber has to point their app at the topic before anything can arrive, so the
+  // topic and a way to reach it are the whole of the next step.
+  var data = await response.json();
+  out.innerHTML = '';
+  var steps = document.createElement('div');
+  steps.className = 'ntfy-steps';
+
+  var heading = document.createElement('p');
+  heading.innerHTML = '<strong>Noch zwei Schritte.</strong> Dein Thema ist:';
+  steps.appendChild(heading);
+
+  var topic = document.createElement('p');
+  topic.className = 'topic';
+  topic.textContent = data.topic;
+  steps.appendChild(topic);
+
+  var open = document.createElement('p');
+  var link = document.createElement('a');
+  link.href = data.subscribe_url;
+  link.rel = 'noopener';
+  link.textContent = '1. In der ntfy-App abonnieren';
+  open.appendChild(link);
+  steps.appendChild(open);
+
+  var qr = document.createElement('img');
+  qr.src = '/qr?text=' + encodeURIComponent(data.subscribe_url);
+  qr.alt = 'QR-Code zum Abonnieren';
+  qr.className = 'qr';
+  steps.appendChild(qr);
+
+  var tap = document.createElement('p');
+  tap.textContent = '2. Wir schicken sofort eine Testnachricht – tippe sie an, dann bist du '
+    + 'angemeldet. Kommt nichts an, erreichen dich die Warnungen auch nicht.';
+  steps.appendChild(tap);
+
+  out.appendChild(steps);
 });
 </script>
 {% endblock %}

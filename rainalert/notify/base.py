@@ -14,11 +14,15 @@ class OutboundMessage:
     html: str | None = None
     #: Extra headers. One-click unsubscribe (RFC 8058) lives here.
     headers: dict[str, str] = field(default_factory=dict)
+    #: Where tapping the message should take the reader. Email puts the link in the body and
+    #: ignores this; push notifications have nowhere to put a link *except* here, so a
+    #: confirmation that works in mail and not on a phone is exactly what this prevents.
+    click_url: str | None = None
 
     def __post_init__(self) -> None:
         # Header injection: a newline in a field that becomes a header lets an attacker append
         # headers of their own - Bcc, Reply-To, a second body. Addresses come from user input.
-        for value in (self.to, self.subject, *self.headers.values()):
+        for value in (self.to, self.subject, self.click_url or "", *self.headers.values()):
             if "\n" in value or "\r" in value:
                 raise ValueError("header values must not contain line breaks")
 

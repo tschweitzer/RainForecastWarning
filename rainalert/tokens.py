@@ -33,9 +33,18 @@ def hash_token(token: str) -> bytes:
     return hashlib.sha256(token.encode("utf-8")).digest()
 
 
-def hash_email(email: str) -> bytes:
-    """Stable lookup key for an address. Case-folded, because mailboxes are."""
-    return hashlib.sha256(email.strip().lower().encode("utf-8")).digest()
+def hash_address(channel: str, address: str) -> bytes:
+    """Stable lookup key for a subscriber, covering the channel as well as the address.
+
+    Without the channel an ntfy topic spelled like a mailbox would collide with that mailbox and
+    the two subscribers would be one.
+
+    Mailboxes are case-folded because they are case-insensitive in practice. Topics are not:
+    ntfy treats `Abc` and `abc` as different topics, and folding them would make two distinct
+    push destinations look like one subscriber.
+    """
+    normalised = address.strip().lower() if channel == "email" else address.strip()
+    return hashlib.sha256(f"{channel}:{normalised}".encode()).digest()
 
 
 def hash_ip(ip: str, secret: str) -> bytes:

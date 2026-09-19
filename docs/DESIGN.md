@@ -62,7 +62,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-2 | Trigger = "rain starts within lead window **and** it is currently dry at the location" | "Get the laundry in" semantics; avoids firing during ongoing rain |
 | D-3 | Spatial rule = max over cells within a radius (default **2000 m**) | 1 km grid + nowcast advection error; a single cell is too jittery |
 | D-4 | Host on GCP, serverless, scale-to-zero | Cloud Run service + Cloud Run job + Cloud Scheduler + GCS |
-| D-5 | Identity = email + magic link (double opt-in); subscription holds an opaque API token | GDPR consent trail, no passwords, reusable by the future app |
+| D-5 | Identity = **(channel, address)** + magic link (double opt-in); subscription holds an opaque API token | GDPR consent trail, no passwords, reusable by the future app. Revised 2026-09-19: email was never the point of double opt-in - proving the channel reaches the person who asked was - so channel and address became the identity and the confirmation goes out over whatever channel that is. One code path, no special case |
 | D-6 | Ingestion stores **full grids** (the original archives), not just samples | Enables replay, debugging, and the map overlay feature |
 | D-7 | Retention: raw archives **48 h**; forecast overlays **1 h**; observed overlays **14 h**; `evaluations` **48 h**; `rain_events` / `notifications` indefinitely | See D-23 |
 | D-8 | Alert de-duplication via a **per-subscription state machine** (§9), not a fixed cooldown | One mail per rain *event*, not per cycle |
@@ -823,6 +823,31 @@ Alert mail:
   `Auto-Submitted: auto-generated`.
 - Deliverability: SPF + DKIM + DMARC on the sending domain are a **hard prerequisite** for M6; without
   them these mails land in spam and the whole service is pointless.
+
+**Push (ntfy), added 2026-09-19.** `NOTIFIER=ntfy` publishes to a topic on an ntfy server
+instead of sending mail. The reason is the product rather than convenience: a warning is only
+useful before the rain, email latency is unpredictable - usually seconds, sometimes minutes, and
+greylisting can cost five - and a fifteen-minute lead time does not survive that. It also needs no
+domain, no provider contract and no credentials, so M5's phone test stopped waiting on Q-1 and Q-4.
+
+*The topic is generated, never chosen.* Topics on a public ntfy server are a flat unauthenticated
+namespace: anyone who knows a topic can subscribe to it, and a rain warning names a place and a
+time for the person receiving it. A memorable topic is therefore a location leak, and
+`rainalert-muenchen` would be someone else's within a week. 128 bits from `secrets`, generated
+server-side, and a request that supplies its own address on this channel is refused rather than
+having it quietly ignored.
+
+*Confirmation still happens, for a different reason.* On email it proves the person filling the
+form controls the address, which is what stops the service being a mail relay. On a push topic
+there is no third party to protect - the topic did not exist until the request. What the
+confirmation proves instead is that the channel reaches them: the test push carries a `Click`
+action to `/confirm`, and one tap activates the subscription. A warning that silently goes nowhere
+is worse than none, because the subscriber stops watching the sky.
+
+*What ntfy.sh sees.* The public server sees the message text and the topic name, which for a
+service built on data minimisation is a real cost - the text says where and when it will rain.
+`NTFY_SERVER` points at a self-hosted instance for anything beyond testing, and `NTFY_TOKEN`
+carries a bearer token for one with access control.
 
 Transactional mails: confirmation (double opt-in), deletion confirmation. No marketing mail, ever.
 

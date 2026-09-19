@@ -102,7 +102,7 @@ def active_subscription(session, settings, email="friend@example.com", at=FRANKF
     from rainalert import subscriptions as svc
     from rainalert.db.models import Subscription
 
-    result = svc.subscribe(session, settings, email=email, lat=at[0], lon=at[1])
+    result = svc.subscribe(session, settings, address=email, lat=at[0], lon=at[1])
     confirmed = svc.confirm(session, settings, token=result.confirm_token)
     return (
         session.query(Subscription)

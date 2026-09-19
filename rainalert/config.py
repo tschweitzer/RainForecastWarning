@@ -129,6 +129,18 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_timeout_seconds: float = 20.0
 
+    # --- Push (ntfy) --------------------------------------------------------------------------
+    #: The ntfy server to publish to. The public one sees the message text and the topic name,
+    #: which for a service whose privacy story is data minimisation is worth thinking about - a
+    #: rain warning names a place and a time. Self-host it for anything but testing.
+    ntfy_server: str = "https://ntfy.sh"
+    #: Prefix for generated topics. Only the random half is what makes a topic unguessable; this
+    #: is so a subscriber can recognise which of their subscriptions a topic belongs to.
+    ntfy_topic_prefix: str = "rainalert"
+    ntfy_timeout_seconds: float = 10.0
+    #: Optional bearer token, for a self-hosted server with access control.
+    ntfy_token: str | None = None
+
     # --- Tokens and consent -------------------------------------------------------------------
     #: Salts the IP hashes and signs anything that needs signing. Must be set in production.
     secret_key: str = "dev-secret-change-me"
