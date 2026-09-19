@@ -194,3 +194,25 @@ def test_we_do_not_ask_dwd_to_recompress_the_archive():
     with make_client(rec) as client:
         client.fetch_latest()
     assert rec.requests[0].headers["accept-encoding"] == "identity"
+
+
+def test_many_sequential_fetches_do_not_degrade():
+    """A long backfill slows down after 10-15 downloads. This rules out our side of it.
+
+    A client that leaked a connection or a file handle per request would get slower as a pool
+    filled up, and would do it at about this count - httpx keeps 20 keepalive connections by
+    default. It does not: the times are flat and the descriptor count is constant.
+    """
+    import os
+
+    rec = Recorder(*[httpx.Response(200, content=BODY) for _ in range(60)])
+    before = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+    with make_client(rec, hourly_byte_budget=1 << 30, daily_byte_budget=1 << 33) as client:
+        for _ in range(50):
+            client.fetch_latest()
+        during = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+    assert len(rec.requests) == 50
+    # A leak of one descriptor per request would be 50 here, not a handful of transport internals.
+    assert during - before < 10, f"{during - before} descriptors accumulated over 50 fetches"
