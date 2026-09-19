@@ -342,3 +342,28 @@ def test_live_ingest_still_renders_the_forecast(wet_cycle, tmp_path):
 
     assert render_overlays(frames, overlays) == len(frames)
     assert list((tmp_path / "ov" / "fc").rglob("*.png"))
+
+
+def test_the_log_carries_the_size_not_just_the_time(db, settings, tmp_path, caplog):
+    """A fetch taking four times as long may simply be four times the bytes.
+
+    RV archives run 104 KB to 1.35 MB with the weather, so elapsed time alone cannot tell a
+    slow server from a big file - and guessing wrong sends you off optimising the wrong thing.
+    """
+    import logging
+
+    rec = Recorder(*[httpx.Response(200, content=_blob()) for _ in range(2)])
+    with caplog.at_level(logging.INFO, logger="rainalert.jobs.backfill"), db() as session:
+        fetch_missing(
+            session,
+            make_client(rec, max_response_bytes=8 * 1024 * 1024),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=5 / 60,
+            now=NOMINAL,
+            sleep=lambda _s: None,
+            limit=2,
+        )
+
+    line = next(r.getMessage() for r in caplog.records if "fetch" in r.getMessage())
+    assert "MB" in line and "MB/s" in line

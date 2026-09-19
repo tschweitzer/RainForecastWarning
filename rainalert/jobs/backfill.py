@@ -256,19 +256,27 @@ def fetch_missing(
         # Per cycle, split into waiting on DWD and working locally. A backfill runs for many
         # minutes, and without this it is a silent process you cannot tell from a hung one.
         #
-        # The split is what makes "why did it slow down" answerable. If `fetch` grew, the far end
-        # or the network did it - and `attempts` says whether we were retried. If `work` grew,
-        # this machine did: decoding 25 frames and rendering a PNG is real CPU, and a burstable
-        # VM hands out full speed for a while and then clamps to its baseline, which looks
-        # exactly like a step change partway through a run.
+        # The split is what makes "why did it slow down" answerable, and the size is what stops
+        # the answer being wrong. An RV archive is 104 KB to 1.35 MB depending on how much rain
+        # there is to compress (DWD_RV_FORMAT.md §1), so a fetch taking four times as long may
+        # simply be four times the bytes. Throughput is the number that tells those apart:
+        # steady MB/s with rising MB is weather, falling MB/s is the far end or the network.
+        #
+        # `work` does not vary with the file size - decode and render both cost what the fixed
+        # 1200x1100 grid costs - so a rising `work` is this machine, most likely a burstable VM
+        # clamping to its baseline once its credits are gone.
         now_s = time.monotonic()
+        fetch_s = fetched_at_s - started
+        megabytes = len(blob) / 1e6
         logger.info(
-            "%s (%d/%d) fetch %.1fs work %.1fs%s",
+            "%s (%d/%d) fetch %.1fs work %.1fs %.2fMB %.2fMB/s%s",
             name,
             index + 1,
             len(wanted),
-            fetched_at_s - started,
+            fetch_s,
             now_s - fetched_at_s,
+            megabytes,
+            megabytes / fetch_s if fetch_s > 0 else 0.0,
             f" [{result.attempts} attempts]" if result.attempts > 1 else "",
         )
 
