@@ -188,21 +188,41 @@ def fetch_missing(
     if limit is not None:
         wanted = wanted[:limit]
 
+    try:
+        _walk(wanted, session, client, store, settings, report, overlays, now, sleep, jitter, hours)
+    except KeyboardInterrupt:
+        # Ctrl-C is how anyone stops a run that is going badly, and it can land anywhere - in the
+        # pause, mid-download, mid-decode. Catching it around the whole walk rather than at one
+        # of those points is the difference between a summary and a page of traceback. Every
+        # cycle already fetched is committed, so the next run continues from there.
+        logger.info("interrupted after %d cycle(s)", report.fetched)
+        report.halted = "interrupted"
+    return report
+
+
+def _walk(
+    # Many parameters, one call site: this is the body of fetch_missing, split out only so that
+    # a KeyboardInterrupt anywhere inside it lands in one place. A context object would hide
+    # that and buy nothing.
+    wanted: list[datetime],
+    session: Session,
+    client: DWDClient,
+    store: ArchiveStore,
+    settings: Settings,
+    report: FetchReport,
+    overlays: OverlayStore | None,
+    now: datetime,
+    sleep: Callable[[float], None],
+    jitter: Callable[[], float],
+    hours: float,
+) -> None:
     for index, nominal in enumerate(wanted):
         # Never before the first request, always between two. A pause after the last one would
         # only make the command feel slower than it is.
         waited = 0.0
         if index:
-            try:
-                waited = jitter()
-                sleep(waited)
-            except KeyboardInterrupt:
-                # Ctrl-C during the pause is how anyone stops a run that is going badly, and it
-                # landed as a traceback through sleep(). What was already fetched is committed
-                # and kept; the report says how far it got.
-                logger.info("interrupted after %d cycle(s)", report.fetched)
-                report.halted = "interrupted"
-                break
+            waited = jitter()
+            sleep(waited)
 
         name = archive_name(nominal)
         started = time.monotonic()
@@ -233,7 +253,10 @@ def fetch_missing(
 
         try:
             decode_started = time.monotonic()
-            frames = read_frames(blob)
+            # Headers for all 25, the grid for the one that gets rendered. validate_cycle reads
+            # every header and only the analysis frame's values, and render_overlays is called
+            # with observed_only, so nothing here looks at a grid that is not built.
+            frames = read_frames(blob, analysis_only=True)
             decoded_at_s = time.monotonic()
             # The age limit is widened to the window asked for, and only that. Everything else -
             # the future check, the mixed-stamp check, the plausibility band - still applies.
@@ -324,5 +347,3 @@ def fetch_missing(
             _resident_megabytes(),
             f" [{result.attempts} attempts]" if result.attempts > 1 else "",
         )
-
-    return report

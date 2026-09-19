@@ -431,3 +431,31 @@ def test_ctrl_c_during_the_pause_keeps_what_was_fetched(db, settings, tmp_path):
 
     assert report.halted == "interrupted"
     assert len(rec.requests) == 1  # it stopped instead of asking for the next one
+
+
+def test_ctrl_c_mid_download_is_also_a_summary(db, settings, tmp_path):
+    """Ctrl-C lands wherever the process happens to be - in practice, inside the fetch.
+
+    The first version caught it around the pause only, which is the one place a long run is
+    least likely to be when you reach for the keyboard.
+    """
+
+    class Interrupting:
+        base_url = "https://example.invalid"
+
+        def fetch_named(self, name):
+            raise KeyboardInterrupt
+
+    with db() as session:
+        report = fetch_missing(
+            session,
+            Interrupting(),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=1,
+            now=NOMINAL,
+            sleep=lambda _s: None,
+        )
+
+    assert report.halted == "interrupted"
+    assert report.fetched == 0

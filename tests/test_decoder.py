@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from rainalert.radar.decoder import NODATA, RVFormatError, decode_frame, read_cycle
+from rainalert.radar.decoder import (
+    NODATA,
+    RVFormatError,
+    decode_frame,
+    read_cycle,
+    read_frames,
+)
 
 
 def test_header_fields(wet_cycle):
@@ -90,3 +96,49 @@ def test_matches_wradlib_exactly(wet_cycle, tmp_path):
     assert np.array_equal(wr_missing, mine.missing)
     valid = ~mine.missing
     assert np.array_equal(mine.values[valid], data[valid].astype(np.float32))
+
+
+def test_analysis_only_keeps_every_header_and_one_grid(wet_cycle):
+    """Backfill validates against all the headers and renders one frame.
+
+    Building the other grids is work and memory spent on values nothing reads.
+    """
+    full = read_frames(wet_cycle)
+    lean = read_frames(wet_cycle, analysis_only=True)
+
+    assert [f.lead_minutes for f in lean] == [f.lead_minutes for f in full]
+    assert [f.nominal_time for f in lean] == [f.nominal_time for f in full]
+    assert [f.radar_sites for f in lean] == [f.radar_sites for f in full]
+
+    analysis = [f for f in lean if f.lead_minutes == 0]
+    assert len(analysis) == 1
+    assert analysis[0].values is not None
+    # and it is the same data a full read produces
+    reference = next(f for f in full if f.lead_minutes == 0)
+    assert np.array_equal(analysis[0].values, reference.values, equal_nan=True)
+    assert np.array_equal(analysis[0].missing, reference.missing)
+
+    # every other frame carries None rather than an empty array, so a caller that forgets the
+    # distinction raises instead of averaging over nothing
+    for frame in lean:
+        if frame.lead_minutes != 0:
+            assert frame.values is None and frame.missing is None
+
+
+def test_analysis_only_still_refuses_a_truncated_member(wet_cycle):
+    """Skipping the grid must not skip the check that the grid is there."""
+    import io
+    import tarfile
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:bz2") as out:
+        with tarfile.open(wet_cycle) as src:
+            member = next(m for m in src.getmembers() if m.isfile())
+            blob = src.extractfile(member).read()
+        cut = blob[: len(blob) // 2]
+        info = tarfile.TarInfo(member.name)
+        info.size = len(cut)
+        out.addfile(info, io.BytesIO(cut))
+
+    with pytest.raises(RVFormatError):
+        read_frames(buffer.getvalue(), analysis_only=True)

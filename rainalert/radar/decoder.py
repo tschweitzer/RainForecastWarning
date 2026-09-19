@@ -72,8 +72,12 @@ class RVArchiveRejected(RVFormatError):
 class RVFrame:
     """One forecast step of one RV cycle."""
 
-    values: np.ndarray  # float32 (rows, cols), mm per interval; NaN where missing
-    missing: np.ndarray  # bool (rows, cols)
+    #: float32 (rows, cols), mm per interval; NaN where missing.
+    #: ``None`` only when the frame was read with ``analysis_only`` and is not the t+0 frame -
+    #: the header is still complete. None rather than an empty array on purpose: code that
+    #: forgets the distinction raises immediately instead of averaging over nothing.
+    values: np.ndarray | None
+    missing: np.ndarray | None  # bool (rows, cols), or None as above
     nominal_time: datetime  # UTC, start of the cycle
     lead_minutes: int
     interval_minutes: int
@@ -159,8 +163,13 @@ def parse_header(blob: bytes) -> tuple[dict, int]:
     return fields, end + 1
 
 
-def decode_frame(blob: bytes) -> RVFrame:
+def decode_frame(blob: bytes, *, header_only: bool = False) -> RVFrame:
     """Decode one RV member.
+
+    ``header_only`` parses and validates the header but leaves ``values``/``missing`` as None.
+    The payload of an RV frame is 1200x1100 uint16 and turning it into a masked float32 grid is
+    the single most expensive thing this service does; a caller that only needs the lead and the
+    stamp should not pay for 25 of them.
 
     .. warning::
        No-data is the sentinel ``0x29C4`` and is detected by **comparing against it**, never by
@@ -172,6 +181,12 @@ def decode_frame(blob: bytes) -> RVFrame:
     rows, cols = fields["rows"], fields["cols"]
     expected = rows * cols * 2
     payload = blob[offset:]
+    if header_only:
+        # The length check still runs below for a full decode; here it is the only thing standing
+        # between a truncated member and a frame that claims to be fine, so it runs first.
+        if len(payload) < expected:
+            raise RVFormatError(f"payload is {len(payload)} bytes, expected {expected}")
+        return _frame(None, None, fields)
     if len(payload) != expected:
         raise RVFormatError(f"payload is {len(payload)} bytes, expected {expected}")
 
@@ -179,6 +194,10 @@ def decode_frame(blob: bytes) -> RVFrame:
     missing = raw == NODATA
     values = np.where(missing, np.nan, raw * fields["precision"]).astype(np.float32)
 
+    return _frame(values, missing, fields)
+
+
+def _frame(values: np.ndarray | None, missing: np.ndarray | None, fields: dict) -> RVFrame:
     return RVFrame(
         values=values,
         missing=missing,
@@ -191,13 +210,24 @@ def decode_frame(blob: bytes) -> RVFrame:
     )
 
 
-def read_frames(archive: Path | str | bytes) -> list[RVFrame]:
+def read_frames(archive: Path | str | bytes, *, analysis_only: bool = False) -> list[RVFrame]:
     """Decode every member of an RV ``.tar.bz2``, ordered by cycle then forecast lead.
 
     Accepts a path or the raw bytes. The ingest job holds the archive in memory and never writes it
     to disk, which is what makes tar path traversal a non-issue here; keep it that way.
 
     Accepts archives holding more than one cycle - fixtures do, the real product does not.
+
+    ``analysis_only`` returns every frame, with every header, but materialises the grid for the
+    t+0 analysis frame alone; the rest carry ``values``/``missing`` of None. Backfill wants this:
+    it validates against all 25 headers and then renders one frame, so the other 24 grids are
+    built and thrown away.
+
+    Measured, because the intuition here is wrong. Unpacking the bz2 is ~80% of the cost of
+    reading a cycle and the numpy conversion only ~20%, so this saves about a fifth of the time
+    and most of the memory - one 1200x1100 float32 grid and its mask instead of 25, about 7 MB
+    rather than 165 MB. Worth having; not a cure for a machine that cannot afford the
+    decompression in the first place.
     """
     frames: list[RVFrame] = []
     source: dict = (
@@ -223,7 +253,15 @@ def read_frames(archive: Path | str | bytes) -> list[RVFrame]:
                         f"member {member.name!r} declared {member.size} bytes, "
                         f"delivered {len(blob)}"
                     )
-                frames.append(decode_frame(blob))
+                if analysis_only:
+                    # Header first, which is cheap, then the full grid only for the frame whose
+                    # values anyone will look at. One decompression pass: an earlier version
+                    # re-opened the archive for the t+0 member and came out slower than decoding
+                    # everything, because unpacking the bz2 is most of the cost.
+                    head = decode_frame(blob, header_only=True)
+                    frames.append(decode_frame(blob) if head.lead_minutes == 0 else head)
+                else:
+                    frames.append(decode_frame(blob))
     except tarfile.TarError as exc:
         raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
     except EOFError as exc:
