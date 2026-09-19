@@ -100,16 +100,25 @@ def validate_cycle(
         raise CycleRejected(f"national max {peak:.1f} mm/5min is implausible")
 
 
-def render_overlays(frames: list[RVFrame], overlays: OverlayStore) -> int:
+def render_overlays(
+    frames: list[RVFrame], overlays: OverlayStore, *, observed_only: bool = False
+) -> int:
     """Render the map frames for one cycle (§11.1).
 
-    The analysis frame goes to the long-lived ``obs`` prefix because the 12 h timeline needs every
-    past one; the forecast frames go to the short-lived ``fc`` prefix because only the newest
-    cycle's forecast is ever shown.
+    The analysis frame goes to the long-lived ``obs`` prefix because the timeline needs every past
+    one; the forecast frames go to the short-lived ``fc`` prefix because only the newest cycle's
+    forecast is ever shown.
+
+    ``observed_only`` follows from that last clause and exists for backfill. A cycle from
+    yesterday will never have its forecast displayed - the page only ever asks for the newest -
+    and ``overlay_fc_retention_hours`` deletes it within the hour regardless. Rendering it is 24
+    of every 25 frames of work, thrown away twice.
     """
     projection = build_projection()
     rendered = 0
     for frame in frames:
+        if observed_only and frame.lead_minutes != 0:
+            continue
         png = render_frame(frame, projection)
         if frame.lead_minutes == 0:
             overlays.put_observed(frame.nominal_time, png)

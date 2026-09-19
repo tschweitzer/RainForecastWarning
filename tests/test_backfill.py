@@ -298,3 +298,47 @@ def test_a_rate_limited_request_waits_once(db, settings, tmp_path):
     client.fetch_named("DE1200_RV2609161355.tar.bz2")
     assert slept == [9.0]
     assert ServerBusy is not None
+
+
+def test_backfill_renders_only_the_frame_a_past_cycle_will_ever_show(db, settings, tmp_path):
+    """Twenty-four of every twenty-five renders were work thrown away twice.
+
+    The map only ever asks for the *newest* cycle's forecast, and
+    overlay_fc_retention_hours deletes a backfilled one within the hour anyway. On a small VM
+    that rendering is most of the per-cycle runtime.
+    """
+    from rainalert.storage import LocalOverlayStore
+
+    overlays = LocalOverlayStore(tmp_path / "ov")
+    # Two slots in the window; only the one asking for 13:55 matches the fixture's header.
+    rec = Recorder(*[httpx.Response(200, content=_blob()) for _ in range(2)])
+
+    with db() as session:
+        report = fetch_missing(
+            session,
+            make_client(rec, max_response_bytes=8 * 1024 * 1024),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=5 / 60,
+            now=NOMINAL,
+            overlays=overlays,
+            sleep=lambda _s: None,
+            limit=2,
+        )
+
+    assert report.fetched == 1
+    assert list((tmp_path / "ov" / "obs").glob("*.png")), "the analysis frame must be rendered"
+    assert not list((tmp_path / "ov" / "fc").rglob("*.png")), "no forecast frame should be"
+
+
+def test_live_ingest_still_renders_the_forecast(wet_cycle, tmp_path):
+    """The newest cycle's forecast is the whole point of the forward half of the slider."""
+    from rainalert.jobs.ingest import render_overlays
+    from rainalert.radar.decoder import read_frames
+    from rainalert.storage import LocalOverlayStore
+
+    overlays = LocalOverlayStore(tmp_path / "ov")
+    frames = read_frames(wet_cycle.read_bytes())
+
+    assert render_overlays(frames, overlays) == len(frames)
+    assert list((tmp_path / "ov" / "fc").rglob("*.png"))

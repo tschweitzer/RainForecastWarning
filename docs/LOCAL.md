@@ -251,7 +251,12 @@ make backfill HOURS=3
 on purpose: strictly one at a time, oldest first, with a jittered 0.3-3 s pause between each, inside
 the same byte budget and behind the same circuit breaker as everything else. A full 48 h fill is
 577 requests, about 300 MB and roughly 20 minutes; `HOURS=12` is 145 requests and five
-minutes. Each fetch is logged with how long it took, so a run that slows down shows you why. It stops and says so if the budget runs out or the breaker
+minutes. Each fetch is logged as `fetch Xs work Ys`, split deliberately: if `fetch` grew, the far
+end or the network did it, and `[N attempts]` says whether we were retried; if `work` grew, this
+machine did. Decoding 25 frames is real CPU, and a burstable VM (`e2-micro`, `e2-small`) runs at
+full speed until its credits are gone and then clamps to a fraction of a core - which looks
+exactly like a step change partway through a run. `grep -c steal /proc/stat` is not it;
+`vmstat 1` and its `st` column is. It stops and says so if the budget runs out or the breaker
 opens, and a cycle DWD no longer keeps is counted and skipped rather than retried.
 
 Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would

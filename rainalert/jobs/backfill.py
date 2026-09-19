@@ -181,6 +181,7 @@ def fetch_missing(
         started = time.monotonic()
         try:
             result = client.fetch_named(name)
+            fetched_at_s = time.monotonic()
         except ArchiveNotFound:
             # Past DWD's ~48 h window, or a cycle they never published. Neither is our problem.
             logger.info("%s is not on the server", name)
@@ -252,23 +253,30 @@ def fetch_missing(
         report.fetched += 1
         report.bytes += len(blob)
 
-        # Per cycle, with the time it took. A backfill runs for the better part of an hour, and
-        # without this it is a silent process you cannot tell from a hung one - and "it feels
-        # like it is getting slower" has no answer but a shrug. A request that waited on a retry
-        # shows up here as seconds instead of tenths.
-        elapsed = time.monotonic() - started
+        # Per cycle, split into waiting on DWD and working locally. A backfill runs for many
+        # minutes, and without this it is a silent process you cannot tell from a hung one.
+        #
+        # The split is what makes "why did it slow down" answerable. If `fetch` grew, the far end
+        # or the network did it - and `attempts` says whether we were retried. If `work` grew,
+        # this machine did: decoding 25 frames and rendering a PNG is real CPU, and a burstable
+        # VM hands out full speed for a while and then clamps to its baseline, which looks
+        # exactly like a step change partway through a run.
+        now_s = time.monotonic()
         logger.info(
-            "%s (%d/%d) %.1f s%s",
+            "%s (%d/%d) fetch %.1fs work %.1fs%s",
             name,
             index + 1,
             len(wanted),
-            elapsed,
-            f", {result.attempts} attempts" if result.attempts > 1 else "",
+            fetched_at_s - started,
+            now_s - fetched_at_s,
+            f" [{result.attempts} attempts]" if result.attempts > 1 else "",
         )
 
         if overlays is not None:
             try:
-                render_overlays(frames, overlays)
+                # Analysis frame only: see render_overlays. This is the difference between one
+                # render per cycle and twenty-five, and on a small VM it is most of the runtime.
+                render_overlays(frames, overlays, observed_only=True)
             except Exception:
                 logger.exception("overlay rendering failed for backfilled cycle %s", stamped)
 
