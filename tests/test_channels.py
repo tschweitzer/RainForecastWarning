@@ -283,3 +283,21 @@ def test_copying_still_offers_something_without_clipboard_permission(client):
     """Clipboard access needs a secure context and permission, and neither is guaranteed."""
     body = client.get("/").text
     assert "selectNodeContents" in body
+
+
+def test_a_rate_limited_signup_is_not_blamed_on_the_input(client, db):
+    """The page said "check your input" for every failure, including the limiter.
+
+    That is the one case where checking the input changes nothing, and following the advice
+    spends the attempts the person did not know they were short of.
+    """
+    body = client.get("/").text
+    assert "response.status === 429" in body
+    assert "an den Eingaben liegt es nicht" in body
+
+    # and the server really does answer 429 rather than something vaguer
+    for _ in range(6):
+        last = client.post(
+            "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
+        )
+    assert last.status_code == 429

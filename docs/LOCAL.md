@@ -361,6 +361,21 @@ For something that should also survive a reboot, cron is the smaller tool:
 ( crontab -l 2>/dev/null; echo "4-59/5 * * * * cd ~/RainForecastWarning && make run-ingest >> var/log/ingest.log 2>&1" ) | crontab -
 ```
 
+### "Das hat nicht geklappt" when the input was fine
+
+Signing up is limited to five attempts an hour per IP (`SUBSCRIBE_LIMIT_PER_HOUR`), which a
+testing session spends quickly. The page now says so rather than blaming the form, and the server
+log shows `429 Too Many Requests`.
+
+The counter lives in `rate_limit_hits`, which `make reset-local` truncates:
+
+```sh
+make reset-local YES=1    # also clears subscribers, alerts and the outbox; keeps radar data
+```
+
+Raising the limit is the wrong fix - it is what stops the endpoint being used to mail-bomb
+someone - but it is a setting, if a long test session needs more room.
+
 ## 7. What "working" looks like
 
 ```sh

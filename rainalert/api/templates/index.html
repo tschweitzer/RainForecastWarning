@@ -119,7 +119,17 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   });
 
   if (!response.ok) {
-    out.textContent = 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+    // One message for every failure told people to check their input even when the input was
+    // fine and the limiter had simply run out - which sends them round the form again, using
+    // up the attempts they did not know they were short of.
+    if (response.status === 429) {
+      out.textContent = 'Zu viele Anmeldeversuche von dieser Verbindung. Bitte in etwa einer '
+        + 'Stunde noch einmal probieren – an den Eingaben liegt es nicht.';
+    } else if (response.status === 422 || response.status === 400) {
+      out.textContent = 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+    } else {
+      out.textContent = 'Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.';
+    }
     return;
   }
   if (channel === 'email') {
