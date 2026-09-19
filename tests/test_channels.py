@@ -263,3 +263,23 @@ def test_the_qr_endpoint_refuses_to_encode_anything_else(client):
 
     for hostile in ("https://evil.example/pay", "javascript:alert(1)", "x" * 600):
         assert client.get("/qr", params={"text": hostile}).status_code == 400
+
+
+def test_the_phone_can_subscribe_without_scanning_its_own_screen(client):
+    """Signing up on the phone you want warned is the normal case, and the QR is useless there.
+
+    Copying the topic is the path that works on every platform regardless of what the app
+    registered as a link handler, so it leads; the QR is folded away for the desktop case.
+    """
+    body = client.get("/").text
+    assert "navigator.clipboard.writeText" in body
+    assert "Kopieren" in body
+    # the QR is behind a disclosure rather than in the way
+    assert "createElement('details')" in body
+    assert "Auf einem anderen Gerät abonnieren" in body
+
+
+def test_copying_still_offers_something_without_clipboard_permission(client):
+    """Clipboard access needs a secure context and permission, and neither is guaranteed."""
+    body = client.get("/").text
+    assert "selectNodeContents" in body

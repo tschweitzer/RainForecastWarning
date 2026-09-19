@@ -8,7 +8,12 @@
   .ntfy-steps .topic { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
                        word-break:break-all; background:var(--code,#0001); padding:.4rem .6rem;
                        border-radius:6px; }
-  .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px; }
+  .ntfy-steps .topic-row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
+  .ntfy-steps .topic { flex:1; min-width:12rem; }
+  .ntfy-steps .alt { font-size:.85rem; color:var(--muted); }
+  .ntfy-steps details { margin:.6rem 0; font-size:.85rem; color:var(--muted); }
+  .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px;
+                    display:block; margin-top:.5rem; }
 </style>
 <h1>Regenwarnung</h1>
 <p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
@@ -122,40 +127,84 @@ document.getElementById('signup').addEventListener('submit', async function (eve
     return;
   }
 
-  // Push: the subscriber has to point their app at the topic before anything can arrive, so the
-  // topic and a way to reach it are the whole of the next step.
+  // Push: nothing can arrive until their app is subscribed to the topic, so getting the topic
+  // into the app *is* the next step. Two ways, deliberately in this order.
+  //
+  // Copying the topic is first because it is the one that always works: every ntfy app has a
+  // "subscribe to topic" field, on every platform, whatever the app did or did not register as
+  // a link handler. Tapping the link is offered second because when it works it is quicker, and
+  // when it does not it lands on ntfy's own page for the topic, which has a subscribe button -
+  // so it is never a dead end, only sometimes a detour.
+  //
+  // The QR is for the other case entirely: signing up on a desktop and subscribing on a phone.
+  // On the phone you are already holding it is useless, so it is folded away rather than shown.
   var data = await response.json();
   out.innerHTML = '';
   var steps = document.createElement('div');
   steps.className = 'ntfy-steps';
 
   var heading = document.createElement('p');
-  heading.innerHTML = '<strong>Noch zwei Schritte.</strong> Dein Thema ist:';
+  heading.innerHTML = '<strong>Noch zwei Schritte.</strong>';
   steps.appendChild(heading);
 
-  var topic = document.createElement('p');
+  var one = document.createElement('p');
+  one.textContent = '1. Dieses Thema in der ntfy-App abonnieren:';
+  steps.appendChild(one);
+
+  var row = document.createElement('div');
+  row.className = 'topic-row';
+
+  var topic = document.createElement('code');
   topic.className = 'topic';
   topic.textContent = data.topic;
-  steps.appendChild(topic);
+  row.appendChild(topic);
+
+  var copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'secondary';
+  copy.textContent = 'Kopieren';
+  copy.addEventListener('click', async function () {
+    try {
+      await navigator.clipboard.writeText(data.topic);
+      copy.textContent = 'Kopiert';
+    } catch (err) {
+      // Clipboard access needs a secure context and permission, and neither is guaranteed.
+      // Selecting the text is a worse experience but it is never nothing.
+      var range = document.createRange();
+      range.selectNodeContents(topic);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+      copy.textContent = 'Markiert – jetzt kopieren';
+    }
+  });
+  row.appendChild(copy);
+  steps.appendChild(row);
 
   var open = document.createElement('p');
+  open.className = 'alt';
   var link = document.createElement('a');
   link.href = data.subscribe_url;
   link.rel = 'noopener';
-  link.textContent = '1. In der ntfy-App abonnieren';
+  link.textContent = 'Oder: Thema direkt öffnen';
   open.appendChild(link);
+  open.appendChild(document.createTextNode(' (öffnet die App, sonst die ntfy-Seite)'));
   steps.appendChild(open);
 
+  var other = document.createElement('details');
+  var summary = document.createElement('summary');
+  summary.textContent = 'Auf einem anderen Gerät abonnieren';
+  other.appendChild(summary);
   var qr = document.createElement('img');
   qr.src = '/qr?text=' + encodeURIComponent(data.subscribe_url);
   qr.alt = 'QR-Code zum Abonnieren';
   qr.className = 'qr';
-  steps.appendChild(qr);
+  other.appendChild(qr);
+  steps.appendChild(other);
 
-  var tap = document.createElement('p');
-  tap.textContent = '2. Wir schicken sofort eine Testnachricht – tippe sie an, dann bist du '
+  var two = document.createElement('p');
+  two.textContent = '2. Wir schicken sofort eine Testnachricht – tippe sie an, dann bist du '
     + 'angemeldet. Kommt nichts an, erreichen dich die Warnungen auch nicht.';
-  steps.appendChild(tap);
+  steps.appendChild(two);
 
   out.appendChild(steps);
 });

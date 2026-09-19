@@ -225,9 +225,19 @@ NOTIFIER=ntfy
 # NTFY_SERVER=https://ntfy.sh      # the default; see the warning below
 ```
 
-Install the ntfy app, sign up on the page with "Push aufs Handy" selected, and it shows you a
-topic and a QR code. Subscribe to the topic, then tap the test notification that arrives - that
-tap is the confirmation, and it replaces opening an inbox. Two taps, no `.eml` decoding.
+Install the ntfy app, sign up with "Push aufs Handy" selected, and the page hands you a topic.
+
+**On the phone you want warned** - the normal case - copy the topic and paste it into the app's
+"subscribe to topic" field. That works on every platform whatever the app registered as a link
+handler. The "Thema direkt öffnen" link is quicker when the app claims it and lands on ntfy's own
+page for the topic when it does not, so it is never a dead end.
+
+**Signing up on a desktop instead?** Open "Auf einem anderen Gerät abonnieren" and scan the QR
+with the phone.
+
+Either way the last step is the same: a test notification arrives, and tapping it confirms the
+subscription. That tap replaces opening an inbox - and if nothing arrives, the warnings would not
+have reached you either, which is the whole point of sending it.
 
 **The public ntfy.sh sees your message text and topic name**, and a rain warning names a place
 and a time. Fine for a throwaway topic during development; self-host it (`NTFY_SERVER`) for
