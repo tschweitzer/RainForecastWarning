@@ -2,7 +2,11 @@
 {% block title %}Regenradar{% endblock %}
 {% block body %}
 <h1>Regenradar</h1>
-<p class="lede">Die letzten 12 Stunden und die nächsten zwei. Ziehen oder abspielen.</p>
+{# The window comes from the server, so this cannot drift from what is actually shown. #}
+<p class="lede">
+  {% if window_hours == 1 %}Die letzte Stunde{% else %}Die letzten {{ window_hours }} Stunden{% endif %}
+  und die nächsten zwei. Ziehen oder abspielen.
+</p>
 
 <div id="banner" class="note" hidden></div>
 <div id="map" style="height:62vh;min-height:320px;border-radius:10px;border:1px solid var(--line)"></div>
@@ -13,6 +17,19 @@
 </div>
 <p id="stamp" class="stamp">…</p>
 <div id="legend" class="legend"></div>
+
+<nav class="range" aria-label="Zeitraum">
+  <span>Zeitraum:</span>
+  {# Plain links, so each range has its own address to share or bookmark, and the picker works
+     with no JavaScript at all. #}
+  {% for choice in choices %}
+    {% if choice == window_hours %}
+      <strong aria-current="true">{{ choice }} h</strong>
+    {% else %}
+      <a href="/map?hours={{ choice }}">{{ choice }} h</a>
+    {% endif %}
+  {% endfor %}
+</nav>
 
 <p style="margin-top:1.5rem"><a href="/">Zur Anmeldung</a></p>
 
@@ -34,6 +51,9 @@
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
            color:#456; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
+  .range { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline;
+           margin-top:1rem; font-size:.85rem; color:var(--muted); }
+  .range strong { color:var(--accent); }
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
@@ -206,11 +226,9 @@
   });
   slider.addEventListener('input', function () { stop(); show(+slider.value); });
 
-  // The full window is two days, which is 577 slider positions - excellent for looking back at
-  // yesterday's storm, poor for landing on a particular minute with a thumb. ?hours=6 narrows it;
-  // the server caps whatever is asked for at its own configured maximum.
-  var asked = new URLSearchParams(location.search).get('hours');
-  var url = '/api/v1/overlays/timeline' + (asked ? '?past_hours=' + encodeURIComponent(asked) : '');
+  // Already resolved and clamped by the server, which also rendered the heading and the range
+  // picker from it - one source for the window rather than three that can disagree.
+  var url = '/api/v1/overlays/timeline?past_hours={{ window_hours }}';
 
   fetch(url).then(function (r) { return r.json(); }).then(function (data) {
     frames = data.frames;

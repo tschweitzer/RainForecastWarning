@@ -455,3 +455,44 @@ def test_a_nonsense_window_does_not_empty_the_map(db, tmp_path):
             result = build_timeline(session, settings, store, asked, now=now)
             observed = [f for f in result["frames"] if f["kind"] == "observed"]
             assert observed, f"past_hours={asked} produced an empty map"
+
+
+def test_the_heading_states_the_window_actually_shown(client):
+    """It said "12 Stunden" while serving 48, because the number was typed into the template."""
+    assert "Die letzten 12 Stunden" in client.get("/map").text
+    assert "Die letzten 6 Stunden" in client.get("/map?hours=6").text
+    assert "Die letzten 48 Stunden" in client.get("/map?hours=48").text
+
+
+def test_the_window_defaults_to_twelve_hours_not_the_maximum(client):
+    """48 h is 577 slider positions. Reachable, but not what you land on."""
+    from rainalert.config import Settings
+
+    s = Settings(database_url="postgresql+psycopg://x", _env_file=None)
+    assert s.timeline_default_hours == 12
+    assert s.timeline_past_hours == 48  # still the ceiling
+
+    body = client.get("/map").text
+    assert "past_hours=12" in body
+
+
+def test_a_rubbish_hours_parameter_still_gives_you_a_map(client):
+    """Declared as an int, FastAPI answers ?hours=abc with a 422 page.
+
+    There is a perfectly good default to fall back to, and nothing here worth an error page.
+    """
+    response = client.get("/map?hours=abc")
+    assert response.status_code == 200
+    assert "Die letzten 12 Stunden" in response.text
+
+
+def test_an_out_of_range_window_is_clamped_not_refused(client):
+    assert "Die letzten 48 Stunden" in client.get("/map?hours=999").text
+    # and the German stays correct at the bottom of the range
+    assert "Die letzte Stunde" in client.get("/map?hours=-3").text
+
+
+def test_the_range_picker_marks_the_current_choice(client):
+    body = client.get("/map?hours=6").text
+    assert '<strong aria-current="true">6 h</strong>' in body
+    assert "/map?hours=12" in body  # the others are plain links, shareable and JS-free

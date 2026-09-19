@@ -397,9 +397,36 @@ def create_app(
             request, "index.html", {"settings": settings, "has_map": overlay_store is not None}
         )
 
+    #: What the range picker at the foot of the map offers. Every one of them is inside what
+    #: DWD retains; the page drops any that exceed the configured maximum rather than showing a
+    #: choice that would be silently clamped.
+    WINDOW_CHOICES = (3, 6, 12, 24, 48)
+
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
-    def rain_map(request: Request) -> HTMLResponse:
-        return TEMPLATES.TemplateResponse(request, "map.html", {"settings": settings})
+    def rain_map(request: Request, hours: str | None = None) -> HTMLResponse:
+        # Resolved here rather than in the page's JavaScript, so the heading states the window
+        # the page is actually showing instead of a number typed into the template - which is
+        # how it came to say "12 Stunden" while serving 48.
+        #
+        # Taken as a string and parsed leniently on purpose. Declared as `int`, FastAPI answers
+        # ?hours=abc with a 422 validation page; a rubbish query parameter should not cost
+        # someone the map when there is a perfectly good default to fall back to.
+        window = settings.timeline_default_hours
+        if hours is not None:
+            try:
+                window = int(hours)
+            except ValueError:
+                window = settings.timeline_default_hours
+        window = min(max(window, 1), settings.timeline_past_hours)
+        return TEMPLATES.TemplateResponse(
+            request,
+            "map.html",
+            {
+                "settings": settings,
+                "window_hours": window,
+                "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
+            },
+        )
 
     @app.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
     def privacy(request: Request) -> HTMLResponse:

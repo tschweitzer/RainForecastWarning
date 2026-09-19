@@ -232,6 +232,26 @@ built around (DESIGN.md §4.3). After an hour or two, `http://localhost:8000/map
 to slide through, and this is also the closest thing to M2's "24 h unattended" criterion that can be
 done without deploying.
 
+### Choosing how far back the map looks
+
+The slider shows the last 12 hours by default. The picker at the foot of `/map` changes that, and
+each choice is a plain link with its own address:
+
+```
+http://localhost:8000/map            12 h, the default
+http://localhost:8000/map?hours=3     3 h
+http://localhost:8000/map?hours=48   48 h, everything DWD retains
+```
+
+Any number of hours works, not only the ones offered: `?hours=5` is fine. Out of range is clamped
+rather than refused, and something that is not a number at all falls back to the default instead
+of showing an error page - it is a map, not a form.
+
+Twelve is the default because 48 h is 577 slider positions, which is excellent for finding
+yesterday's storm and poor for landing on a particular minute with a thumb. The ceiling is
+`TIMELINE_PAST_HOURS` and the default is `TIMELINE_DEFAULT_HOURS`; the picker only offers choices
+that fit inside the ceiling.
+
 ### Filling the timeline you did not run for
 
 One `make run-ingest` captures one five-minute frame, so a timeline you have been feeding by hand

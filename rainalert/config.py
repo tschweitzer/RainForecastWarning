@@ -72,9 +72,13 @@ class Settings(BaseSettings):
     blast_radius_max: int = 25
 
     # --- Map timeline (D-22, §11.1) -----------------------------------------------------------
-    #: The whole window DWD keeps. Anything less is throwing away history that is free to have,
-    #: and anything more is slots that can never be filled.
+    #: The furthest back the map will go for anyone who asks - the whole window DWD keeps.
+    #: Anything more is slots that can never be filled.
     timeline_past_hours: int = DWD_RETENTION_HOURS
+    #: What the map shows when nobody asked for anything. Twelve hours is a slider you can aim:
+    #: 145 positions rather than 577, and it covers "did it rain while I was asleep". The rest
+    #: is a click away and the URL is shareable.
+    timeline_default_hours: int = 12
     #: Beyond this the page shows a "radar data is stale" banner instead of pretending.
     timeline_stale_after_minutes: int = 20
     overlay_dir: str | None = None
