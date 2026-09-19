@@ -174,8 +174,10 @@ def fetch_missing(
     for index, nominal in enumerate(wanted):
         # Never before the first request, always between two. A pause after the last one would
         # only make the command feel slower than it is.
+        waited = 0.0
         if index:
-            sleep(jitter())
+            waited = jitter()
+            sleep(waited)
 
         name = archive_name(nominal)
         started = time.monotonic()
@@ -253,33 +255,6 @@ def fetch_missing(
         report.fetched += 1
         report.bytes += len(blob)
 
-        # Per cycle, split into waiting on DWD and working locally. A backfill runs for many
-        # minutes, and without this it is a silent process you cannot tell from a hung one.
-        #
-        # The split is what makes "why did it slow down" answerable, and the size is what stops
-        # the answer being wrong. An RV archive is 104 KB to 1.35 MB depending on how much rain
-        # there is to compress (DWD_RV_FORMAT.md §1), so a fetch taking four times as long may
-        # simply be four times the bytes. Throughput is the number that tells those apart:
-        # steady MB/s with rising MB is weather, falling MB/s is the far end or the network.
-        #
-        # `work` does not vary with the file size - decode and render both cost what the fixed
-        # 1200x1100 grid costs - so a rising `work` is this machine, most likely a burstable VM
-        # clamping to its baseline once its credits are gone.
-        now_s = time.monotonic()
-        fetch_s = fetched_at_s - started
-        megabytes = len(blob) / 1e6
-        logger.info(
-            "%s (%d/%d) fetch %.1fs work %.1fs %.2fMB %.2fMB/s%s",
-            name,
-            index + 1,
-            len(wanted),
-            fetch_s,
-            now_s - fetched_at_s,
-            megabytes,
-            megabytes / fetch_s if fetch_s > 0 else 0.0,
-            f" [{result.attempts} attempts]" if result.attempts > 1 else "",
-        )
-
         if overlays is not None:
             try:
                 # Analysis frame only: see render_overlays. This is the difference between one
@@ -287,5 +262,32 @@ def fetch_missing(
                 render_overlays(frames, overlays, observed_only=True)
             except Exception:
                 logger.exception("overlay rendering failed for backfilled cycle %s", stamped)
+
+        # Logged last, and deliberately: wait + fetch + work is the whole cycle, so the three
+        # numbers account for the time between one line and the next. An earlier version emitted
+        # this before rendering, which left the most expensive local step outside the number
+        # meant to measure local work - the line looked precise and quietly under-reported.
+        #
+        # What each one means when it grows. `wait` is ours, and only ever the jitter. `fetch` is
+        # the far end or the network, and the size is there because an RV archive runs 104 KB to
+        # 1.35 MB with the weather (DWD_RV_FORMAT.md §1) - so four times the seconds may be four
+        # times the bytes, and only MB/s tells those apart. A `fetch` that stays flat while the
+        # size grows is a fixed per-request cost, which is DNS, connection setup or the server
+        # thinking, not bandwidth. `work` is this machine: decode, validate, store, render.
+        now_s = time.monotonic()
+        fetch_s = fetched_at_s - started
+        megabytes = len(blob) / 1e6
+        logger.info(
+            "%s (%d/%d) wait %.1fs fetch %.1fs work %.1fs %.2fMB %.2fMB/s%s",
+            name,
+            index + 1,
+            len(wanted),
+            waited,
+            fetch_s,
+            now_s - fetched_at_s,
+            megabytes,
+            megabytes / fetch_s if fetch_s > 0 else 0.0,
+            f" [{result.attempts} attempts]" if result.attempts > 1 else "",
+        )
 
     return report

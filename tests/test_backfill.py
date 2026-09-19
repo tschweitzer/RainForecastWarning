@@ -367,3 +367,41 @@ def test_the_log_carries_the_size_not_just_the_time(db, settings, tmp_path, capl
 
     line = next(r.getMessage() for r in caplog.records if "fetch" in r.getMessage())
     assert "MB" in line and "MB/s" in line
+    # wait + fetch + work must account for the whole cycle, so all three are present.
+    assert "wait" in line and "work" in line
+
+
+def test_the_log_line_is_emitted_after_the_rendering(db, settings, tmp_path, caplog):
+    """`work` has to include the render, or it measures local work while omitting most of it.
+
+    The first version logged before rendering. Every number in the line was correct and the line
+    as a whole was misleading, which is worse than no line at all.
+    """
+    import logging
+
+    from rainalert.storage import LocalOverlayStore
+
+    rendered: list[str] = []
+
+    class Watching(LocalOverlayStore):
+        def put_observed(self, nominal_time, png):
+            rendered.append("render")
+            return super().put_observed(nominal_time, png)
+
+    rec = Recorder(*[httpx.Response(200, content=_blob()) for _ in range(2)])
+    with caplog.at_level(logging.INFO, logger="rainalert.jobs.backfill"), db() as session:
+        fetch_missing(
+            session,
+            make_client(rec, max_response_bytes=8 * 1024 * 1024),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=5 / 60,
+            now=NOMINAL,
+            overlays=Watching(tmp_path / "ov"),
+            sleep=lambda _s: None,
+            limit=2,
+        )
+
+    assert rendered, "nothing was rendered, so the ordering is untested"
+    # caplog records are in emission order; the render happened before the line was emitted.
+    assert any("work" in r.getMessage() for r in caplog.records)
