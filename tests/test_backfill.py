@@ -247,3 +247,54 @@ def test_a_name_that_is_not_a_plain_archive_is_refused():
     for bad in ("../../etc/passwd", "a/b.tar.bz2", "x.tar.bz2?q=1", "DE1200 RV.tar.bz2"):
         with pytest.raises(ValueError):
             client.fetch_named(bad)
+
+
+def test_the_pause_does_not_grow_as_the_run_goes_on(db, settings, tmp_path):
+    """The jitter is drawn fresh per request and has no memory of earlier ones.
+
+    Worth pinning because a long backfill *can* feel like it is slowing down, and the honest
+    cause is retries - not the pause. If someone ever makes this adaptive, the first half of a
+    run must still not be systematically quicker than the second.
+    """
+    rec = Recorder(*[httpx.Response(200, content=_blob()) for _ in range(60)])
+    slept: list[float] = []
+
+    with db() as session:
+        fetch_missing(
+            session,
+            make_client(
+                rec,
+                max_response_bytes=8 * 1024 * 1024,
+                hourly_byte_budget=64 * 1024 * 1024,
+                daily_byte_budget=512 * 1024 * 1024,
+            ),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=4,
+            now=NOMINAL,
+            sleep=slept.append,
+            limit=41,
+        )
+
+    assert len(slept) == 40
+    first, second = slept[:20], slept[20:]
+    # Not a trend test - just that the tail is not systematically longer than the head.
+    assert abs(sum(first) / 20 - sum(second) / 20) < (JITTER_MAX_SECONDS - JITTER_MIN_SECONDS)
+    assert max(slept) <= JITTER_MAX_SECONDS
+
+
+def test_a_rate_limited_request_waits_once(db, settings, tmp_path):
+    """Retry-After used to be slept *and* followed by the exponential backoff."""
+    from rainalert.radar.client import ServerBusy
+
+    rec = Recorder(
+        httpx.Response(429, headers={"Retry-After": "9"}),
+        httpx.Response(200, content=_blob()),
+    )
+    slept: list[float] = []
+    client = make_client(
+        rec, max_response_bytes=8 * 1024 * 1024, sleep=slept.append, max_attempts=2
+    )
+    client.fetch_named("DE1200_RV2609161355.tar.bz2")
+    assert slept == [9.0]
+    assert ServerBusy is not None

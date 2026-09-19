@@ -46,8 +46,8 @@ CYCLE_MINUTES = 5
 #: The pause between two backfill downloads, in seconds. Jittered rather than fixed so that two
 #: instances starting together do not walk the archive in lockstep, and so the pattern does not
 #: look like a machine gun with a metronome.
-JITTER_MIN_SECONDS = 1.0
-JITTER_MAX_SECONDS = 7.0
+JITTER_MIN_SECONDS = 0.3
+JITTER_MAX_SECONDS = 3.0
 
 
 @dataclass
@@ -178,6 +178,7 @@ def fetch_missing(
             sleep(jitter())
 
         name = archive_name(nominal)
+        started = time.monotonic()
         try:
             result = client.fetch_named(name)
         except ArchiveNotFound:
@@ -250,6 +251,20 @@ def fetch_missing(
         session.commit()
         report.fetched += 1
         report.bytes += len(blob)
+
+        # Per cycle, with the time it took. A backfill runs for the better part of an hour, and
+        # without this it is a silent process you cannot tell from a hung one - and "it feels
+        # like it is getting slower" has no answer but a shrug. A request that waited on a retry
+        # shows up here as seconds instead of tenths.
+        elapsed = time.monotonic() - started
+        logger.info(
+            "%s (%d/%d) %.1f s%s",
+            name,
+            index + 1,
+            len(wanted),
+            elapsed,
+            f", {result.attempts} attempts" if result.attempts > 1 else "",
+        )
 
         if overlays is not None:
             try:

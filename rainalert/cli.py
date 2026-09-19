@@ -284,8 +284,13 @@ def backfill(args: argparse.Namespace) -> int:
             max_response_bytes=settings.dwd_max_response_bytes,
             hourly_byte_budget=settings.dwd_hourly_byte_budget,
             daily_byte_budget=settings.dwd_daily_byte_budget,
-            max_attempts=settings.dwd_max_attempts,
-            backoff_base_seconds=settings.dwd_backoff_base_seconds,
+            # Gentler retries than live ingest. There, a cycle missed is a cycle gone - the
+            # next one is five minutes away and the moment has passed. Here, a cycle missed is
+            # picked up by the next backfill run any time in the following 48 h, so five
+            # attempts at a 20 s base - up to five minutes of waiting on one archive, while the
+            # run looks like it has hung - buys nothing. One retry, quickly.
+            max_attempts=2,
+            backoff_base_seconds=5.0,
             timeout_seconds=settings.dwd_request_timeout_seconds,
             breaker_threshold=settings.dwd_breaker_threshold,
             breaker_cooldown_seconds=settings.dwd_breaker_cooldown_seconds,

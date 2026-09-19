@@ -61,6 +61,14 @@ class ArchiveNotFound(FetchError):
     """
 
 
+class ServerBusy(FetchError):
+    """429 or 503. Carries the wait the server asked for, when it named one."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class BreakerOpen(FetchError):
     """Too many consecutive failures; not contacting DWD for now."""
 
@@ -197,7 +205,9 @@ class DWDClient:
             except (httpx.HTTPError, FetchError) as exc:
                 last_error = exc
                 if attempt < self.max_attempts:
-                    self._sleep(self._backoff(attempt))
+                    # A server that named a wait knows better than our exponential guess.
+                    asked = getattr(exc, "retry_after", None)
+                    self._sleep(asked if asked is not None else self._backoff(attempt))
                 continue
             self._consecutive_failures = 0
             return result
@@ -211,11 +221,13 @@ class DWDClient:
                 response.close()
                 return FetchResult(None, response.headers.get("etag"), None, True, attempt)
             if response.status_code in (429, 503):
-                retry_after = response.headers.get("retry-after")
+                header = response.headers.get("retry-after")
                 response.close()
-                if retry_after and retry_after.isdigit():
-                    self._sleep(min(float(retry_after), 120.0))
-                raise FetchError(f"server said {response.status_code}")
+                # Carried, not slept on here. Sleeping now *and* letting the retry loop back off
+                # meant a rate-limited request waited for both - up to 120 s plus the exponential
+                # backoff, on every attempt. The caller waits once, for whichever is right.
+                wait = min(float(header), 120.0) if header and header.isdigit() else None
+                raise ServerBusy(f"server said {response.status_code}", wait)
             if response.status_code == 404:
                 response.close()
                 raise ArchiveNotFound(url.rsplit("/", 1)[-1])

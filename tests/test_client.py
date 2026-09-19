@@ -74,7 +74,9 @@ def test_honours_retry_after_on_429():
     )
     with make_client(rec, sleep=slept.append) as client:
         client.fetch_latest()
-    assert 7.0 in slept
+    # Exactly one wait, of the length the server asked for. It used to sleep the Retry-After and
+    # then the exponential backoff on top, so a rate-limited request waited for both.
+    assert slept == [7.0]
 
 
 def test_oversized_declared_response_is_refused_without_reading_it():
