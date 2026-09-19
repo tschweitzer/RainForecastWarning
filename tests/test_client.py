@@ -181,3 +181,16 @@ def test_redirects_are_not_followed():
     with make_client(rec, max_attempts=5) as client, pytest.raises(FetchError, match="302"):
         client.fetch_latest()
     assert all(str(r.url).startswith("https://opendata.dwd.de/") for r in rec.requests)
+
+
+def test_we_do_not_ask_dwd_to_recompress_the_archive():
+    """The payload is a .tar.bz2. Asking for gzip makes the server work to no end.
+
+    httpx sends `Accept-Encoding: gzip, deflate` unless told otherwise, so this is a header we
+    have to remove rather than one we forgot to add - and a backfill repeats it 576 times
+    against a service DWD provides for free.
+    """
+    rec = Recorder(httpx.Response(200, content=BODY))
+    with make_client(rec) as client:
+        client.fetch_latest()
+    assert rec.requests[0].headers["accept-encoding"] == "identity"

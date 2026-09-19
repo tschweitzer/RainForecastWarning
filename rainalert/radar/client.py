@@ -140,7 +140,15 @@ class DWDClient:
         self._consecutive_failures = 0
         self._breaker_until: datetime | None = None
         self._client = httpx.Client(
-            headers={"User-Agent": user_agent},
+            headers={
+                "User-Agent": user_agent,
+                # A .tar.bz2 is already compressed. httpx asks for `gzip, deflate` by default,
+                # which invites the server to spend CPU re-compressing incompressible bytes into
+                # a payload the same size or larger - 576 times over in a backfill, on a service
+                # DWD provides for free (§4.3: do not make them work for nothing). `identity`
+                # says plainly that we want the file as it is on disk.
+                "Accept-Encoding": "identity",
+            },
             timeout=timeout_seconds,
             transport=transport,
             follow_redirects=False,
