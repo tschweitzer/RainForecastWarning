@@ -405,3 +405,29 @@ def test_the_log_line_is_emitted_after_the_rendering(db, settings, tmp_path, cap
     assert rendered, "nothing was rendered, so the ordering is untested"
     # caplog records are in emission order; the render happened before the line was emitted.
     assert any("work" in r.getMessage() for r in caplog.records)
+
+
+def test_ctrl_c_during_the_pause_keeps_what_was_fetched(db, settings, tmp_path):
+    """Interrupting a long run is normal, and it used to land as a traceback through sleep().
+
+    Whatever was already committed stays committed, so the next run continues from there.
+    """
+
+    def interrupt_after_one(_seconds):
+        raise KeyboardInterrupt
+
+    rec = Recorder(*[httpx.Response(200, content=_blob()) for _ in range(5)])
+    with db() as session:
+        report = fetch_missing(
+            session,
+            make_client(rec, max_response_bytes=8 * 1024 * 1024),
+            LocalArchiveStore(tmp_path / "raw"),
+            settings,
+            hours=5 / 60,
+            now=NOMINAL,
+            sleep=interrupt_after_one,
+            limit=2,
+        )
+
+    assert report.halted == "interrupted"
+    assert len(rec.requests) == 1  # it stopped instead of asking for the next one

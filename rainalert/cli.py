@@ -310,6 +310,10 @@ def backfill(args: argparse.Namespace) -> int:
         f"not on the server {report.not_retained}, rejected {report.rejected}, "
         f"{report.bytes / 1e6:.1f} MB"
     )
+    if report.halted == "interrupted":
+        # Everything fetched is committed, so re-running picks up where this left off.
+        print("stopped early; run it again to continue")
+        return 130
     if report.halted:
         print(f"halted early: {report.halted}", file=sys.stderr)
         return 1

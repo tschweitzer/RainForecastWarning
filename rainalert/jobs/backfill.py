@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import random
 import time
 from collections.abc import Callable
@@ -42,6 +43,22 @@ from rainalert.storage import ArchiveStore, OverlayStore
 logger = logging.getLogger(__name__)
 
 CYCLE_MINUTES = 5
+
+
+def _resident_megabytes() -> int:
+    """This process's resident set, or 0 where /proc is not available.
+
+    Reported per cycle because one decoded cycle is 165 MB of arrays - 25 frames of 1200x1100
+    float32 plus their masks - and the machines this runs on are small. Local work collapsing
+    from 2 s to 13 s while the download stays at 0.2 s is what memory pressure looks like from
+    the outside, and a number beats another hypothesis.
+    """
+    try:
+        with open("/proc/self/statm") as handle:
+            return int(handle.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") // (1 << 20)
+    except (OSError, IndexError, ValueError):
+        return 0
+
 
 #: The pause between two backfill downloads, in seconds. Jittered rather than fixed so that two
 #: instances starting together do not walk the archive in lockstep, and so the pattern does not
@@ -176,8 +193,16 @@ def fetch_missing(
         # only make the command feel slower than it is.
         waited = 0.0
         if index:
-            waited = jitter()
-            sleep(waited)
+            try:
+                waited = jitter()
+                sleep(waited)
+            except KeyboardInterrupt:
+                # Ctrl-C during the pause is how anyone stops a run that is going badly, and it
+                # landed as a traceback through sleep(). What was already fetched is committed
+                # and kept; the report says how far it got.
+                logger.info("interrupted after %d cycle(s)", report.fetched)
+                report.halted = "interrupted"
+                break
 
         name = archive_name(nominal)
         started = time.monotonic()
@@ -207,10 +232,13 @@ def fetch_missing(
             continue
 
         try:
+            decode_started = time.monotonic()
             frames = read_frames(blob)
+            decoded_at_s = time.monotonic()
             # The age limit is widened to the window asked for, and only that. Everything else -
             # the future check, the mixed-stamp check, the plausibility band - still applies.
             validate_cycle(frames, settings, now, max_age_hours=hours + 1)
+            validated_at_s = time.monotonic()
         except (RVFormatError, CycleRejected) as exc:
             logger.error("%s rejected: %s", name, exc)
             report.rejected += 1
@@ -252,6 +280,7 @@ def fetch_missing(
             )
         )
         session.commit()
+        stored_at_s = time.monotonic()
         report.fetched += 1
         report.bytes += len(blob)
 
@@ -278,15 +307,21 @@ def fetch_missing(
         fetch_s = fetched_at_s - started
         megabytes = len(blob) / 1e6
         logger.info(
-            "%s (%d/%d) wait %.1fs fetch %.1fs work %.1fs %.2fMB %.2fMB/s%s",
+            "%s (%d/%d) wait %.1fs fetch %.1fs work %.1fs"
+            " [decode %.1f validate %.1f store %.1f render %.1f] %.2fMB %.2fMB/s rss %dMB%s",
             name,
             index + 1,
             len(wanted),
             waited,
             fetch_s,
             now_s - fetched_at_s,
+            decoded_at_s - decode_started,
+            validated_at_s - decoded_at_s,
+            stored_at_s - validated_at_s,
+            now_s - stored_at_s,
             megabytes,
             megabytes / fetch_s if fetch_s > 0 else 0.0,
+            _resident_megabytes(),
             f" [{result.attempts} attempts]" if result.attempts > 1 else "",
         )
 
