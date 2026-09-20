@@ -707,6 +707,14 @@ def create_app(
     def privacy(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(request, "privacy.html", {"settings": settings})
 
+    # The pages' own scripts. Served from 'self', which the CSP already allows, so the shared
+    # geolocation helper does not have to be inlined into three templates and drift between them.
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(Path(__file__).parent / "static")),
+        name="static",
+    )
+
     if settings.overlay_dir:
         # Development convenience. In production the overlays live in GCS behind a CDN, and the
         # raw archives must not share that prefix (SECURITY_REVIEW.md F-9).

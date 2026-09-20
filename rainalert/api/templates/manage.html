@@ -43,6 +43,7 @@
       </div>
     </div>
     <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+    <p id="locate-status" class="hint" role="status"></p>
 
     <label for="threshold">Ab wie viel Regen warnen? (mm pro 5 Minuten)</label>
     <input type="number" id="threshold" step="0.01"
@@ -75,7 +76,6 @@
   .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
   .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
                    font-weight:normal; }
-  .hint { font-size:.85rem; color:var(--muted); margin:.3rem 0 0; }
   .stamp { font-size:.85rem; color:var(--muted); margin:.4rem 0 0;
            font-variant-numeric:tabular-nums; }
   .ok { color:var(--accent); font-weight:600; }
@@ -84,6 +84,7 @@
   .place::before { display:none; }
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // Picking a spot needs a map; showing rain on it needs a configured overlay store.
@@ -283,11 +284,21 @@
     }
   }
 
-  document.getElementById('locate').addEventListener('click', function () {
-    if (!navigator.geolocation) { return; }
-    navigator.geolocation.getCurrentPosition(function (pos) {
-      moveTo(pos.coords.latitude, pos.coords.longitude);
-      if (map) { map.setView([pos.coords.latitude, pos.coords.longitude], 12); }
+  var locateButton = document.getElementById('locate');
+  locateButton.addEventListener('click', function () {
+    RainGeo.locate({
+      onBusy: function (busy) { locateButton.disabled = busy; },
+      onStatus: function (text, kind) {
+        var status = document.getElementById('locate-status');
+        status.textContent = text;
+        status.className = kind === 'error' ? 'hint error' : 'hint';
+      },
+      onFound: function (lat, lon) {
+        moveTo(lat, lon);
+        // 12 rather than 11: having just asked to be found, you want to see the house, and 12
+        // is as far as 1 km radar lets the tile layer go.
+        if (map) { map.setView([lat, lon], 12); }
+      }
     });
   });
 

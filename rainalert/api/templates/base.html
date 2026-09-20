@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Regenwarnung{% endblock %}</title>
 <style>
-  :root { --fg:#16202c; --bg:#fbfcfd; --muted:#5b6b7c; --line:#d8e0e8; --accent:#1f6fb2; }
+  :root { --fg:#16202c; --bg:#fbfcfd; --muted:#5b6b7c; --line:#d8e0e8; --accent:#1f6fb2;
+          --warn:#a3231b; }
   @media (prefers-color-scheme: dark) {
-    :root { --fg:#e6edf3; --bg:#11161c; --muted:#93a3b4; --line:#2a333d; --accent:#6cb6ff; }
+    :root { --fg:#e6edf3; --bg:#11161c; --muted:#93a3b4; --line:#2a333d; --accent:#6cb6ff;
+            --warn:#ff8d82; }
   }
   * { box-sizing: border-box; }
   body { margin:0; padding:0 16px; background:var(--bg); color:var(--fg);
@@ -32,6 +34,10 @@
            font-size:.82rem; color:var(--muted); }
   .note { border-left:3px solid var(--accent); padding:.6rem .9rem; margin:1.25rem 0;
           background:rgba(127,127,127,.07); font-size:.94rem; }
+  /* Used by every page that has a geolocation button, so it lives here rather than in
+     three page styles that would drift. */
+  .hint { font-size:.85rem; color:var(--muted); margin:.3rem 0 0; }
+  .hint.error { color:var(--warn); }
 </style>
 </head>
 <body><main>

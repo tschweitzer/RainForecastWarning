@@ -706,7 +706,7 @@ scale, replaceable later.
 
 Server-rendered Jinja2, no build step, no SPA. Pages:
 
-- **`/` — subscribe.** Leaflet map (basemap only if `MAP_TILE_URL` is set), "use my location" button (browser geolocation),
+- **`/` — subscribe.** Leaflet map (basemap only if `MAP_TILE_URL` is set), "use my location" button (browser geolocation, §11.3),
   draggable marker, email field, consent checkbox with a one-line purpose statement, submit.
   **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
@@ -861,6 +861,43 @@ the fallback is the same graticule-and-cities used by `/map`.
 
 **Saving** is two requests, not one, because a move resets the alert state and a rule change does
 not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
+
+### 11.3 Browser geolocation
+
+One helper, `static/geolocate.js`, used by all three pages that offer to find you. It is a served
+file rather than three inline copies because the interesting part is the error handling, and
+error handling duplicated three times is error handling that will differ three ways.
+
+**Every way the API declines arrives on the error callback**, which is why the first version of
+the subscribe button appeared to do nothing: it passed a success callback and nothing else. The
+helper handles all of them, plus two the API does not report:
+
+| Case | What the person is told |
+|---|---|
+| Insecure origin | needs https or localhost - and says the coordinates can be typed |
+| No API at all | same, without the https advice |
+| `PERMISSION_DENIED` | the browser refused; it can be re-allowed in site settings |
+| `POSITION_UNAVAILABLE` | could not be determined, try again |
+| `TIMEOUT` | took too long, try again |
+| Outside `LAT_RANGE`/`LON_RANGE` | the service only covers Germany |
+
+The last is checked here as well as at the API so that someone abroad is told why, rather than
+having a coordinate filled in for them that the server then refuses.
+
+**The secure-context rule deserves its own note** because it is the one that looks like a bug.
+Over plain http on anything but `localhost`, `navigator.geolocation` still exists - so guarding
+on its presence passes - and the call fails with `PERMISSION_DENIED`, which without care is shown
+as "you declined" to someone who was never asked. The helper checks `isSecureContext` first and
+says what is actually wrong. No page code can do better; the remedy is the origin.
+
+A `timeout` is set for the same family of reasons: with none, the callback may simply never
+arrive - a headless browser with no location provider does exactly that - and the button stays
+disabled forever, which is the original silent failure wearing a different hat.
+
+On `/map` this is an on-map control in the top-left under the zoom buttons, styled as a
+`leaflet-bar` so it looks like what it is. It draws the position as a dot **and an accuracy
+circle**: at 1 km radar scale, "here" and "somewhere within 2 km" look identical, and only one of
+them is true.
 
 ## 12. Notifications
 

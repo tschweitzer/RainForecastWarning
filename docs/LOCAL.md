@@ -266,6 +266,29 @@ Then run `make run-ingest` twice more. If rain is approaching your location you 
 psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_minutes = 120;"
 ```
 
+### "Meinen Standort verwenden" does nothing over http
+
+It is not the button. **Browsers only allow geolocation in a secure context** - https, or
+`localhost`. On `http://<the VM's IP>:8000` the API is still *present*, so a
+`if (!navigator.geolocation)` check passes, and the call then fails with `PERMISSION_DENIED` and
+"Only secure origins are allowed". Measured in Chromium:
+
+| Origin | `isSecureContext` | `getCurrentPosition` |
+|---|---|---|
+| `http://192.0.2.2:8123` | `false` | error 1, "Only secure origins are allowed" |
+| `http://localhost:8123` | `true` | prompts normally |
+
+The pages now say which of those happened instead of failing silently, but the remedy is the
+origin, not the page. The SSH tunnel §5 already recommends is the fix - it makes the origin
+`http://localhost:8000`, which counts as secure:
+
+```sh
+ssh -L 8000:localhost:8000 user@host    # then browse http://localhost:8000
+```
+
+`make serve HOST=0.0.0.0` and browsing the VM's address directly will never have a working
+locate button, no matter what the page does.
+
 ### Changing the settings from the web page
 
 `/manage` is the settings page: threshold, lead time, radius and location, with the location

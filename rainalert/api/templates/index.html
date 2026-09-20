@@ -50,6 +50,7 @@ Vorhersage bis zwei Stunden voraus.</p>
     </div>
   </div>
   <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+  <p id="locate-status" class="hint" role="status"></p>
 
   <div class="consent">
     <input type="checkbox" id="consent" required>
@@ -73,14 +74,27 @@ Vorhersage bis zwei Stunden voraus.</p>
 zwei Stunden voraus)</p>
 {% endif %}
 
+<script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
-document.getElementById('locate').addEventListener('click', function () {
-  if (!navigator.geolocation) { return; }
-  navigator.geolocation.getCurrentPosition(function (pos) {
-    document.getElementById('lat').value = pos.coords.latitude.toFixed(4);
-    document.getElementById('lon').value = pos.coords.longitude.toFixed(4);
+(function () {
+  var button = document.getElementById('locate');
+  var status = document.getElementById('locate-status');
+  button.addEventListener('click', function () {
+    RainGeo.locate({
+      onBusy: function (busy) { button.disabled = busy; },
+      onStatus: function (text, kind) {
+        status.textContent = text;
+        status.className = kind === 'error' ? 'hint error' : 'hint';
+      },
+      onFound: function (lat, lon) {
+        // Four decimals because that is what the server keeps; showing seven would change
+        // under them on submit.
+        document.getElementById('lat').value = lat.toFixed(4);
+        document.getElementById('lon').value = lon.toFixed(4);
+      }
+    });
   });
-});
+})();
 function chosenChannel() {
   var picked = document.querySelector('input[name=channel]:checked');
   return picked ? picked.value : 'ntfy';
