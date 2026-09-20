@@ -355,11 +355,38 @@ prints the tail of the log rather than leaving a pid file that claims otherwise.
 `INGEST_INTERVAL=60 make ingest-loop-bg` shortens the loop for a quick test; DWD publishes every
 five minutes, so anything below 300 fetches nothing new and just re-asks.
 
-For something that should also survive a reboot, cron is the smaller tool:
+For something that should also survive a reboot, cron is the smaller tool. Install the line, and
+give it a marker comment so it can be found again later:
 
 ```sh
-( crontab -l 2>/dev/null; echo "4-59/5 * * * * cd ~/RainForecastWarning && make run-ingest >> var/log/ingest.log 2>&1" ) | crontab -
+( crontab -l 2>/dev/null; echo '4-59/5 * * * * cd ~/RainForecastWarning && make run-ingest >> var/log/ingest.log 2>&1  # rainalert-ingest' ) | crontab -
 ```
+
+`4-59/5` and not `*/5` on purpose: DWD publishes a cycle three to five minutes after its nominal
+time, so a job on the exact five-minute mark asks for a file that is not there yet.
+
+Check what is installed, and stop it again:
+
+```sh
+crontab -l                                        # what cron will run
+crontab -l | grep -v rainalert-ingest | crontab -  # remove our line, keep the rest
+```
+
+The removal is a filter, not a delete: it rewrites the crontab without the marked line and leaves
+every other entry alone. Running it twice is harmless. `crontab -e` opens the same file in an
+editor if you would rather see what you are removing.
+
+If the line was installed before it carried a marker, `grep -v` on the marker will not find it -
+filter on `run-ingest` instead, after checking with `crontab -l` that nothing else of yours
+mentions it.
+
+Do **not** reach for `crontab -r`. It removes *every* cron job this user has, ours and yours
+alike, without asking.
+
+Removing the line stops cron from starting new runs; it does not kill a cycle that is running
+right now. `make status` shows nothing for cron jobs - it only knows about the `-bg` targets -
+so use `pgrep -af "rainalert.cli ingest"` to see whether one is still in flight. Each run is a
+single cycle and exits on its own within a minute or so.
 
 ### "Das hat nicht geklappt" when the input was fine
 
