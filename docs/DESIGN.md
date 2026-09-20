@@ -702,7 +702,9 @@ Server-rendered Jinja2, no build step, no SPA. Pages:
   **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
   the app later"), and the manage link.
-- **`/manage`** — current location on the map, rule values (read-only in v1), pause/resume, delete.
+- **`/manage`** — *not built yet.* Planned: current location on the map, rule values
+  (read-only in v1), pause/resume, delete. Until it exists, moving a subscription is
+  `PUT /subscriptions/me/location` with the API token (LOCAL.md §5).
 - **`/unsubscribe`** — confirmation of one-click unsubscribe.
 - **`/privacy`**, **`/attribution`** — §4.2 and §13.
 
@@ -1106,7 +1108,8 @@ untouched → POST activates → API token works → unsubscribe deletes everyth
 SPF/DKIM/DMARC. Until then the flow is exercised with the `file` notifier.
 *Deliberately deferred:* the map picker is M5, so the subscribe form takes coordinates with a
 browser-geolocation button; rule parameters exist as columns and API fields but are not in the UI
-(D-14); `PATCH /subscriptions/me` and pause/resume are not implemented yet.
+(D-14); `PATCH /subscriptions/me` and pause/resume are not implemented yet, and neither is the
+`/manage` page - changing a location is an API call until it is.
 
 **Delivery is configuration, not code (Q-4).** Every provider worth using — Brevo, Mailgun,
 SendGrid, Postmark, SES, or an ordinary mailbox — speaks SMTP, so the SMTP adapter covers all of

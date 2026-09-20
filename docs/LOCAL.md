@@ -266,6 +266,61 @@ Then run `make run-ingest` twice more. If rain is approaching your location you 
 psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_minutes = 120;"
 ```
 
+### Moving an existing subscription somewhere else
+
+One subscriber has exactly one location, and it is overwritten in place rather than appended to
+(D-16) - there is no location history to accumulate. Changing it is an API call, not a page:
+there is no `/manage` UI in v1, so the subscribe form is for new subscriptions only and filling
+it in again with different coordinates creates a second subscription instead of moving the first.
+
+The call needs the **access key** (`Zugangsschlüssel`) that `/confirm` showed once after the
+subscription was activated:
+
+```sh
+TOKEN=<the key from the confirmation page>
+BASE=http://127.0.0.1:8000
+
+# where it thinks you are now
+curl -s $BASE/api/v1/subscriptions/me -H "Authorization: Bearer $TOKEN"
+
+# move it - 204, no body
+curl -s -X PUT $BASE/api/v1/subscriptions/me/location \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"lat": 53.5511, "lon": 9.9937}' -w 'HTTP %{http_code}\n'
+```
+
+`GET /api/v1/subscriptions/me` is the way to check it took: it returns the stored `lat`/`lon` and
+`location_updated_at` alongside the rule values. Expect the coordinates to come back with **four
+decimals** - roughly 11 m, and all a 1 km radar cell can justify keeping, so they are rounded at
+the API edge rather than refused (DESIGN.md §13). The subscribe form applies the same rule.
+
+What the move does besides changing two numbers: the cached grid cell is dropped, and the next
+dispatcher run sees a `location_updated_at` newer than the state it has and resets that state to
+`UNKNOWN` (D-17). That reset is the point. Without it, moving into rain that is already falling
+would produce a "rain is starting" warning for rain you are already standing in.
+
+Limits and failure modes:
+
+- `401` - the key is wrong, or the subscription was deleted. There is no "wrong password" vs
+  "no such account" distinction on purpose.
+- `422` - the coordinates are not coordinates, or extra fields were sent. Only `lat` and `lon`
+  are accepted.
+- `429` - 60 updates an hour per IP (`LOCATION_LIMIT_PER_HOUR`). A phone reporting its position
+  will not notice; a loop will.
+
+**If the access key is lost, there is no way to get it back.** It is stored hashed and displayed
+exactly once, and nothing re-issues it - so for a real subscription the answer is to unsubscribe
+and sign up again. While developing, go around the API instead:
+
+```sh
+psql rainalert -c "update subscriptions set lat = 53.5511, lon = 9.9937,
+  location_updated_at = now(), grid_row = null, grid_col = null;"
+```
+
+Both of the last two columns matter. `location_updated_at` is what triggers the D-17 reset, and
+`grid_row`/`grid_col` cache the radar cell the old coordinates resolved to - leave them and the
+subscription keeps being evaluated against where it used to be.
+
 ## 6. Let it run
 
 ```sh
