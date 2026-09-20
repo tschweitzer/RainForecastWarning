@@ -82,6 +82,11 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-22 | The slider spans **−12 h … +2 h by default, −48 h … +2 h at most** — the ceiling is everything DWD retains (measured: 47 h 55 min, `DWD_RV_FORMAT.md` §3). Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast. Revised twice: to −48 h on 2026-09-18 because a shorter window discards history that is free to have, then split into a default and a ceiling on 2026-09-19 because 577 slider positions is a poor thing to land on. `/map?hours=N` and the picker at the foot of the page move between them; the heading is rendered from the resolved window, having once said 12 h while serving 48 |
 | D-23 | `evaluations` is a **rolling 48 h debug log** with a single TTL. The permanent per-subscriber record is `rain_events` + `notifications`, which are only written when something happens anyway | §8.1 — an indefinite row-per-subscriber-per-cycle series outgrows the entire national radar archive at ~13 500 subscribers, and ~99 % of it says "nothing happened" |
 | D-24 | Production database is **Cloud SQL `db-f1-micro`, `europe-west3`**; dev and CI use Neon free or a local Postgres | §6.3 — Neon's free CU-hour allowance does not survive a 5-minute cadence, and it would add a second US processor for email + home coordinates |
+| D-25 | The settings page is reached by a **magic link**: one-use, 15 minutes, redeemed for a signed session cookie lasting 30 minutes | Answers the question F-16 left open. The API token cannot be the way in - it is shown once and is normally lost - and a permanent link in every alert would be a bearer credential to someone's home coordinates living in an inbox. A link that expires and is spent on first use is neither |
+| D-26 | The magic link carries its token in the **URL fragment**, never the query string | A fragment is not sent to the server, so it cannot reach a request log, a proxy history or a `Referer` - which is exactly the leak F-4/F-8 describe for `?token=`. `/confirm` and `/unsubscribe` should migrate to this shape |
+| D-27 | A cookie-authenticated **write** additionally requires a CSRF value that was rendered into the page and is echoed in a custom header; a bearer-authenticated write does not | A cookie is attached by the browser to any request, including one another site caused; a bearer token has to be attached by script that already read the page, which the same-origin policy denies cross-site. The two credentials need different protection, not the same (F-16) |
+| D-28 | Rule bounds: threshold **0.01 … 40.0 mm/5 min**, lead **5 … 120 min in steps of 5**, radius **0 … 20 000 m** | Both threshold ends come from the data rather than taste: 0.01 is RV's own quantum (`PR E-02`, and the floor of `numeric(5,2)`), and above `plausibility_max_mm_5min` a cycle is rejected at ingest so a higher threshold could never fire. F-15 also proposed capping lead at 60; **not taken** - the full forecast is what the product carries, and see F-15's own note on what that leaves open |
+| D-29 | Changing the rule does **not** reset the alert state; only a location change does (D-17) | The state describes a place, so moving invalidates it. A threshold describes what to do with what is already known - and resetting on every adjustment would let someone being rained on re-arm their own "rain is starting" warning by nudging a number |
 
 ---
 
@@ -678,7 +683,11 @@ All endpoints return RFC 7807 problem details on error.
 | `GET` | `/confirm?token=…` | confirm token | Activates the subscription, issues the long-lived `api` token, renders it once on the manage page. Single use, 24 h expiry. |
 | `GET` | `/subscriptions/me` | api | Current location + rule + state + last evaluation. |
 | `PUT` | `/subscriptions/me/location` | api | `{lat, lon}` → `204`. The endpoint the future mobile app calls. Applies D-17. Rate limited to 1 per 60 s. |
-| `PATCH` | `/subscriptions/me` | api | Update rule fields (`radius_m`, `threshold_mm_5min`, `lead_time_minutes`, `min_gap_minutes`, quiet hours, `timezone`). Present in v1 API, not yet exposed in the v1 UI. |
+| `PATCH` | `/subscriptions/me` | api or session | Update `radius_m`, `threshold_mm_5min`, `lead_time_minutes`. Absent fields are left alone. Bounds in §11.2. `min_gap_minutes`, quiet hours and `timezone` are still columns only. |
+| `POST` | `/manage/link` | none | Ask for a settings link on a confirmed channel. Always `202`, known address or not. Rate limited to 5/hour. |
+| `POST` | `/manage/session` | manage token | Spend the one-use link, set the session cookie, return the CSRF value. |
+| `GET` | `/manage/csrf` | session | A fresh CSRF value for a session already held, so a page reload does not cost an email. |
+| `POST` | `/manage/logout` | none | Clears the cookie on this device. |
 | `POST` | `/subscriptions/me/pause` / `/resume` | api | Temporarily stop alerts without deleting data. |
 | `DELETE` | `/subscriptions/me` | api | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
 | `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
@@ -702,9 +711,10 @@ Server-rendered Jinja2, no build step, no SPA. Pages:
   **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
   the app later"), and the manage link.
-- **`/manage`** — *not built yet.* Planned: current location on the map, rule values
-  (read-only in v1), pause/resume, delete. Until it exists, moving a subscription is
-  `PUT /subscriptions/me/location` with the API token (LOCAL.md §5).
+- **`/manage` — settings.** Threshold, lead time, radius and location, the last pickable on a
+  map centred on the stored point at zoom 11, with the radius drawn as a circle and the current
+  radar frame underneath. Reached by a magic link, not by the API token (§11.2). Pause/resume
+  and delete are still not built.
 - **`/unsubscribe`** — confirmation of one-click unsubscribe.
 - **`/privacy`**, **`/attribution`** — §4.2 and §13.
 
@@ -804,6 +814,53 @@ policy can never be broader than the provider in use, and names no origin at all
 Choosing a provider (**Q-5**) is now a deployment decision with no code in it.
 
 ---
+
+### 11.2 Settings page (`/manage`)
+
+Self-service, for the subscriber themselves. There is no admin view: nothing in this service
+needs to read someone else's coordinates, and building a page that can is a GDPR liability
+before it is a feature.
+
+**Getting in.** The page has no idea who you are when it renders - the token is in the fragment,
+so the request that fetched the page did not carry it. It asks. Three states, decided in the
+browser:
+
+1. No token, no session: a form asking which channel you signed up with.
+2. A token in `#t=`: it is POSTed to `/manage/session`, spent, and replaced by a cookie. The
+   fragment is erased with `replaceState` so Back does not return to a URL holding a spent token.
+3. A session: the settings form.
+
+`POST /manage/link` answers `202` whether or not the address is known, and sends nothing to an
+**unconfirmed** subscriber - confirmation is what proves the channel reaches the person, and a
+settings link is not the place to take that on trust.
+
+**What can be changed, and the bounds** (D-28):
+
+| Field | Range | Where the number comes from |
+|---|---|---|
+| `threshold_mm_5min` | 0.01 – 40.0 | RV's quantum (`PR E-02`) to `plausibility_max_mm_5min` |
+| `lead_time_minutes` | 5 – 120, step 5 | every lead RV carries; `rules.py` walks them in fives |
+| `radius_m` | 0 – 20 000 | the `radius_sane` CHECK; under ~500 m it is one grid cell |
+
+Each bound also exists as a CHECK constraint. The constraint is the guarantee; the validation is
+so that a number someone typed becomes a sentence they can read, rather than an `IntegrityError`
+and a 500. The `numeric(5,2)` column makes that concrete: `0.001` rounds to `0.00` in the column
+and then fails `threshold_positive`, so the edge rounds and compares before the database sees it.
+
+**The map.** Centred on the stored location at zoom 11 - roughly 40 km across, enough to see
+which town you are in and to judge a radius of a few kilometres, and inside the `maxZoom: 12`
+that 1 km radar justifies. A draggable marker and a click handler both write the coordinate
+fields, rounded to the four decimals the server keeps so the field shows what will be stored.
+The radius is a circle that resizes as the number changes. The current radar frame (t+0 only -
+this page is for choosing a spot, `/map` is for watching weather) is drawn underneath everything
+else, because an overlay on top hides the thing being positioned.
+
+Picking a spot and showing rain on it are separate capabilities: with no `OVERLAY_DIR` the map
+still works, it just has no radar on it. With no `MAP_TILE_URL` there is no basemap either, and
+the fallback is the same graticule-and-cities used by `/map`.
+
+**Saving** is two requests, not one, because a move resets the alert state and a rule change does
+not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
 
 ## 12. Notifications
 

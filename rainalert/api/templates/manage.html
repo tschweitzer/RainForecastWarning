@@ -1,0 +1,390 @@
+{% extends "base.html" %}
+{% block title %}Einstellungen{% endblock %}
+{% block body %}
+<h1>Einstellungen</h1>
+
+{# Three states, one page: asking for a link, redeeming one from the fragment, and the form.
+   Which one is shown is decided in the browser, because the token lives in the URL fragment and
+   the server never sees it. #}
+<div id="gate">
+  <p class="lede">Wir schicken dir einen Link auf den Kanal, mit dem du angemeldet bist.</p>
+  <form id="link-form">
+    <fieldset class="channel">
+      <legend>Wie bist du angemeldet?</legend>
+      <label><input type="radio" name="channel" value="ntfy" checked> Push (ntfy)</label>
+      <label><input type="radio" name="channel" value="email"> E-Mail</label>
+    </fieldset>
+    <label for="address"><span id="address-label">ntfy-Thema</span></label>
+    <input type="text" id="address" name="address" required autocomplete="off"
+           placeholder="rainalert-…">
+    <button type="submit">Link schicken</button>
+  </form>
+  <p id="gate-result" role="status"></p>
+</div>
+
+<div id="panel" hidden>
+  <p class="lede" id="who"></p>
+  <div id="panel-banner" class="note" hidden></div>
+
+  <div id="map" style="height:46vh;min-height:280px;border-radius:10px;border:1px solid var(--line)"></div>
+  <p class="hint" id="map-hint">Tippe oder klicke in die Karte, um den Ort zu setzen. Der Kreis
+    zeigt den Umkreis, der ausgewertet wird.</p>
+  <p class="stamp" id="frame-stamp"></p>
+
+  <form id="settings-form">
+    <div class="row">
+      <div>
+        <label for="lat">Breite</label>
+        <input type="number" id="lat" step="any" min="47" max="56" required>
+      </div>
+      <div>
+        <label for="lon">Länge</label>
+        <input type="number" id="lon" step="any" min="5" max="16" required>
+      </div>
+    </div>
+    <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+
+    <label for="threshold">Ab wie viel Regen warnen? (mm pro 5 Minuten)</label>
+    <input type="number" id="threshold" step="0.01"
+           min="{{ bounds.threshold_min }}" max="{{ bounds.threshold_max }}" required>
+    <p class="hint">{{ bounds.threshold_min }} ist der kleinste Wert, den das Radar unterscheidet.
+      0,1 entspricht etwa 1,2 mm pro Stunde – „man wird nass“.</p>
+
+    <label for="lead">Wie weit voraus schauen? (Minuten)</label>
+    <input type="number" id="lead" step="{{ bounds.lead_step }}"
+           min="{{ bounds.lead_min }}" max="{{ bounds.lead_max }}" required>
+    <p class="hint">Je weiter voraus, desto mehr Vorwarnzeit – und desto mehr Fehlalarme. Die
+      Vorhersage reicht {{ bounds.lead_max }} Minuten.</p>
+
+    <label for="radius">Umkreis (Meter)</label>
+    <input type="number" id="radius" step="100" min="0" max="{{ bounds.radius_max }}" required>
+    <p class="hint">Das Radar hat 1 km Auflösung, unter etwa 500 m ist es immer dieselbe Zelle.</p>
+
+    <button type="submit">Speichern</button>
+    <button type="button" class="secondary" id="logout">Abmelden (nur dieses Gerät)</button>
+  </form>
+  <p id="panel-result" role="status"></p>
+</div>
+
+<p style="margin-top:1.5rem"><a href="/">Zur Anmeldung</a>{% if has_map %} ·
+  <a href="/map">Regenradar</a>{% endif %}</p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
+  .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
+  .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
+                   font-weight:normal; }
+  .hint { font-size:.85rem; color:var(--muted); margin:.3rem 0 0; }
+  .stamp { font-size:.85rem; color:var(--muted); margin:.4rem 0 0;
+           font-variant-numeric:tabular-nums; }
+  .ok { color:var(--accent); font-weight:600; }
+  .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
+           color:#456; font-size:.68rem; font-weight:600; }
+  .place::before { display:none; }
+</style>
+<script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  // Picking a spot needs a map; showing rain on it needs a configured overlay store.
+  // They are separate: a fresh install with no radar yet must still be able to move.
+  var HAS_OVERLAY = {{ (has_map | default(false)) | tojson }};
+  var csrf = null;               // set when a session opens; required on every write
+  var current = null;            // the last state the server confirmed
+  var map = null, marker = null, ring = null, overlay = null;
+
+  var gate = document.getElementById('gate');
+  var panel = document.getElementById('panel');
+  var gateResult = document.getElementById('gate-result');
+  var panelResult = document.getElementById('panel-result');
+
+  function channel() {
+    var picked = document.querySelector('input[name=channel]:checked');
+    return picked ? picked.value : 'ntfy';
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=channel]'), function (r) {
+    r.addEventListener('change', function () {
+      var email = channel() === 'email';
+      document.getElementById('address-label').textContent = email ? 'E-Mail' : 'ntfy-Thema';
+      document.getElementById('address').type = email ? 'email' : 'text';
+      document.getElementById('address').placeholder = email ? 'du@example.org' : 'rainalert-…';
+    });
+  });
+
+  // ---- asking for a link ------------------------------------------------------------------
+  document.getElementById('link-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    gateResult.textContent = 'Wird gesendet …';
+    var response = await fetch('/api/v1/manage/link', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({channel: channel(), address: document.getElementById('address').value})
+    });
+    if (response.status === 429) {
+      gateResult.textContent = 'Zu viele Anfragen von dieser Verbindung. Bitte in etwa einer '
+        + 'Stunde noch einmal probieren – an den Eingaben liegt es nicht.';
+      return;
+    }
+    if (!response.ok) {
+      gateResult.textContent = 'Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal.';
+      return;
+    }
+    // Says the same thing whether or not the address is known, because the server answers the
+    // same way: anything else here would tell a stranger who has signed up.
+    gateResult.textContent = 'Wenn dieser Kanal angemeldet ist, ist der Link unterwegs. '
+      + 'Er gilt {{ settings.manage_link_ttl_minutes }} Minuten und nur einmal.';
+  });
+
+  // ---- redeeming one ----------------------------------------------------------------------
+  async function redeem(token) {
+    var body = new URLSearchParams();
+    body.set('token', token);
+    var response = await fetch('/api/v1/manage/session', {method: 'POST', body: body});
+    if (!response.ok) {
+      gateResult.textContent = 'Dieser Link gilt nicht mehr – er läuft nach '
+        + '{{ settings.manage_link_ttl_minutes }} Minuten ab und kann nur einmal benutzt werden. '
+        + 'Fordere einfach einen neuen an.';
+      return false;
+    }
+    csrf = (await response.json()).csrf;
+    return true;
+  }
+
+  async function load() {
+    var response = await fetch('/api/v1/subscriptions/me');
+    if (!response.ok) { return false; }
+    current = await response.json();
+    return true;
+  }
+
+  function fill() {
+    document.getElementById('lat').value = current.lat;
+    document.getElementById('lon').value = current.lon;
+    document.getElementById('threshold').value = current.threshold_mm_5min;
+    document.getElementById('lead').value = current.lead_time_minutes;
+    document.getElementById('radius').value = current.radius_m;
+
+    var where = current.channel === 'email' ? current.address : 'Push-Thema ' + current.address;
+    var state = {
+      active: 'aktiv', pending: 'noch nicht bestätigt',
+      unhealthy: 'gestört', paused: 'pausiert'
+    }[current.status] || current.status;
+    document.getElementById('who').textContent = where + ' · ' + state;
+
+    // A pending subscription is not being evaluated at all, so saying nothing here would let
+    // someone tune a rule that cannot fire.
+    if (current.status === 'pending') {
+      var banner = document.getElementById('panel-banner');
+      banner.hidden = false;
+      banner.textContent = 'Diese Anmeldung ist noch nicht bestätigt – es werden noch keine '
+        + 'Warnungen verschickt.';
+    }
+    if (current.health_note) {
+      var note = document.getElementById('panel-banner');
+      note.hidden = false;
+      note.textContent = current.health_note;
+    }
+  }
+
+  // ---- the map ----------------------------------------------------------------------------
+  function drawAt(lat, lon) {
+    if (!map) { return; }
+    marker.setLatLng([lat, lon]);
+    ring.setLatLng([lat, lon]);
+  }
+
+  function setRadius() {
+    if (ring) { ring.setRadius(Math.max(+document.getElementById('radius').value || 0, 50)); }
+  }
+
+  function moveTo(lat, lon) {
+    // Rounded to the four decimals the server keeps, so the field shows what will be stored
+    // rather than a number that changes on save.
+    document.getElementById('lat').value = lat.toFixed(4);
+    document.getElementById('lon').value = lon.toFixed(4);
+    drawAt(lat, lon);
+  }
+
+  function buildMap() {
+    if (typeof L === 'undefined') {
+      // Leaflet comes from a CDN, so this is a blocked or failed load rather than a setting.
+      // The number fields are still there and still work; say so instead of showing a hole.
+      document.getElementById('map').hidden = true;
+      document.getElementById('map-hint').textContent =
+        'Die Karte konnte nicht geladen werden – Koordinaten bitte eintippen.';
+      return;
+    }
+    var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
+    // Zoom 11 is about 40 km across: enough to see which town you are in and to judge a radius
+    // of a few kilometres, and within the maxZoom 12 that 1 km radar justifies.
+    map = L.map('map').setView([current.lat, current.lon], 11);
+    if (TILE_URL) {
+      L.tileLayer(TILE_URL, {
+        maxZoom: 12,
+        attribution: {{ (settings.map_tile_attribution or '')|tojson }},
+        referrerPolicy: 'strict-origin-when-cross-origin'
+      }).addTo(map);
+    } else {
+      cities();
+    }
+
+    ring = L.circle([current.lat, current.lon], {
+      radius: Math.max(current.radius_m, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.08,
+      interactive: false
+    }).addTo(map);
+    marker = L.marker([current.lat, current.lon], {draggable: true}).addTo(map);
+    marker.on('dragend', function () {
+      var at = marker.getLatLng();
+      moveTo(at.lat, at.lng);
+    });
+    map.on('click', function (event) { moveTo(event.latlng.lat, event.latlng.lng); });
+    document.getElementById('radius').addEventListener('input', setRadius);
+    if (HAS_OVERLAY) { rainOverlay(); }
+  }
+
+  function cities() {
+    // Without a tile provider there is no basemap at all, so the radar and the marker would sit
+    // on an empty rectangle. A handful of places is the minimum needed to aim.
+    var places = [
+      ['Hamburg', 53.551, 9.994], ['Berlin', 52.520, 13.405], ['Hannover', 52.376, 9.732],
+      ['Dortmund', 51.514, 7.466], ['Leipzig', 51.340, 12.375], ['Koeln', 50.938, 6.960],
+      ['Dresden', 51.051, 13.739], ['Frankfurt', 50.110, 8.682], ['Nuernberg', 49.452, 11.077],
+      ['Stuttgart', 48.776, 9.183], ['Muenchen', 48.135, 11.582], ['Bremen', 53.079, 8.802],
+      ['Rostock', 54.093, 12.131], ['Freiburg', 47.999, 7.842]
+    ];
+    places.forEach(function (p) {
+      L.circleMarker([p[1], p[2]], {
+        radius: 2.5, color: '#456', weight: 1, fillOpacity: 1, interactive: false
+      }).addTo(map).bindTooltip(p[0], {permanent: true, direction: 'right', className: 'place'});
+    });
+  }
+
+  async function rainOverlay() {
+    // The current frame only - this page is for choosing a spot, not for watching the weather,
+    // and /map is one link away for that.
+    try {
+      var response = await fetch('/api/v1/overlays/timeline?past_hours=1');
+      if (!response.ok) { return; }
+      var data = await response.json();
+      var frames = data.frames || [];
+      var now = frames.filter(function (f) { return f.offset_minutes === 0; })[0];
+      if (!now || !data.bounds) { return; }
+      overlay = L.imageOverlay(now.url, data.bounds, {opacity: 0.6}).addTo(map);
+      // Under the marker, or the radar hides the thing being positioned.
+      overlay.bringToBack();
+      var when = new Date(now.valid_time);
+      document.getElementById('frame-stamp').textContent = 'Radar: '
+        + when.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'}) + ' Uhr'
+        + (data.stale ? ' (veraltet)' : '');
+    } catch (err) {
+      // No radar yet is a perfectly normal state for a fresh install, and it must not stop
+      // someone from changing their settings.
+      void err;
+    }
+  }
+
+  document.getElementById('locate').addEventListener('click', function () {
+    if (!navigator.geolocation) { return; }
+    navigator.geolocation.getCurrentPosition(function (pos) {
+      moveTo(pos.coords.latitude, pos.coords.longitude);
+      if (map) { map.setView([pos.coords.latitude, pos.coords.longitude], 12); }
+    });
+  });
+
+  // ---- saving ------------------------------------------------------------------------------
+  async function send(method, url, body) {
+    return fetch(url, {
+      method: method,
+      headers: {'Content-Type': 'application/json', 'X-Rain-CSRF': csrf},
+      body: JSON.stringify(body)
+    });
+  }
+
+  function explain(response) {
+    if (response.status === 401 || response.status === 403) {
+      return 'Die Sitzung ist abgelaufen. Bitte fordere einen neuen Link an.';
+    }
+    if (response.status === 429) {
+      return 'Zu viele Änderungen in kurzer Zeit. Bitte etwas später noch einmal.';
+    }
+    if (response.status === 422) {
+      return 'Diese Werte gehen nicht. Bitte prüfe die Eingaben.';
+    }
+    return 'Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.';
+  }
+
+  document.getElementById('settings-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    panelResult.textContent = 'Wird gespeichert …';
+
+    var lat = parseFloat(document.getElementById('lat').value);
+    var lon = parseFloat(document.getElementById('lon').value);
+    var moved = lat !== current.lat || lon !== current.lon;
+
+    // Two requests, because they are two different changes with two different consequences: a
+    // move resets the alert state (D-17), a rule change does not. Sent rule-first so that a
+    // refused rule does not leave the location already moved.
+    var rule = await send('PATCH', '/api/v1/subscriptions/me', {
+      threshold_mm_5min: parseFloat(document.getElementById('threshold').value),
+      lead_time_minutes: parseInt(document.getElementById('lead').value, 10),
+      radius_m: parseInt(document.getElementById('radius').value, 10)
+    });
+    if (!rule.ok) { panelResult.textContent = explain(rule); return; }
+
+    if (moved) {
+      var where = await send('PUT', '/api/v1/subscriptions/me/location', {lat: lat, lon: lon});
+      if (!where.ok) {
+        panelResult.innerHTML = '<span>Die Einstellungen wurden gespeichert, der Ort nicht: '
+          + explain(where) + '</span>';
+        await load();
+        fill();
+        return;
+      }
+    }
+
+    await load();
+    fill();
+    setRadius();
+    drawAt(current.lat, current.lon);
+    panelResult.innerHTML = moved
+      ? '<span class="ok">Gespeichert.</span> Der Ort hat sich geändert, deshalb beginnt die '
+        + 'Bewertung neu – die nächste Warnung kommt erst, wenn es bei dir gerade trocken ist '
+        + 'und Regen aufzieht.'
+      : '<span class="ok">Gespeichert.</span>';
+  });
+
+  document.getElementById('logout').addEventListener('click', async function () {
+    await fetch('/api/v1/manage/logout', {method: 'POST'});
+    window.location.hash = '';
+    window.location.reload();
+  });
+
+  // ---- what to show ------------------------------------------------------------------------
+  async function start() {
+    var hash = window.location.hash || '';
+    var token = hash.indexOf('#t=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
+    if (token) {
+      // Erased before anything else can read it, and replaceState so Back does not return to a
+      // URL still carrying a spent token.
+      history.replaceState(null, '', window.location.pathname);
+      if (!await redeem(token)) { return; }
+    }
+    if (!csrf) {
+      // No fragment, but there may still be a live session from a moment ago - a reload should
+      // not cost a new email. The CSRF value is deliberately not in the cookie, so it is fetched
+      // back; the cookie is what authorises that, and another site cannot read the answer.
+      var again = await fetch('/api/v1/manage/csrf');
+      if (!again.ok) { return; }
+      csrf = (await again.json()).csrf;
+    }
+    if (!await load()) { return; }
+    gate.hidden = true;
+    panel.hidden = false;
+    fill();
+    buildMap();
+  }
+
+  start();
+})();
+</script>
+{% endblock %}

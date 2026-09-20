@@ -266,6 +266,49 @@ Then run `make run-ingest` twice more. If rain is approaching your location you 
 psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_minutes = 120;"
 ```
 
+### Changing the settings from the web page
+
+`/manage` is the settings page: threshold, lead time, radius and location, with the location
+pickable on a map. It needs no access key - you ask for a link on the channel you signed up with.
+
+```sh
+make serve                      # then open http://localhost:8000/manage
+make outbox                     # the link it sent, decoded
+```
+
+The link looks like `…/manage#t=<token>`. **The token is in the fragment on purpose:** a fragment
+is never sent to the server, so unlike `?token=` it cannot land in a request log or a `Referer`
+header (SECURITY_REVIEW.md F-4/F-8). The page reads it, trades it for a session cookie, and
+erases it from the address bar. It is good for 15 minutes and **once** - opening the same link
+twice fails the second time, by design.
+
+What you can change, and the limits:
+
+| Field | Range | Why that range |
+|---|---|---|
+| Threshold | 0.01 – 40.0 mm/5 min | 0.01 is RV's own quantum (`PR E-02`); above 40 a cycle is rejected as implausible at ingest, so a higher threshold could never fire |
+| Lead time | 5 – 120 min, in steps of 5 | the whole forecast RV carries; `rules.py` walks leads in fives, so 32 would be evaluated as 30 |
+| Radius | 0 – 20 000 m | the `radius_sane` CHECK. Under ~500 m it is the one 1 km grid cell you stand in |
+
+Saving the location and saving the rule are two requests, because they are two different changes:
+a move resets the alert state to `UNKNOWN` (D-17) and a rule change deliberately does not. The
+page says so after a move, since "saved" alone would not explain why no warning follows.
+
+Three things that trip people up locally:
+
+- **Requesting a link is limited to five an hour per IP** (`MANAGE_LINK_LIMIT_PER_HOUR`), same as
+  signing up and for the same reason: the endpoint sends a message to an address someone typed.
+  A test session spends them quickly. `make reset-local YES=1` clears the counter.
+- **An unconfirmed subscription gets no link at all.** Confirmation is what proves the channel
+  reaches the person; the page will not take that on trust. Confirm first.
+- **The answer is the same for an address that does not exist.** That is deliberate - anything
+  else would let a stranger test who has signed up - so "the link is on its way" is not a
+  confirmation that the address is known.
+
+Without `MAP_TILE_URL` there is no basemap, so the picker draws the radar and a few cities over
+an empty background. Good enough to choose a town, not a street; set a tile provider (§2) if you
+want to aim properly.
+
 ### Moving an existing subscription somewhere else
 
 One subscriber has exactly one location, and it is overwritten in place rather than appended to
@@ -309,8 +352,10 @@ Limits and failure modes:
   will not notice; a loop will.
 
 **If the access key is lost, there is no way to get it back.** It is stored hashed and displayed
-exactly once, and nothing re-issues it - so for a real subscription the answer is to unsubscribe
-and sign up again. While developing, go around the API instead:
+exactly once, and nothing re-issues it. That is what `/manage` is for: it asks for a fresh link
+on the channel instead, so a lost key no longer means a lost subscription. The key still matters
+for anything talking to the API directly - a script, or the app that does not exist yet - and for
+that case, while developing, go around the API instead:
 
 ```sh
 psql rainalert -c "update subscriptions set lat = 53.5511, lon = 9.9937,

@@ -66,6 +66,24 @@ class Settings(BaseSettings):
     dry_clear_minutes: int = 30
     warned_retract_cycles: int = 3
     missing_fraction_limit: float = 0.30
+    #: What a subscriber may set the rule to, from the settings page or the API.
+    #:
+    #: The threshold floor is the RV product's own quantum: values are `raw * 0.01` mm per
+    #: interval (DWD_RV_FORMAT.md §7, `PR E-02`), so 0.01 is the smallest difference the data can
+    #: express and anything finer is a number the radar cannot answer. It is also exactly the
+    #: floor of `numeric(5,2)`: 0.001 rounds to 0.00 in the column and trips the
+    #: `threshold_positive` CHECK as a 500 rather than a validation error.
+    #:
+    #: The ceiling is `plausibility_max_mm_5min`, not a separate number, because a cycle whose
+    #: peak exceeds it is rejected at ingest (jobs/ingest.py) - so a threshold above it could
+    #: never fire on data this service accepts.
+    min_threshold_mm_5min: float = 0.01
+    #: Lead times the RV product carries: 5 ... 120 in steps of 5. rules.py steps by 5, so a
+    #: lead that is not a multiple would silently round down.
+    min_lead_minutes: int = 5
+    max_lead_minutes: int = 120
+    #: The DE1200 grid is 1 km, so anything under ~500 m samples the single cell you stand in.
+    max_radius_m: int = 20000
     #: Absolute cap on how many subscriptions one cycle may warn. A cycle that would warn more is
     #: far likelier to be broken than to be a nationwide squall, and mailing everyone also burns
     #: the day's sending quota so the genuine alerts later never arrive.
@@ -158,7 +176,20 @@ class Settings(BaseSettings):
     trusted_proxy_hops: int = 0
     subscribe_limit_per_hour: int = 5
     location_limit_per_hour: int = 60
+    #: Writes to the rule (threshold, lead time, radius) from the settings page.
+    settings_limit_per_hour: int = 60
+    #: Magic-link requests. Deliberately as tight as signing up: the endpoint takes an address
+    #: and sends mail to it, so it is the same mail-bomb lever as POST /subscriptions.
+    manage_link_limit_per_hour: int = 5
     rate_limit_retention_days: int = 7
+
+    # --- Self-service settings page (§11.2) ----------------------------------------------------
+    #: How long a magic link works. Short, because it is a bearer credential to someone's home
+    #: coordinates sitting in their inbox; single use on top of that (tokens.py).
+    manage_link_ttl_minutes: int = 15
+    #: How long the session it opens lasts. Long enough to pick a spot on a map and think about
+    #: it, short enough that a borrowed phone is not an open account.
+    manage_session_ttl_minutes: int = 30
 
     #: Bearer token guarding /metrics. Unset means the endpoint does not exist at all - "internal
     #: only" is not expressible on Cloud Run, where every route is reachable from the internet

@@ -68,6 +68,36 @@ nichts gespeichert und es kommt nichts weiter.
     )
 
 
+def manage_link_message(settings: Settings, to: str, token: str) -> OutboundMessage:
+    """The magic link to the settings page.
+
+    The token rides in the URL **fragment**, not the query string, and that is the whole point of
+    the shape. A fragment is never sent to the server, so it cannot appear in a request log, in a
+    proxy's history or in a Referer header - which is exactly the leak F-4/F-8 describe for
+    `?token=`. The page reads it from `location.hash`, trades it for a session, and erases it.
+    """
+    link = f"{settings.public_base_url.rstrip('/')}/manage#t={token}"
+    minutes = settings.manage_link_ttl_minutes
+    text = f"""Hier geht es zu deinen Einstellungen:
+{link}
+
+Der Link gilt {minutes} Minuten und kann nur einmal benutzt werden.
+
+Wenn du das nicht warst, ignoriere diese Nachricht - solange der Link nicht geoeffnet wird,
+aendert sich nichts.
+
+--
+{ATTRIBUTION}
+"""
+    return OutboundMessage(
+        to=to,
+        subject="Regenwarnung: Einstellungen aendern",
+        text=text,
+        click_url=link,
+        headers={"From": settings.mail_from, "Auto-Submitted": "auto-generated"},
+    )
+
+
 def deletion_receipt(settings: Settings, to: str, *, channel: str = "email") -> OutboundMessage:
     """Sent to the channel being deleted, as the last thing that channel ever receives.
 

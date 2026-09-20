@@ -256,6 +256,67 @@ def confirm(
     )
 
 
+def issue_manage_token(
+    session: Session, settings: Settings, subscriber: Subscriber, now: datetime | None = None
+) -> str:
+    """Mint the single-use link that opens the settings page.
+
+    Any previous unused one is superseded, so asking for a second link does not leave the first
+    working: two live links to someone's home coordinates is one more than was asked for.
+    """
+    now = now or datetime.now(UTC)
+    session.execute(
+        delete(AuthToken).where(
+            AuthToken.subscriber_id == subscriber.id,
+            AuthToken.purpose == TokenPurpose.MANAGE,
+            AuthToken.used_at.is_(None),
+        )
+    )
+    token = new_token()
+    session.add(
+        AuthToken(
+            subscriber_id=subscriber.id,
+            purpose=TokenPurpose.MANAGE,
+            token_hash=hash_token(token),
+            expires_at=now + timedelta(minutes=settings.manage_link_ttl_minutes),
+            created_at=now,
+        )
+    )
+    session.commit()
+    return token
+
+
+def find_subscriber(session: Session, *, channel: Channel, address: str) -> Subscriber | None:
+    """Look a subscriber up by what they would type. Returns None rather than raising.
+
+    The caller must answer identically whether this finds anything or not: a settings page that
+    says "unknown address" is an oracle for who has signed up, and the addresses are mailboxes
+    and push topics belonging to real people.
+    """
+    return session.execute(
+        select(Subscriber).where(Subscriber.address_hash == hash_address(channel.value, address))
+    ).scalar_one_or_none()
+
+
+def redeem_manage_token(session: Session, *, token: str, now: datetime | None = None) -> Subscriber:
+    """Spend the magic link. Single use: the second attempt fails like a wrong token."""
+    now = now or datetime.now(UTC)
+    row = session.execute(
+        select(AuthToken).where(
+            AuthToken.token_hash == hash_token(token),
+            AuthToken.purpose == TokenPurpose.MANAGE,
+        )
+    ).scalar_one_or_none()
+    if row is None or row.used_at is not None or (row.expires_at and row.expires_at < now):
+        raise ValidationError("this link is no longer valid")
+    row.used_at = now
+    subscriber = session.get(Subscriber, row.subscriber_id)
+    if subscriber is None:
+        raise ValidationError("this link is no longer valid")
+    session.commit()
+    return subscriber
+
+
 def resolve_token(
     session: Session, *, token: str, purpose: TokenPurpose, now: datetime | None = None
 ) -> Subscriber:
@@ -303,6 +364,102 @@ def update_location(
     if moved_m > 1000:
         subscription.health_note = None
         # Alert state lives in M4's table; the flag it keys off is the location timestamp.
+    session.commit()
+    return subscription
+
+
+#: RV carries a frame every five minutes, and rules.py walks the leads in the same step. A lead
+#: time that is not a multiple of it is rounded down at evaluation time, silently.
+LEAD_STEP_MINUTES = 5
+
+
+def validate_rule(
+    settings: Settings,
+    *,
+    threshold_mm_5min: float | None = None,
+    lead_time_minutes: int | None = None,
+    radius_m: int | None = None,
+) -> dict:
+    """Check the three rule values a subscriber may set, and return the ones that were given.
+
+    Every bound here also exists as a CHECK constraint, and that is deliberate - but a constraint
+    violation surfaces as an IntegrityError, which is a 500. These checks exist so that a value a
+    person can type becomes a sentence they can read.
+    """
+    changes: dict = {}
+
+    if threshold_mm_5min is not None:
+        value = float(threshold_mm_5min)
+        if not math.isfinite(value):
+            raise ValidationError("the threshold must be a number")
+        # The column is numeric(5,2), so a third decimal is rounded away by the database, and
+        # 0.001 rounds to 0.00 - which then fails the `threshold_positive` CHECK as a 500. Round
+        # here, where it can still be judged, and compare the rounded value.
+        value = round(value, 2)
+        floor, ceiling = settings.min_threshold_mm_5min, settings.plausibility_max_mm_5min
+        if not floor <= value <= ceiling:
+            raise ValidationError(
+                f"the threshold must be between {floor} and {ceiling} mm per 5 minutes"
+            )
+        changes["threshold_mm_5min"] = value
+
+    if lead_time_minutes is not None:
+        value = int(lead_time_minutes)
+        if not settings.min_lead_minutes <= value <= settings.max_lead_minutes:
+            raise ValidationError(
+                f"the lead time must be between {settings.min_lead_minutes} and "
+                f"{settings.max_lead_minutes} minutes"
+            )
+        if value % LEAD_STEP_MINUTES:
+            # rules.py walks the leads in steps of five, so 32 would be evaluated as 30 and the
+            # stored number would be a promise the evaluation does not keep.
+            raise ValidationError(
+                f"the lead time must be a multiple of {LEAD_STEP_MINUTES} minutes"
+            )
+        changes["lead_time_minutes"] = value
+
+    if radius_m is not None:
+        value = int(radius_m)
+        if not 0 <= value <= settings.max_radius_m:
+            raise ValidationError(f"the radius must be between 0 and {settings.max_radius_m} m")
+        changes["radius_m"] = value
+
+    return changes
+
+
+def update_rule(
+    session: Session,
+    settings: Settings,
+    subscriber: Subscriber,
+    *,
+    threshold_mm_5min: float | None = None,
+    lead_time_minutes: int | None = None,
+    radius_m: int | None = None,
+    now: datetime | None = None,
+) -> Subscription:
+    """Change what counts as rain worth warning about.
+
+    Unlike a location change (D-17) this does **not** reset the alert state, and that asymmetry is
+    intentional. Moving invalidates what the state machine knows, because the state describes a
+    place. Changing the threshold does not: it describes what to do with what is already known,
+    and resetting on every adjustment would mean a subscriber who is currently being rained on
+    could re-arm their own "rain is starting" warning by nudging a number.
+    """
+    changes = validate_rule(
+        settings,
+        threshold_mm_5min=threshold_mm_5min,
+        lead_time_minutes=lead_time_minutes,
+        radius_m=radius_m,
+    )
+    subscription = session.execute(
+        select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+    ).scalar_one()
+    if not changes:
+        return subscription
+
+    for field, value in changes.items():
+        setattr(subscription, field, value)
+    subscription.updated_at = now or datetime.now(UTC)
     session.commit()
     return subscription
 

@@ -670,6 +670,20 @@ global per-day ceiling (F-2). Tighten the parameter ranges to defensible values
 "no throttling" as the *default*, which is a reasonable debugging choice; just do not let it be
 unbounded.
 
+**Status (2026-09-20): partially addressed, deliberately.** `/manage` ships with bounds enforced
+at the edge and in the schema (D-28), and `radius_m` keeps its 20 km ceiling. The two
+tightenings this finding asked for were **not** taken, by the product owner's decision: the
+threshold floor is 0.01 rather than 0.05, and the lead ceiling is 120 rather than 60. The
+reasoning on both is that the bound should come from the data — 0.01 is the smallest value RV
+can express, 120 is the whole forecast it carries — rather than from a guess about behaviour.
+
+That leaves the amplification path in this finding **open**, and narrower only in that
+`threshold=0.01, lead=120, radius=20000` is still reachable. The remaining half of the fix is
+the part that actually bounds the damage and does not narrow the knobs: a per-subscription cap
+on alerts per rolling 24 h, and the global per-day ceiling from F-2. Neither is built. Both
+should land before anyone but the author is a subscriber — which is also when the shared sending
+reputation this finding is about starts to exist.
+
 ---
 
 ### F-16 — Web hardening gaps the design does not mention
@@ -703,6 +717,27 @@ except a nonce for the map bootstrap". That is a good start and above average. N
   manage page is authenticated by a short-lived signed cookie set after a magic-link `POST`, or by a
   `manage` token in the URL — and if the latter, state its lifetime, because a manage link in every
   alert email is a bearer credential to someone's home coordinates sitting in their inbox forever.
+
+**Status (2026-09-20).** Decided and built, as the first of the two options (D-25 … D-27, §11.2):
+
+- **Clickjacking** — fixed earlier: `frame-ancestors 'none'` and `X-Frame-Options: DENY` are on
+  every response.
+- **CSRF** — a cookie-authenticated write requires a CSRF value that was rendered into the page
+  and is echoed in a custom header; a bearer-authenticated write does not need one and never
+  could be forged cross-site. The value is signed with the purpose inside the MAC, so a session
+  token and a CSRF token for the same subscriber are not interchangeable, and it is checked
+  against *this* session rather than merely being a valid signature.
+- **`Referrer-Policy`** — `no-referrer` site-wide; the tile layer overrides it per element to
+  `strict-origin-when-cross-origin`, which sends an origin and never a path or query.
+- **Cookie/session model** — a signed, stateless cookie: `session.<id>.<expiry>.<mac>`, HttpOnly,
+  `SameSite=Lax`, 30 minutes, `Secure` when `PUBLIC_BASE_URL` is https. No session table. The
+  magic link that sets it is a **stored** token, so it can be single use, and lives 15 minutes.
+  Rotating `SECRET_KEY` ends every session and every unsubscribe link at once, which is the only
+  revocation this needs.
+- **Mail header injection** — unchanged: `OutboundMessage` rejects CR/LF in `to`, `subject`,
+  `click_url` and every header value.
+- **Third-party map tiles** — unchanged, still Q-5/Q-2, and `/manage` loads Leaflet from the same
+  CDN as `/map` (M6: vendor it).
 
 ---
 
@@ -826,9 +861,9 @@ Collected for convenience — these are the places an implementer will fill in w
 | Size limits on the upstream response and its members | none | F-1, F-10 |
 | Validation ranges for header fields taken "from the header, not constants" | none | F-2 |
 | Service accounts for the job and the service | shared default compute SA with Editor | F-18 |
-| What the session cookie contains and what `SECRET_KEY` signs | a homemade signed-cookie scheme | F-16 |
+| ~~What the session cookie contains and what `SECRET_KEY` signs~~ | ~~a homemade signed-cookie scheme~~ | F-16 — **answered** by D-25…D-27 (§11.2) |
 | Contents of the confirmation mail | echoes user input to a third party's inbox | F-5 |
-| Lifetime and scope of the `manage` token in emailed links | long-lived bearer URL in every alert mail | F-16 |
+| ~~Lifetime and scope of the `manage` token in emailed links~~ | ~~long-lived bearer URL in every alert mail~~ | F-16 — **answered**: 15 min, single use, requested on demand, never attached to an alert |
 
 ---
 

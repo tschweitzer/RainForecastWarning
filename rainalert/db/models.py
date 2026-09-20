@@ -78,6 +78,10 @@ class TokenPurpose(enum.StrEnum):
     CONFIRM = "confirm"
     API = "api"
     UNSUBSCRIBE = "unsubscribe"
+    #: The magic link to the settings page. Stored rather than signed, because it has to be
+    #: single use: a signed link stays valid until it expires however often it is opened, and a
+    #: link that reaches someone's home coordinates should stop working once it has been used.
+    MANAGE = "manage"
 
 
 class Channel(enum.StrEnum):

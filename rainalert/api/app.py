@@ -37,7 +37,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from rainalert import subscriptions as svc
-from rainalert.api.mail import confirmation_message, deletion_receipt
+from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
 from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check
 from rainalert.config import Settings, get_settings
@@ -46,7 +46,14 @@ from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
-from rainalert.tokens import hash_address, verify_unsubscribe_token
+from rainalert.tokens import (
+    csrf_token,
+    hash_address,
+    session_token,
+    verify_csrf_token,
+    verify_session_token,
+    verify_unsubscribe_token,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +64,15 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 #: privacy story is data minimisation. **Vendor Leaflet into static/ before deploying** (M6) and
 #: drop these two origins back to 'self'.
 MAP_SCRIPT_SRC = "https://unpkg.com"
+
+#: The settings-page session. Not prefixed `__Host-`, which would be the stronger choice, because
+#: that prefix requires Secure and this service is served over plain http in development - a
+#: cookie the browser silently refuses to store is a page that silently never logs in.
+MANAGE_COOKIE = "rainalert_manage"
+#: Echoed back on every write from the settings page. A custom header cannot be set by a plain
+#: cross-site form, so requiring one already forces a preflight; the value being unguessable is
+#: what makes the preflight pointless to attempt (SECURITY_REVIEW.md F-16).
+CSRF_HEADER = "X-Rain-CSRF"
 
 
 def tile_origin(tile_url: str) -> str:
@@ -127,6 +143,30 @@ class LocationRequest(BaseModel):
     lon: float = Field(ge=-180, le=180)
 
     _round = field_validator("lat", "lon")(_round_coord)
+
+
+class RuleRequest(BaseModel):
+    """A partial update: every field optional, absent means "leave it alone".
+
+    The real bounds live in `svc.validate_rule`, which reads them from settings - these are only
+    the outer sanity limits, so that a number far outside any conceivable range is refused before
+    it reaches a float conversion. Repeating the exact bounds here would be two places to change.
+    """
+
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+
+    threshold_mm_5min: float | None = Field(default=None, gt=0, le=1000)
+    lead_time_minutes: int | None = Field(default=None, ge=0, le=1000)
+    radius_m: int | None = Field(default=None, ge=0, le=100_000)
+
+
+class ManageLinkRequest(BaseModel):
+    """Who to send a settings link to, in the same shape the subscribe form uses."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    channel: Literal["email", "ntfy"] = "email"
+    address: str = Field(min_length=1, max_length=254)
 
 
 def create_app(
@@ -346,14 +386,54 @@ def create_app(
     def current_subscriber(
         request: Request, session: Session = Depends(get_session)
     ) -> tuple[Subscriber, Session]:
+        """Two credentials, one identity.
+
+        A `Bearer` token is the long-lived key handed out at confirmation, for an app. The
+        settings-page session is a signed cookie that expires in half an hour. They authenticate
+        the same subscriber and reach the same endpoints; what differs is CSRF, because only one
+        of them is sent by the browser automatically. A bearer token has to be attached by script
+        that has already read it, so a cross-site request cannot carry it. A cookie rides along on
+        any request the browser makes, so a cookie-authenticated **write** must also present the
+        CSRF value from the page (F-16).
+        """
         header = request.headers.get("authorization", "")
-        if not header.startswith("Bearer "):
+        if header.startswith("Bearer "):
+            try:
+                subscriber = svc.resolve_token(session, token=header[7:], purpose=TokenPurpose.API)
+            except svc.ValidationError as exc:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised") from exc
+            return subscriber, session
+
+        cookie = request.cookies.get(MANAGE_COOKIE, "")
+        subscriber_id = verify_session_token(cookie, settings.secret_key) if cookie else None
+        if subscriber_id is None:
+            if header:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
-        try:
-            subscriber = svc.resolve_token(session, token=header[7:], purpose=TokenPurpose.API)
-        except svc.ValidationError as exc:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised") from exc
+
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            presented = request.headers.get(CSRF_HEADER, "")
+            # Must match this session, not merely be a valid signature: otherwise anyone with a
+            # session of their own holds a CSRF value good against everybody else's.
+            if verify_csrf_token(presented, settings.secret_key) != subscriber_id:
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "missing or stale form token")
+
+        subscriber = session.get(Subscriber, subscriber_id)
+        if subscriber is None:
+            # Signed, unexpired, and the account is gone - deleted since the session opened.
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
         return subscriber, session
+
+    def rule_bounds() -> dict:
+        """The limits the page renders its inputs from, so the numbers live in one place."""
+        return {
+            "threshold_min": settings.min_threshold_mm_5min,
+            "threshold_max": settings.plausibility_max_mm_5min,
+            "lead_min": settings.min_lead_minutes,
+            "lead_max": settings.max_lead_minutes,
+            "lead_step": svc.LEAD_STEP_MINUTES,
+            "radius_max": settings.max_radius_m,
+        }
 
     @app.get("/api/v1/subscriptions/me")
     def read_me(current=Depends(current_subscriber)) -> dict:
@@ -371,7 +451,32 @@ def create_app(
             "lead_time_minutes": sub.lead_time_minutes,
             "timezone": sub.timezone,
             "health_note": sub.health_note,
+            "bounds": rule_bounds(),
         }
+
+    @app.patch("/api/v1/subscriptions/me", status_code=status.HTTP_204_NO_CONTENT)
+    def patch_me(
+        payload: RuleRequest, request: Request, current=Depends(current_subscriber)
+    ) -> Response:
+        """Threshold, lead time and radius. Absent fields are left alone."""
+        subscriber, session = current
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        if not hit_and_check(
+            session, f"settings:ip:{ip}", settings.settings_limit_per_hour, timedelta(hours=1)
+        ):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many updates")
+        try:
+            svc.update_rule(
+                session,
+                settings,
+                subscriber,
+                threshold_mm_5min=payload.threshold_mm_5min,
+                lead_time_minutes=payload.lead_time_minutes,
+                radius_m=payload.radius_m,
+            )
+        except svc.ValidationError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.put("/api/v1/subscriptions/me/location", status_code=status.HTTP_204_NO_CONTENT)
     def put_location(
@@ -396,6 +501,85 @@ def create_app(
         svc.delete_subscriber(session, subscriber)
         deliver(deletion_receipt(settings, address, channel=channel))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # ---- settings-page session --------------------------------------------------------------
+    def set_session_cookie(response: Response, subscriber_id) -> str:
+        """Open a session and return the CSRF value the page must echo back."""
+        ttl = settings.manage_session_ttl_minutes
+        response.set_cookie(
+            MANAGE_COOKIE,
+            session_token(subscriber_id, settings.secret_key, ttl),
+            max_age=ttl * 60,
+            httponly=True,
+            samesite="lax",
+            # Only when the site is actually served over TLS. Setting it unconditionally makes
+            # the cookie vanish in development, which looks like a broken login, not a policy.
+            secure=settings.public_base_url.startswith("https://"),
+            path="/",
+        )
+        return csrf_token(subscriber_id, settings.secret_key, ttl)
+
+    @app.post("/api/v1/manage/link", status_code=status.HTTP_202_ACCEPTED)
+    def request_manage_link(
+        payload: ManageLinkRequest, request: Request, session: Session = Depends(get_session)
+    ) -> dict:
+        """Send a settings link to a channel that has already been confirmed.
+
+        Always 202, whether or not the address is known. The endpoint takes an address someone
+        typed and sends a message to it, so telling the caller which addresses exist would turn
+        the settings page into a subscriber-list oracle - and the addresses are people's
+        mailboxes.
+        """
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        if not hit_and_check(
+            session, f"manage:ip:{ip}", settings.manage_link_limit_per_hour, timedelta(hours=1)
+        ):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
+
+        channel = Channel(payload.channel)
+        subscriber = svc.find_subscriber(session, channel=channel, address=payload.address)
+        # Unconfirmed subscribers are excluded: confirmation is what proves the channel reaches
+        # the person, and a settings link is not the place to take that on trust.
+        if subscriber is not None and subscriber.confirmed_at is not None:
+            token = svc.issue_manage_token(session, settings, subscriber)
+            deliver(manage_link_message(settings, subscriber.address, token))
+        return {"status": "check your messages"}
+
+    @app.post("/api/v1/manage/session")
+    def open_manage_session(
+        response: Response, token: str = Form(""), session: Session = Depends(get_session)
+    ) -> dict:
+        """Spend the magic link, set the session cookie, hand back the CSRF value."""
+        try:
+            subscriber = svc.redeem_manage_token(session, token=token)
+        except svc.ValidationError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+        return {"csrf": set_session_cookie(response, subscriber.id)}
+
+    @app.get("/api/v1/manage/csrf")
+    def manage_csrf(request: Request) -> dict:
+        """Hand the page a form token for a session it already holds.
+
+        Safe to serve on a GET: it requires the session cookie, and the same-origin policy stops
+        another site from reading the response - which is the same thing that makes the value
+        worth anything in the first place.
+        """
+        cookie = request.cookies.get(MANAGE_COOKIE, "")
+        subscriber_id = verify_session_token(cookie, settings.secret_key) if cookie else None
+        if subscriber_id is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
+        return {
+            "csrf": csrf_token(
+                subscriber_id, settings.secret_key, settings.manage_session_ttl_minutes
+            )
+        }
+
+    @app.post("/api/v1/manage/logout", status_code=status.HTTP_204_NO_CONTENT)
+    def close_manage_session() -> Response:
+        """Ends the session on this device. No credential needed - it only ever removes one."""
+        response = Response(status_code=status.HTTP_204_NO_CONTENT)
+        response.delete_cookie(MANAGE_COOKIE, path="/")
+        return response
 
     # ---- unsubscribe ----------------------------------------------------------------------
     @app.get("/unsubscribe", response_class=HTMLResponse, include_in_schema=False)
@@ -448,6 +632,24 @@ def create_app(
     #: DWD retains; the page drops any that exceed the configured maximum rather than showing a
     #: choice that would be silently clamped.
     WINDOW_CHOICES = (3, 6, 12, 24, 48)
+
+    @app.get("/manage", response_class=HTMLResponse, include_in_schema=False)
+    def manage_page(request: Request) -> HTMLResponse:
+        """The settings page. Renders the same shell whether or not anyone is signed in.
+
+        Deliberately side-effect free and identical for everyone: the magic link's token is in
+        the URL *fragment*, which the browser never sends, so the server cannot know at render
+        time whether this request carries one. The page asks.
+        """
+        return TEMPLATES.TemplateResponse(
+            request,
+            "manage.html",
+            {
+                "settings": settings,
+                "has_map": overlay_store is not None,
+                "bounds": rule_bounds(),
+            },
+        )
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
     def rain_map(request: Request, hours: str | None = None) -> HTMLResponse:

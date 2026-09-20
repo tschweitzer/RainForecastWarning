@@ -86,3 +86,68 @@ def verify_unsubscribe_token(token: str, secret: str) -> uuid.UUID | None:
     if not hmac.compare_digest(signature, expected):
         return None
     return subscriber_id
+
+
+def _sign(purpose: str, subscriber_id: uuid.UUID, expires: int, secret: str) -> str:
+    """`purpose.id.expiry.mac`, with the purpose inside the MAC.
+
+    The purpose is signed, not merely prefixed: without it a session cookie and a CSRF token -
+    same id, same expiry, same secret - would have identical signatures, and the one that is
+    readable by the page would be usable as the one that is not.
+    """
+    payload = f"{purpose}:{subscriber_id}:{expires}"
+    mac = hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256)
+    signature = base64.urlsafe_b64encode(mac.digest()).decode().rstrip("=")
+    return f"{purpose}.{subscriber_id}.{expires}.{signature}"
+
+
+def _verify(purpose: str, token: str, secret: str, now: datetime | None = None) -> uuid.UUID | None:
+    """Return the subscriber id if the token is well formed, unexpired and ours."""
+    parts = token.split(".")
+    if len(parts) != 4 or parts[0] != purpose:
+        return None
+    _, raw_id, raw_expiry, signature = parts
+    try:
+        subscriber_id = uuid.UUID(raw_id)
+        expires = int(raw_expiry)
+    except ValueError:
+        return None
+    expected = _sign(purpose, subscriber_id, expires, secret).rpartition(".")[2]
+    # Signature first: an expired token and a forged one should cost the same to probe.
+    if not hmac.compare_digest(signature, expected):
+        return None
+    if (now or datetime.now(UTC)).timestamp() >= expires:
+        return None
+    return subscriber_id
+
+
+def session_token(subscriber_id: uuid.UUID, secret: str, ttl_minutes: int, now=None) -> str:
+    """The settings-page session, carried in a cookie.
+
+    Stateless and signed rather than a row, for the same reason as the unsubscribe token: there
+    is no session table and inventing one to hold thirty minutes of state is more machinery than
+    the problem deserves. Rotating SECRET_KEY ends every session at once, which is the only
+    revocation this needs.
+    """
+    expires = int(((now or datetime.now(UTC)) + timedelta(minutes=ttl_minutes)).timestamp())
+    return _sign("session", subscriber_id, expires, secret)
+
+
+def verify_session_token(token: str, secret: str, now=None) -> uuid.UUID | None:
+    return _verify("session", token, secret, now)
+
+
+def csrf_token(subscriber_id: uuid.UUID, secret: str, ttl_minutes: int, now=None) -> str:
+    """Rendered into the settings page and echoed back in a header on every write.
+
+    The session cookie alone is not enough. `SameSite=Lax` blocks a cross-site form POST, but
+    it is one browser default away from being the only thing standing there - so the write also
+    requires a value that can only be obtained by *reading* the page, which the same-origin
+    policy denies to another site (SECURITY_REVIEW.md F-16).
+    """
+    expires = int(((now or datetime.now(UTC)) + timedelta(minutes=ttl_minutes)).timestamp())
+    return _sign("csrf", subscriber_id, expires, secret)
+
+
+def verify_csrf_token(token: str, secret: str, now=None) -> uuid.UUID | None:
+    return _verify("csrf", token, secret, now)
