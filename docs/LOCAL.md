@@ -506,7 +506,23 @@ on disk, without a single request to DWD:
 
 ```sh
 make rerender                     # minutes, no network, no DWD traffic
+make rerender LIMIT=100           # only the newest 100 archives
 ```
+
+**If it ends in `Killed`** - `make: *** [Makefile:177: rerender] Killed` - that is the kernel's
+OOM killer, not the program exiting. `make` reports the signal and nothing else, so the reason
+is in the kernel log rather than anywhere the job could print it:
+
+```sh
+sudo dmesg -T | grep -i -E 'killed process|out of memory'
+journalctl -k --since '10 minutes ago' | grep -i oom    # same thing, if journald is running
+```
+
+One cycle is 25 frames of 1200x1100 float32 plus a mask - 6.6 MB each, 165 MB decoded in full -
+so a job that holds more than it needs runs out of room on a 1 GB machine quickly. The rerender
+now decodes only the frame it renders and releases each cycle before reading the next; if a
+machine still cannot hold a run, `LIMIT` is the way down, and the newest archives are the ones
+anybody is looking at.
 
 **After a `git pull`, run `make migrate` before restarting.** A pull can bring a schema change
 with it, and new code on an old schema connects perfectly well and then fails on the first

@@ -459,3 +459,88 @@ def test_ctrl_c_mid_download_is_also_a_summary(db, settings, tmp_path):
 
     assert report.halted == "interrupted"
     assert report.fetched == 0
+
+
+# --- re-rendering, and the memory it must not use ------------------------------------------------
+
+
+def _archive_dir(tmp_path, copies: int):
+    """`copies` archives with distinct nominal times, from the one wet fixture."""
+    import shutil
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    for index in range(copies):
+        # The name carries the nominal time; the content does not have to differ for this.
+        shutil.copy(WET, tmp_path / f"DE1200_RV26091613{index:02d}.tar.bz2")
+    return tmp_path
+
+
+def test_rerender_decodes_only_the_frame_it_renders(tmp_path, monkeypatch):
+    """The bug that killed it on a 1 GB VM: 25 grids decoded, 24 thrown away.
+
+    A grid is 1200x1100 float32 plus a bool mask - 6.6 MB each, 165 MB for a full cycle - and
+    the loop only ever renders t+0. Asserted on the call rather than on a memory figure, because
+    the fixture is trimmed to three frames: a threshold loose enough to be stable would be far
+    too loose to catch decoding twenty-five.
+    """
+    from rainalert.jobs import backfill
+    from rainalert.storage import LocalOverlayStore
+
+    calls = []
+    real = backfill.read_frames
+
+    def spy(archive, **kwargs):
+        calls.append(kwargs)
+        return real(archive, **kwargs)
+
+    monkeypatch.setattr(backfill, "read_frames", spy)
+    archives = _archive_dir(tmp_path / "raw", 3)
+    backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+
+    assert calls, "read_frames was never called"
+    assert all(kwargs.get("analysis_only") is True for kwargs in calls), calls
+
+
+def test_rerender_releases_each_cycle_before_reading_the_next(tmp_path, monkeypatch):
+    """Peak must be the size of one cycle, not two.
+
+    Rebinding a loop variable frees the previous value only *after* the right-hand side has been
+    evaluated, so without an explicit release two whole cycles are alive at the moment the second
+    finishes decoding - which is how a job needing ~230 MB comes to need ~460 MB.
+    """
+    import weakref
+
+    from rainalert.jobs import backfill
+    from rainalert.storage import LocalOverlayStore
+
+    alive = []
+    real = backfill.read_frames
+
+    class Frames(list):
+        """A plain list cannot be weak-referenced; this one can, and behaves identically."""
+
+    def spy(archive, **kwargs):
+        # Before handing back a new cycle, every earlier one must already be collected.
+        assert all(ref() is None for ref in alive), "a previous cycle was still referenced"
+        frames = Frames(real(archive, **kwargs))
+        alive.append(weakref.ref(frames))
+        return frames
+
+    monkeypatch.setattr(backfill, "read_frames", spy)
+    archives = _archive_dir(tmp_path / "raw", 4)
+    report = backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+
+    assert report.archives == 4
+    assert len(alive) == 4
+
+
+def test_rerender_skips_an_unreadable_archive_and_keeps_going(tmp_path):
+    from rainalert.jobs.backfill import rerender_observed
+    from rainalert.storage import LocalOverlayStore
+
+    archives = _archive_dir(tmp_path / "raw", 2)
+    (archives / "DE1200_RV2609161399.tar.bz2").write_bytes(b"not an archive")
+
+    report = rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+    assert report.failed == 1
+    assert report.rendered >= 2  # the readable ones still rendered

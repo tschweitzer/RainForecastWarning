@@ -81,6 +81,18 @@ def rerender_observed(
 
     Only the analysis frame: past forecasts are not shown anywhere, so rendering them would be
     work whose output nothing reads.
+
+    Two things here are about memory, and both were once wrong in a way that killed the process
+    on a 1 GB VM rather than merely slowing it down.
+
+    ``analysis_only=True`` is the whole point of the docstring above. Without it every one of the
+    25 members becomes a 1200x1100 float32 grid and its mask - 6.6 MB each, 165 MB a cycle - and
+    24 of them are then skipped by the loop below. With it, one grid is materialised, ~6.6 MB.
+
+    And ``frames`` is released before the next archive is read. Rebinding a loop variable frees
+    the previous value only *after* the right-hand side has been evaluated, so without the
+    ``del`` two whole cycles are alive at the moment the second finishes decoding - which is how
+    a job that needs ~230 MB comes to need ~460 MB.
     """
     report = BackfillReport()
     projection = build_projection()
@@ -88,20 +100,28 @@ def rerender_observed(
     if limit:
         paths = paths[:limit]
 
+    logger.info("re-rendering %d archive(s) from %s", len(paths), archive_dir)
     for path in paths:
         report.archives += 1
         try:
-            frames = read_frames(path)
+            frames = read_frames(path, analysis_only=True)
         except (RVFormatError, OSError):  # RVFormatError now covers tar-level damage too
             # One unreadable archive must not stop the rest; the timeline simply keeps that gap.
             report.failed += 1
             logger.warning("could not read %s", path.name, exc_info=True)
             continue
-        for frame in frames:
-            if frame.lead_minutes != 0:
-                continue
-            overlays.put_observed(frame.nominal_time, render_frame(frame, projection))
-            report.rendered += 1
+        try:
+            for frame in frames:
+                if frame.lead_minutes != 0:
+                    continue
+                overlays.put_observed(frame.nominal_time, render_frame(frame, projection))
+                report.rendered += 1
+        finally:
+            del frames
+        # Progress, so a run that dies says where it got to. A silent job that is killed leaves
+        # nothing to distinguish "too big" from "stuck".
+        if report.archives % 25 == 0:
+            logger.info("  %d/%d archives, %d frames", report.archives, len(paths), report.rendered)
     logger.info(
         "re-rendered %d observed frame(s) from %d archive(s), %d unreadable",
         report.rendered,

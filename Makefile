@@ -172,8 +172,10 @@ migrate:
 verify:
 	$(PY) -m rainalert.cli verify
 
+# LIMIT=100 does only the newest N archives. An escape hatch for a machine that cannot hold a
+# whole run: the newest frames are the ones anybody is looking at.
 rerender:
-	$(PY) -m rainalert.cli rerender
+	$(PY) -m rainalert.cli rerender $(if $(LIMIT),--limit $(LIMIT))
 
 pin-base:
 	@docker pull python:3.11-slim >/dev/null && \
