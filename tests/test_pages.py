@@ -213,6 +213,11 @@ def test_the_session_control_is_outside_the_settings_form(client):
     assert "Abmelden (nur dieses Gerät)" not in page
 
 
+def test_the_subscribe_page_links_to_the_settings_page(client):
+    """Someone already subscribed lands on / looking for their settings."""
+    assert 'href="/manage"' in client.get("/").text
+
+
 @pytest.mark.parametrize("path", ["/map", "/manage"])
 def test_both_maps_zoom_to_street_level(client, path):
     assert "maxZoom: 18" in client.get(path).text

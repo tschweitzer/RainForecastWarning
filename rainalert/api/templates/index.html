@@ -14,6 +14,8 @@
   .ntfy-steps details { margin:.6rem 0; font-size:.85rem; color:var(--muted); }
   .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px;
                     display:block; margin-top:.5rem; }
+  .already { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line);
+             font-size:.9rem; color:var(--muted); }
 </style>
 <h1>Regenwarnung</h1>
 <p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
@@ -73,6 +75,12 @@ Vorhersage bis zwei Stunden voraus.</p>
 <p style="margin-top:1.25rem"><a href="/map">Regenradar ansehen →</a> (12 Stunden zurück,
 zwei Stunden voraus)</p>
 {% endif %}
+
+{# For someone who is already subscribed and landed here looking for their settings. Phrased as
+   a question rather than "Einstellungen", so it cannot be mistaken for part of the signup form
+   above it - this page's job is still the form. #}
+<p class="already">Schon angemeldet? <a href="/manage">Einstellungen ändern</a> – Ort, Umkreis
+und ab wann gewarnt wird.</p>
 
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
