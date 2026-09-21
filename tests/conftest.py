@@ -61,6 +61,21 @@ def db(postgres_url):
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
     create_all(engine)
+    # create_all builds the head schema without going through alembic, so it leaves no
+    # alembic_version row - and the readiness check would then call a perfectly current test
+    # database un-migrated. Stamping records what create_all actually produced.
+    from rainalert.db.schema import expected_revision
+
+    head = expected_revision()
+    if head:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE IF NOT EXISTS alembic_version (version_num varchar(32) NOT NULL)"
+                )
+            )
+            conn.execute(text("DELETE FROM alembic_version"))
+            conn.execute(text("INSERT INTO alembic_version (version_num) VALUES (:v)"), {"v": head})
     factory = make_session_factory(engine)
     yield factory
     engine.dispose()

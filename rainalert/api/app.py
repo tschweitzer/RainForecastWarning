@@ -42,6 +42,7 @@ from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check
 from rainalert.config import Settings, get_settings
 from rainalert.db.models import Channel, Subscriber, Subscription, TokenPurpose
+from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
@@ -193,6 +194,17 @@ def create_app(
         with session_factory() as session:
             yield session
 
+    # Said once, at boot, where `make logs` shows it - rather than leaving the first person to
+    # click something to discover it as a 500. Never fatal: a database that is merely down at
+    # start-up must not stop the process, and neither must a diagnostic.
+    try:
+        with session_factory() as session:
+            complaint = schema_complaint(session)
+        if complaint:
+            logger.error("DATABASE SCHEMA IS OUT OF DATE: %s", complaint)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not check the database schema at start-up: %s", exc)
+
     def deliver(message) -> bool:
         """Send, and never let a delivery failure become the caller's problem.
 
@@ -275,6 +287,16 @@ def create_app(
         deploy-time setting, not something this handler can fix (SECURITY_REVIEW.md F-6).
         """
         session.execute(sql_text("SELECT 1"))
+        # Reachable is not the same as usable. New code on an un-migrated database connects
+        # fine and then 500s on the first request that touches what the migration added, a long
+        # way from the cause. On Cloud Run an unready revision also never takes traffic, which
+        # is exactly the right outcome for a deploy that skipped its migration.
+        complaint = schema_complaint(session)
+        if complaint:
+            logger.error("not ready: %s", complaint)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, f"database schema is out of date: {complaint}"
+            )
         return {"status": "ready"}
 
     @app.get("/metrics", include_in_schema=False)

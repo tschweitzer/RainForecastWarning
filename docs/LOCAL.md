@@ -466,6 +466,30 @@ make logs NAME=serve           # tail -f the log
 make stop NAME=ingest-loop     # stop it, and its children
 ```
 
+**After a `git pull`, run `make migrate` before restarting.** A pull can bring a schema change
+with it, and new code on an old schema connects perfectly well and then fails on the first
+request that touches whatever the migration added - as a 500, a long way from the cause. The
+whole update is:
+
+```sh
+git pull
+make migrate                      # usually a no-op, and cheap when it is
+make stop NAME=serve && make serve-bg HOST=0.0.0.0
+```
+
+The migration does not need the restart, and the restart does not need the migration: `alembic`
+talks to the database directly, so running `make migrate` against a server that is already up
+fixes it in place.
+
+If it is ever missed, two things now say so rather than leaving it to a 500:
+
+```sh
+make logs NAME=serve              # "DATABASE SCHEMA IS OUT OF DATE: ... run `make migrate`"
+curl -s localhost:8000/readyz     # 503, with the same sentence
+```
+
+`/healthz` deliberately stays 200 - the process is alive, it just should not be taking traffic.
+
 `make stop` kills the whole process group rather than the one pid. That matters for the ingest
 loop: it runs a python child per cycle, and killing only the loop would leave that child running,
 reparented to init, invisible to `make status` and still talking to DWD.

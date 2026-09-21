@@ -693,7 +693,7 @@ All endpoints return RFC 7807 problem details on error.
 | `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
 | `GET` | `/overlays/timeline?past_hours=` | none | The full slider manifest, default `TIMELINE_DEFAULT_HOURS` (12), capped at `TIMELINE_PAST_HOURS` (48), floored at 1: `{now, latest_cycle, bounds:[[s,w],[n,e]], width, height, colorscale:[…], attribution, gaps:[…], frames:[{offset_minutes, valid_time, kind:"observed"｜"forecast", source_cycle, url}]}`. `offset_minutes` is negative for the past, ordered ascending. Cache-Control 60 s. |
 | `GET` | `/unsubscribe?token=…` | unsubscribe token | One-click unsubscribe (also accepts `POST` for RFC 8058 `List-Unsubscribe-Post`). |
-| `GET` | `/healthz`, `/readyz` | none | Liveness / readiness (readiness = DB reachable). |
+| `GET` | `/healthz`, `/readyz` | none | Liveness / readiness. **Readiness = database reachable *and* its schema at the migration this code expects**, because new code on an old schema connects fine and then 500s on the first request touching what the migration added. `503` names the revision it found, the one it wanted, and the command. On Cloud Run that also means a revision deployed without its migration never takes traffic. |
 | `GET` | `/metrics` | internal | Prometheus-format metrics (§15). |
 
 Rate limits (per IP and per email hash): `POST /subscriptions` 5/hour, `PUT location` 60/hour,

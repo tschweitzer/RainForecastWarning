@@ -74,3 +74,50 @@ def test_the_csp_allows_the_helper_but_not_arbitrary_script(client):
     policy = client.get("/").headers["content-security-policy"]
     assert "script-src 'self'" in policy
     assert "'unsafe-inline'" not in policy.split("style-src")[0]
+
+
+# --- readiness ---------------------------------------------------------------------------------
+
+
+def test_readyz_is_ready_on_a_current_schema(client):
+    assert client.get("/readyz").status_code == 200
+
+
+def test_readyz_refuses_a_schema_that_is_behind(client, db):
+    """The failure this exists for: new code deployed over an un-migrated database.
+
+    It connects fine and then 500s on the first request touching what the migration added, a
+    long way from the cause. Readiness is where that belongs.
+    """
+    from sqlalchemy import text
+
+    with db() as session:
+        session.execute(text("UPDATE alembic_version SET version_num = 'deadbeef1234'"))
+        session.commit()
+
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "deadbeef1234" in detail  # what it is
+    assert "make migrate" in detail  # what to do about it
+
+
+def test_healthz_stays_up_when_the_schema_is_behind(client, db):
+    """Liveness is not readiness: the process is fine, it just must not take traffic."""
+    from sqlalchemy import text
+
+    with db() as session:
+        session.execute(text("UPDATE alembic_version SET version_num = 'deadbeef1234'"))
+        session.commit()
+    assert client.get("/healthz").status_code == 200
+
+
+def test_a_database_with_no_alembic_version_is_reported(client, db):
+    from sqlalchemy import text
+
+    with db() as session:
+        session.execute(text("DROP TABLE alembic_version"))
+        session.commit()
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    assert "no schema yet" in response.json()["detail"]
