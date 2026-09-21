@@ -173,6 +173,35 @@ def test_every_band_is_accepted_by_the_api(settings):
         }, label
 
 
+def test_a_new_subscription_lands_on_a_named_band(db, settings):
+    """The reason the default is 0.15 and not a rounder 0.10.
+
+    A default that is not one of the bands shows up on the settings page as "eigener Wert",
+    which is a confusing first impression for something nobody chose.
+    """
+    from rainalert import subscriptions as svc
+    from rainalert.db.models import Subscription
+    from rainalert.radar.overlay import INTENSITY_BANDS
+
+    with db() as session:
+        svc.subscribe(session, settings, lat=50.1, lon=8.6, address="fresh@example.com")
+        stored = float(session.query(Subscription).one().threshold_mm_5min)
+
+    assert stored in [threshold for threshold, _, _ in INTENSITY_BANDS]
+
+
+def test_every_default_threshold_agrees(settings):
+    """Four places carry it; they are all the same number or one of them is a bug."""
+    from rainalert.alerting.rules import AlertRule
+    from rainalert.cli import DEFAULT_THRESHOLD
+    from rainalert.db.models import Subscription
+
+    column = Subscription.__table__.c.threshold_mm_5min.default.arg
+    assert float(column) == settings.default_threshold_mm_5min
+    assert AlertRule().threshold_mm_5min == settings.default_threshold_mm_5min
+    assert DEFAULT_THRESHOLD == settings.default_threshold_mm_5min
+
+
 def test_the_session_control_is_outside_the_settings_form(client):
     """Next to Save, anything button-shaped reads as Cancel."""
     page = client.get("/manage").text

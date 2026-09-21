@@ -13,7 +13,7 @@ from rainalert.alerting.sampler import SampleSeries
 
 @dataclass(frozen=True)
 class AlertRule:
-    threshold_mm_5min: float = 0.1
+    threshold_mm_5min: float = 0.15
     lead_time_minutes: int = 30
     #: Above this share of no-data in the radius, a frame is not evidence of anything.
     missing_limit: float = 0.30

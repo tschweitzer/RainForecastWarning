@@ -18,7 +18,7 @@ from rainalert.radar.decoder import read_frames
 from rainalert.radar.grid import OutsideGrid, cell_center, cell_of, radius_mask
 
 DEFAULT_RADIUS_M = 2000
-DEFAULT_THRESHOLD = 0.1  # mm per 5 min
+DEFAULT_THRESHOLD = 0.15  # mm per 5 min - the "leichter Regen" band (DESIGN.md §11.1.1)
 
 
 def _probe_cycle(frames, rows, cols, tz, args) -> None:

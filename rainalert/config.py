@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     #: Defaults from D-13. Per-subscription columns override these; these are what a new
     #: subscription gets.
     default_radius_m: int = 2000
-    default_threshold_mm_5min: float = 0.1
+    default_threshold_mm_5min: float = 0.15
     default_lead_minutes: int = 30
     dry_clear_minutes: int = 30
     warned_retract_cycles: int = 3

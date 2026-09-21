@@ -70,7 +70,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-10 | `min_gap_minutes` ("only once per N minutes") and quiet hours exist in the schema and config now, default **off** (`0` / disabled) | Future-configurable without migration |
 | D-11 | Language: **Python everywhere** (FastAPI + Jinja2 templates, numpy) | Radar tooling is Python; one image, one language |
 | D-12 | Mail via a pluggable `Notifier`; default adapter a transactional provider (Brevo/Mailgun/SendGrid free tier); console adapter for dev | Deliverability; swappable via config |
-| D-13 | Defaults: **lead time 30 min**, threshold **> 0.1 mm / 5 min** | Nowcast skill decays fast; 0.1 mm/5 min ≈ 1.2 mm/h ≈ "you get wet" |
+| D-13 | Defaults: **lead time 30 min**, threshold **0.15 mm / 5 min** | Nowcast skill decays fast. The threshold was 0.1 (≈1.2 mm/h, "you get wet") until 2026-09-21; it moved to 0.15 (≈1.8 mm/h, *leichter Regen*) when the settings page became a picker of the §11.1.1 bands, because a default that is not one of the bands shows up as "eigener Wert" - a confusing first impression for something nobody chose. The band boundary, not the round number, is what makes it legible |
 | D-14 | Alert rule parameters are **per-subscription columns with defaults**, not constants | v1 UI shows defaults only; later UI edits the same fields |
 | D-15 | API-first; push is a stubbed adapter | No FCM work in v1 |
 | D-16 | One subscriber (identified by email) → **one subscription** → **one location**, updatable | See D-17 for the consequence |
@@ -427,7 +427,7 @@ CREATE TABLE subscriptions (
   grid_col               integer,
   -- alert rule (D-14: per-subscription, defaults from D-13/D-3)
   radius_m               integer NOT NULL DEFAULT 2000  CHECK (radius_m BETWEEN 0 AND 20000),
-  threshold_mm_5min      numeric(5,2) NOT NULL DEFAULT 0.10 CHECK (threshold_mm_5min > 0),
+  threshold_mm_5min      numeric(5,2) NOT NULL DEFAULT 0.15 CHECK (threshold_mm_5min > 0),
   lead_time_minutes      integer NOT NULL DEFAULT 30 CHECK (lead_time_minutes BETWEEN 5 AND 120),
   -- throttling (D-9/D-10: disabled by default)
   min_gap_minutes        integer NOT NULL DEFAULT 0 CHECK (min_gap_minutes >= 0),
@@ -848,7 +848,8 @@ other way round — so they are a readable scale rather than a claim that 0.70 m
 recognised meteorological boundary.
 
 **Where a subscriber's threshold sits.** The picker offers exactly these seven values. A stored
-threshold that is not one of them — the `0.10` column default, or anything set through the API —
+threshold that is not one of them — anything set through the API, or a row created before the
+default moved to `0.15` —
 is kept as its own option wearing the colour of the band it falls into, never snapped to a
 neighbour: silently changing someone's threshold while showing them a settings page is worse
 than an odd-looking dropdown.

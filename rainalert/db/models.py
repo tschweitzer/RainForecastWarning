@@ -168,7 +168,10 @@ class Subscription(Base):
 
     # Alert rule (D-14): per-subscription columns with the D-13 defaults. Not exposed in the v1 UI.
     radius_m: Mapped[int] = mapped_column(Integer, default=2000)
-    threshold_mm_5min: Mapped[float] = mapped_column(Numeric(5, 2), default=0.10)
+    #: 0.15 rather than a rounder 0.10 so that a new subscription lands on a named band of
+    #: the intensity scale (§11.1.1, "leichter Regen") instead of between two of them, which
+    #: the settings page can only show as "eigener Wert".
+    threshold_mm_5min: Mapped[float] = mapped_column(Numeric(5, 2), default=0.15)
     lead_time_minutes: Mapped[int] = mapped_column(Integer, default=30)
 
     # Throttling (D-9/D-10): present, disabled by default.
