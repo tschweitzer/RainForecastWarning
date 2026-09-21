@@ -303,3 +303,59 @@ def test_the_subscribe_page_links_to_the_settings_page(client):
 @pytest.mark.parametrize("path", ["/map", "/manage"])
 def test_both_maps_zoom_to_street_level(client, path):
     assert "maxZoom: 18" in client.get(path).text
+
+
+# --- attribution (DESIGN.md 4.2) ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["/", "/map", "/manage", "/privacy"])
+def test_every_page_credits_dwd_and_says_the_data_was_modified(client, path):
+    """CC BY 4.0 wants the source, the licence, and any modification indicated.
+
+    This service reprojects the RADOLAN grid to Web Mercator, coarsens it to ~2 km and turns it
+    into colours, so the third part is not optional - and it was the part that was missing.
+    """
+    page = client.get(path).text
+    assert "Deutscher Wetterdienst" in page
+    assert "creativecommons.org/licenses/by/4.0" in page
+    assert "eigene Verarbeitung" in page
+
+
+def test_the_messages_carry_the_same_credit(settings):
+    from rainalert.api.mail import confirmation_message
+    from rainalert.attribution import ATTRIBUTION
+
+    message = confirmation_message(settings, "friend@example.com", "token")
+    assert ATTRIBUTION in message.text
+    assert "eigene Verarbeitung" in message.text
+
+
+def test_the_credit_is_defined_once(client):
+    """Four copies of a string that must agree are four that will not."""
+    from rainalert.attribution import ATTRIBUTION, ATTRIBUTION_HTML
+
+    for text in (ATTRIBUTION, ATTRIBUTION_HTML):
+        assert "Deutscher Wetterdienst" in text
+        assert "eigene Verarbeitung" in text
+    # The plain-text form goes into mail headers and JSON; keep it ASCII.
+    ATTRIBUTION.encode("ascii")
+
+
+def test_the_timeline_payload_carries_the_credit(client, db, settings):
+    """The map draws from JSON, so the credit has to be in the JSON."""
+    from rainalert.attribution import ATTRIBUTION
+    from rainalert.timeline import build_timeline
+
+    with db() as session:
+        payload = build_timeline(session, settings, _NullStore(), 12)
+    assert payload["attribution"] == ATTRIBUTION
+
+
+class _NullStore:
+    """Enough OverlayStore for build_timeline to produce a payload with no cycles stored."""
+
+    def url_for_observed(self, nominal_time):
+        return "/overlays/obs/x.png"
+
+    def url_for_forecast(self, nominal_time, lead_minutes):
+        return "/overlays/fc/x.png"

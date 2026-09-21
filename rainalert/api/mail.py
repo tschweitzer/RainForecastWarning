@@ -7,11 +7,10 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
 from rainalert.notify import OutboundMessage
 from rainalert.tokens import unsubscribe_token
-
-ATTRIBUTION = "Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0"
 
 
 def confirmation_message(

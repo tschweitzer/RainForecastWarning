@@ -40,6 +40,7 @@ from rainalert import subscriptions as svc
 from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
 from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check
+from rainalert.attribution import ATTRIBUTION_HTML
 from rainalert.config import Settings, get_settings
 from rainalert.db.models import Channel, Subscriber, Subscription, TokenPurpose
 from rainalert.db.schema import schema_complaint
@@ -60,6 +61,9 @@ from rainalert.tokens import (
 logger = logging.getLogger(__name__)
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# Available to every template without threading it through every context dict. The credit
+# belongs on every page, so it should not depend on each handler remembering to pass it.
+TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 
 #: Leaflet is loaded from a CDN because this environment cannot vendor it. That means every
 #: visitor's browser tells unpkg.com their IP, which sits badly with a service whose whole

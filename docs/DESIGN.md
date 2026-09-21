@@ -142,7 +142,18 @@ of every alert email:
 Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0
 ```
 
-Derived/processed values must be marked as modified ("eigene Verarbeitung von DWD-Daten").
+Derived/processed values must be marked as modified ("eigene Verarbeitung von DWD-Daten"), and
+this service modifies heavily - the RADOLAN grid is reprojected to Web Mercator, coarsened to
+~2 km and colour-mapped. The credit therefore reads:
+
+```
+Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0
+- eigene Verarbeitung (umprojiziert, vergroebert, eingefaerbt)
+```
+
+It lives in `rainalert/attribution.py` and nowhere else. It was four copies until 2026-09-21 -
+footer, messages, and both timeline payloads - and none of the four carried the modification
+notice this paragraph has always asked for.
 
 ### 4.3 Politeness policy toward opendata.dwd.de (hard requirements)
 
@@ -717,7 +728,11 @@ Server-rendered Jinja2, no build step, no SPA. Pages:
   radar frame underneath. Reached by a magic link, not by the API token (§11.2). Pause/resume
   and delete are still not built.
 - **`/unsubscribe`** — confirmation of one-click unsubscribe.
-- **`/privacy`**, **`/attribution`** — §4.2 and §13.
+- **`/privacy`** — §13. There is **no `/attribution` page** and none is needed: §4.2 asks for the
+  credit on the map page, the privacy page and in every alert, and the footer is on every page
+  while `ATTRIBUTION` is in every message. A page would be one more place for the same sentence
+  to drift out of date. If a paid tile provider or a vendored library ever needs crediting too,
+  that is when a page earns its place.
 
 ### 11.1 Rain timeline overlay (−12 h … +2 h)
 

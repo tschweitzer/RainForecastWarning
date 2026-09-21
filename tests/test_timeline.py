@@ -175,7 +175,11 @@ def test_timeline_endpoint_serves_the_manifest(client, db):
     with db() as session:
         add_cycles(session, 3)
     body = client.get("/api/v1/overlays/timeline").json()
-    assert body["attribution"].startswith("Deutscher Wetterdienst")
+    # Content, not prefix: the credit is one shared constant now, and CC BY needs the source,
+    # the licence and the fact that the data was modified - not a particular word order.
+    assert "Deutscher Wetterdienst" in body["attribution"]
+    assert "CC BY 4.0" in body["attribution"]
+    assert "eigene Verarbeitung" in body["attribution"]
     assert body["colorscale"]
 
 

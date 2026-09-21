@@ -43,8 +43,10 @@
 <body><main>
 {% block body %}{% endblock %}
 <footer>
-  Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV,
-  <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> ·
+  {# A Jinja global, so the credit cannot drift between the footer, the messages and the map's
+     own legend. CC BY wants the modification indicated and this service reprojects, coarsens
+     and colours the grid - see rainalert/attribution.py. #}
+  {{ attribution_html | safe }} ·
   <a href="/privacy">Datenschutz</a>
 </footer>
 </main></body>

@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
 from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.radar.overlay import BOUNDS, legend
@@ -74,7 +75,7 @@ def build_timeline(
             "frames": [],
             "gaps": [],
             "colorscale": legend(),
-            "attribution": "Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0",
+            "attribution": ATTRIBUTION,
         }
 
     anchor = latest.nominal_time
@@ -142,5 +143,5 @@ def build_timeline(
         "frames": [asdict(frame) for frame in frames],
         "gaps": [asdict(gap) for gap in gaps],
         "colorscale": legend(),
-        "attribution": "Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0",
+        "attribution": ATTRIBUTION,
     }
