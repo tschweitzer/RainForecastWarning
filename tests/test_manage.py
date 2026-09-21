@@ -17,7 +17,7 @@ from rainalert.api.app import CSRF_HEADER, MANAGE_COOKIE, create_app
 from rainalert.config import Settings
 from rainalert.db.models import AuthToken, Subscriber, Subscription, TokenPurpose
 from rainalert.notify import ConsoleNotifier
-from rainalert.tokens import csrf_token, session_token
+from rainalert.tokens import csrf_token, session_token, verify_csrf_token
 
 MUNICH = (48.1533, 11.5574)
 HAMBURG = (53.5511, 9.9937)
@@ -72,6 +72,17 @@ def signed_in(client, notifier, **kwargs) -> str:
     response = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
     assert response.status_code == 200
     return response.json()["csrf"]
+
+
+def put_session_cookie(client, value):
+    """Replace the session cookie.
+
+    Set without a matching domain and path, httpx keeps the server's copy alongside the new
+    one and then refuses to say which is current - CookieConflict, from the test rather than
+    from anything the code did.
+    """
+    client.cookies.delete(MANAGE_COOKIE)
+    client.cookies.set(MANAGE_COOKIE, value, domain="rain.example.invalid", path="/")
 
 
 def write(client, csrf, method="PATCH", url="/api/v1/subscriptions/me", **body):
@@ -174,7 +185,11 @@ def test_reads_do_not_need_the_form_token(client, notifier):
 
 def test_another_subscribers_form_token_does_not_work(client, notifier, db, settings):
     csrf = signed_in(client, notifier)
-    stranger = csrf_token(uuid.uuid4(), settings.secret_key, settings.manage_session_ttl_minutes)
+    # A genuinely valid token belonging to somebody else - not an expired one, which would
+    # be refused for the wrong reason and prove nothing about whose session it belongs to.
+    future = int((datetime.now(UTC) + timedelta(minutes=30)).timestamp())
+    stranger = csrf_token(uuid.uuid4(), settings.secret_key, future)
+    assert verify_csrf_token(stranger, settings.secret_key) is not None, "must be valid to test"
     assert write(client, stranger, threshold_mm_5min=9.0).status_code == 403
     assert write(client, csrf, threshold_mm_5min=9.0).status_code == 204
 
@@ -184,7 +199,7 @@ def test_an_expired_session_is_refused(client, notifier, db, settings):
     with db() as session:
         subscriber = session.query(Subscriber).one()
         stale = session_token(subscriber.id, settings.secret_key, -1)
-    client.cookies.set(MANAGE_COOKIE, stale)
+    put_session_cookie(client, stale)
     assert client.get("/api/v1/subscriptions/me").status_code == 401
 
 
@@ -373,3 +388,116 @@ def test_the_read_endpoint_publishes_the_bounds(client, notifier, settings):
     assert bounds["lead_max"] == settings.max_lead_minutes
     assert bounds["threshold_min"] == settings.min_threshold_mm_5min
     assert bounds["threshold_max"] == settings.plausibility_max_mm_5min
+
+
+# --- how long a session lasts, and renewing it ---------------------------------------------------
+
+
+def test_the_csrf_value_expires_with_the_session_not_on_its_own_clock(client, notifier):
+    """They used to drift: every page load minted a fresh thirty minutes for the CSRF token
+    while the session's own expiry stayed put, so it could outlive what it belongs to."""
+    from rainalert.tokens import verify_csrf_token, verify_session_token
+
+    signed_in(client, notifier)
+    state = client.get("/api/v1/manage/csrf").json()
+    cookie = client.cookies.get(MANAGE_COOKIE)
+
+    session = verify_session_token(cookie, "test-secret")
+    form = verify_csrf_token(state["csrf"], "test-secret")
+    assert form.expires == session.expires
+
+
+def test_the_page_is_told_how_long_is_left(client, notifier, settings):
+    signed_in(client, notifier)
+    state = client.get("/api/v1/manage/csrf").json()
+    assert 0 < state["seconds_left"] <= settings.manage_session_ttl_minutes * 60
+    assert state["session_minutes"] == settings.manage_session_ttl_minutes
+    assert state["seconds_until_deadline"] <= settings.manage_session_max_minutes * 60
+
+
+def test_extending_puts_the_session_back_to_full_length(client, notifier, db, settings):
+    from rainalert.tokens import session_token, verify_session_token
+
+    signed_in(client, notifier)
+    with db() as session:
+        subscriber_id = session.query(Subscriber).one().id
+
+    # A session most of the way through its life, with plenty of room before the wall.
+    deadline = int((datetime.now(UTC) + timedelta(minutes=90)).timestamp())
+    nearly_done = session_token(subscriber_id, settings.secret_key, 2, deadline)
+    put_session_cookie(client, nearly_done)
+    before = verify_session_token(nearly_done, settings.secret_key).seconds_left()
+    assert before <= 120
+
+    fresh = client.get("/api/v1/manage/csrf").json()
+    response = client.post("/api/v1/manage/extend", headers={CSRF_HEADER: fresh["csrf"]})
+    assert response.status_code == 200
+    assert response.json()["seconds_left"] > before
+    assert response.json()["seconds_left"] > 60 * (settings.manage_session_ttl_minutes - 1)
+
+
+def test_extending_cannot_push_past_the_wall(client, notifier, db, settings):
+    """Otherwise the renew button turns a deliberately short session into a permanent one."""
+    from rainalert.tokens import session_token, verify_session_token
+
+    signed_in(client, notifier)
+    with db() as session:
+        subscriber_id = session.query(Subscriber).one().id
+
+    # Five minutes left before the wall, which is less than a full session.
+    deadline = int((datetime.now(UTC) + timedelta(minutes=5)).timestamp())
+    capped = session_token(subscriber_id, settings.secret_key, 30, deadline)
+    put_session_cookie(client, capped)
+
+    fresh = client.get("/api/v1/manage/csrf").json()
+    response = client.post("/api/v1/manage/extend", headers={CSRF_HEADER: fresh["csrf"]})
+    assert response.status_code == 200
+    # Renewed, but only up to the wall - not to a full thirty minutes.
+    assert response.json()["seconds_left"] <= 5 * 60 + 2
+    assert (
+        verify_session_token(client.cookies.get(MANAGE_COOKIE), settings.secret_key).deadline
+        == deadline
+    )
+
+
+def test_a_session_at_its_wall_is_refused_a_renewal(client, notifier, db, settings):
+    from rainalert.tokens import session_token
+
+    signed_in(client, notifier)
+    with db() as session:
+        subscriber_id = session.query(Subscriber).one().id
+
+    past = int((datetime.now(UTC) - timedelta(minutes=1)).timestamp())
+    at_the_wall = session_token(subscriber_id, settings.secret_key, 30, past)
+    # The token itself is expired once the deadline has passed, so this is a 401 rather than a
+    # 409 - either way, no renewal, and the page asks for a new link.
+    put_session_cookie(client, at_the_wall)
+    fresh = client.get("/api/v1/manage/csrf")
+    assert fresh.status_code == 401
+
+
+def test_extending_needs_the_form_token(client, notifier):
+    """Extending a credential's life is a write, and exactly what another site would like."""
+    signed_in(client, notifier)
+    assert client.post("/api/v1/manage/extend").status_code == 403
+
+
+def test_a_tampered_cookie_is_refused(client, notifier, settings):
+    """The holder can read and delete the cookie; they cannot alter it.
+
+    Everything before the signature is inside the signature, so pushing the expiry out, swapping
+    the subscriber id, or promoting a session token to a CSRF token all fail verification.
+    """
+    signed_in(client, notifier)
+    good = client.cookies.get(MANAGE_COOKIE)
+    purpose, ident, expires, deadline, mac = good.split(".")
+
+    for label, forged in {
+        "expiry pushed out": f"{purpose}.{ident}.{int(expires) + 31536000}.{deadline}.{mac}",
+        "wall pushed out": f"{purpose}.{ident}.{expires}.{int(deadline) + 31536000}.{mac}",
+        "someone else's id": f"{purpose}.{uuid.uuid4()}.{expires}.{deadline}.{mac}",
+        "promoted to csrf": f"csrf.{ident}.{expires}.{deadline}.{mac}",
+        "signature dropped": f"{purpose}.{ident}.{expires}.{deadline}.",
+    }.items():
+        put_session_cookie(client, forged)
+        assert client.get("/api/v1/subscriptions/me").status_code == 401, label

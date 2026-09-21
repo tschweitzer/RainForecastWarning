@@ -991,6 +991,26 @@ the fallback is the same graticule-and-cities used by `/map`.
 **Saving** is two requests, not one, because a move resets the alert state and a rule change does
 not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
 
+**How long a session lasts.** Thirty minutes from redeeming the link, **absolute** - nothing
+slides it, and a page reload does not reset it. The page shows the time left and offers an
+explicit *Verlängern* button, because a session that ends at a predictable moment is the
+protection, and sliding on every request would quietly remove it while looking like a courtesy.
+
+Renewal stops at a wall (`manage_session_max_minutes`, two hours) measured from when the link
+was spent, so the button cannot turn a deliberately short session into a permanent one. The wall
+is carried **inside the signed token**, which is the only record of when the session began - it
+needs no session table, and a holder who could edit it could renew forever.
+
+The CSRF value is minted against the session's own expiry, not a lifetime of its own. Given its
+own clock the two drift: until 2026-09-21 every page load minted a fresh thirty minutes for the
+CSRF token while the session's expiry stayed put, so it could outlive what it belonged to.
+Harmless, because the session is checked first - but two things that are meant to be one.
+
+**The cookie is signed, not encrypted.** Its holder can read it, copy it to another browser and
+delete it; they cannot alter it. Everything before the MAC is inside the MAC, so pushing the
+expiry out, moving the wall, swapping the subscriber id or promoting a session token to a CSRF
+token all fail verification. There is a test that tries each.
+
 **Ending the session** is a link below the form, not a button beside Save. Two reasons: next to a
 submit button anything button-shaped reads as Cancel, and "Abmelden" in German means both "log
 out" and "cancel my subscription" - on a page with a subscription on it, that is the one word to

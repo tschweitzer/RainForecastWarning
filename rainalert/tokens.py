@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 #: 32 bytes of urlsafe base64 - ~43 characters, 256 bits of entropy. Not guessable, and short
@@ -88,66 +89,110 @@ def verify_unsubscribe_token(token: str, secret: str) -> uuid.UUID | None:
     return subscriber_id
 
 
-def _sign(purpose: str, subscriber_id: uuid.UUID, expires: int, secret: str) -> str:
-    """`purpose.id.expiry.mac`, with the purpose inside the MAC.
+@dataclass(frozen=True)
+class SignedToken:
+    """What a verified session or CSRF token says about itself."""
+
+    subscriber_id: uuid.UUID
+    #: When this token stops working.
+    expires: int
+    #: The wall beyond which the *session* may not be extended, carried so that renewing does
+    #: not need a session table to remember when the session began.
+    deadline: int
+
+    def seconds_left(self, now: datetime | None = None) -> int:
+        return max(0, self.expires - int((now or datetime.now(UTC)).timestamp()))
+
+    def seconds_until_deadline(self, now: datetime | None = None) -> int:
+        return max(0, self.deadline - int((now or datetime.now(UTC)).timestamp()))
+
+
+def _sign(purpose: str, subscriber_id: uuid.UUID, expires: int, deadline: int, secret: str) -> str:
+    """`purpose.id.expiry.deadline.mac`, with everything before the mac inside the mac.
 
     The purpose is signed, not merely prefixed: without it a session cookie and a CSRF token -
     same id, same expiry, same secret - would have identical signatures, and the one that is
     readable by the page would be usable as the one that is not.
+
+    The deadline is signed for the same reason the expiry is. It is the only record of when a
+    session started, so a holder who could edit it could renew forever.
     """
-    payload = f"{purpose}:{subscriber_id}:{expires}"
+    payload = f"{purpose}:{subscriber_id}:{expires}:{deadline}"
     mac = hmac.new(secret.encode("utf-8"), payload.encode("ascii"), hashlib.sha256)
     signature = base64.urlsafe_b64encode(mac.digest()).decode().rstrip("=")
-    return f"{purpose}.{subscriber_id}.{expires}.{signature}"
+    return f"{purpose}.{subscriber_id}.{expires}.{deadline}.{signature}"
 
 
-def _verify(purpose: str, token: str, secret: str, now: datetime | None = None) -> uuid.UUID | None:
-    """Return the subscriber id if the token is well formed, unexpired and ours."""
+def _verify(
+    purpose: str, token: str, secret: str, now: datetime | None = None
+) -> SignedToken | None:
+    """Return the token's claims if it is well formed, unexpired and ours."""
     parts = token.split(".")
-    if len(parts) != 4 or parts[0] != purpose:
+    if len(parts) != 5 or parts[0] != purpose:
         return None
-    _, raw_id, raw_expiry, signature = parts
+    _, raw_id, raw_expiry, raw_deadline, signature = parts
     try:
         subscriber_id = uuid.UUID(raw_id)
         expires = int(raw_expiry)
+        deadline = int(raw_deadline)
     except ValueError:
         return None
-    expected = _sign(purpose, subscriber_id, expires, secret).rpartition(".")[2]
+    expected = _sign(purpose, subscriber_id, expires, deadline, secret).rpartition(".")[2]
     # Signature first: an expired token and a forged one should cost the same to probe.
     if not hmac.compare_digest(signature, expected):
         return None
     if (now or datetime.now(UTC)).timestamp() >= expires:
         return None
-    return subscriber_id
+    return SignedToken(subscriber_id, expires, deadline)
 
 
-def session_token(subscriber_id: uuid.UUID, secret: str, ttl_minutes: int, now=None) -> str:
+def session_token(
+    subscriber_id: uuid.UUID,
+    secret: str,
+    ttl_minutes: int,
+    deadline: int | None = None,
+    now: datetime | None = None,
+) -> str:
     """The settings-page session, carried in a cookie.
 
     Stateless and signed rather than a row, for the same reason as the unsubscribe token: there
     is no session table and inventing one to hold thirty minutes of state is more machinery than
     the problem deserves. Rotating SECRET_KEY ends every session at once, which is the only
     revocation this needs.
+
+    ``deadline`` is carried forward when a session is renewed, so the wall stays where the first
+    one put it. Renewal past it is refused; that is what stops a renew button turning a
+    deliberately short session into a permanent one.
     """
-    expires = int(((now or datetime.now(UTC)) + timedelta(minutes=ttl_minutes)).timestamp())
-    return _sign("session", subscriber_id, expires, secret)
+    at = now or datetime.now(UTC)
+    expires = int((at + timedelta(minutes=ttl_minutes)).timestamp())
+    if deadline is not None:
+        expires = min(expires, deadline)
+    return _sign("session", subscriber_id, expires, deadline if deadline else expires, secret)
 
 
-def verify_session_token(token: str, secret: str, now=None) -> uuid.UUID | None:
+def verify_session_token(token: str, secret: str, now=None) -> SignedToken | None:
     return _verify("session", token, secret, now)
 
 
-def csrf_token(subscriber_id: uuid.UUID, secret: str, ttl_minutes: int, now=None) -> str:
+def csrf_token(
+    subscriber_id: uuid.UUID, secret: str, expires: int, now: datetime | None = None
+) -> str:
     """Rendered into the settings page and echoed back in a header on every write.
 
     The session cookie alone is not enough. `SameSite=Lax` blocks a cross-site form POST, but
     it is one browser default away from being the only thing standing there - so the write also
     requires a value that can only be obtained by *reading* the page, which the same-origin
     policy denies to another site (SECURITY_REVIEW.md F-16).
+
+    Takes an absolute expiry rather than a lifetime, because it must be **the session's** expiry.
+    Given its own clock it drifts: every page load minted a fresh thirty minutes while the
+    session's own expiry stayed put, so a CSRF token could outlive the session it belongs to.
+    Harmless - the session is checked first - but two things that are meant to be one.
     """
-    expires = int(((now or datetime.now(UTC)) + timedelta(minutes=ttl_minutes)).timestamp())
-    return _sign("csrf", subscriber_id, expires, secret)
+    del now  # kept for call-site symmetry; the expiry is absolute
+    return _sign("csrf", subscriber_id, expires, expires, secret)
 
 
-def verify_csrf_token(token: str, secret: str, now=None) -> uuid.UUID | None:
+def verify_csrf_token(token: str, secret: str, now=None) -> SignedToken | None:
     return _verify("csrf", token, secret, now)

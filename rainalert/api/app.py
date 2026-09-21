@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -431,25 +431,29 @@ def create_app(
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised") from exc
             return subscriber, session
 
-        cookie = request.cookies.get(MANAGE_COOKIE, "")
-        subscriber_id = verify_session_token(cookie, settings.secret_key) if cookie else None
-        if subscriber_id is None:
+        claims = session_claims(request)
+        if claims is None:
             if header:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
 
         if request.method not in ("GET", "HEAD", "OPTIONS"):
-            presented = request.headers.get(CSRF_HEADER, "")
+            presented = verify_csrf_token(request.headers.get(CSRF_HEADER, ""), settings.secret_key)
             # Must match this session, not merely be a valid signature: otherwise anyone with a
             # session of their own holds a CSRF value good against everybody else's.
-            if verify_csrf_token(presented, settings.secret_key) != subscriber_id:
+            if presented is None or presented.subscriber_id != claims.subscriber_id:
                 raise HTTPException(status.HTTP_403_FORBIDDEN, "missing or stale form token")
 
-        subscriber = session.get(Subscriber, subscriber_id)
+        subscriber = session.get(Subscriber, claims.subscriber_id)
         if subscriber is None:
             # Signed, unexpired, and the account is gone - deleted since the session opened.
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
         return subscriber, session
+
+    def session_claims(request: Request):
+        """The settings-page session's claims, or None. Never raises - callers decide."""
+        cookie = request.cookies.get(MANAGE_COOKIE, "")
+        return verify_session_token(cookie, settings.secret_key) if cookie else None
 
     def rule_bounds() -> dict:
         """The limits the page renders its inputs from, so the numbers live in one place."""
@@ -533,13 +537,25 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- settings-page session --------------------------------------------------------------
-    def set_session_cookie(response: Response, subscriber_id) -> str:
-        """Open a session and return the CSRF value the page must echo back."""
-        ttl = settings.manage_session_ttl_minutes
+    def set_session_cookie(response: Response, subscriber_id, deadline: int | None = None) -> dict:
+        """Open or renew a session. Returns what the page needs to show and use it.
+
+        ``deadline`` carries the wall forward on a renewal. Fresh sessions get one measured from
+        now; without it a renew button would make the short session in D-25 a formality.
+        """
+        now = datetime.now(UTC)
+        if deadline is None:
+            deadline = int(
+                (now + timedelta(minutes=settings.manage_session_max_minutes)).timestamp()
+            )
+        token = session_token(
+            subscriber_id, settings.secret_key, settings.manage_session_ttl_minutes, deadline, now
+        )
+        claims = verify_session_token(token, settings.secret_key, now)
         response.set_cookie(
             MANAGE_COOKIE,
-            session_token(subscriber_id, settings.secret_key, ttl),
-            max_age=ttl * 60,
+            token,
+            max_age=claims.seconds_left(now),
             httponly=True,
             samesite="lax",
             # Only when the site is actually served over TLS. Setting it unconditionally makes
@@ -547,7 +563,22 @@ def create_app(
             secure=settings.public_base_url.startswith("https://"),
             path="/",
         )
-        return csrf_token(subscriber_id, settings.secret_key, ttl)
+        return session_state(claims, now)
+
+    def session_state(claims, now: datetime | None = None) -> dict:
+        """What the page shows and sends back.
+
+        The CSRF value is minted against the session's own expiry rather than a lifetime of its
+        own. Given its own clock the two drift: every page load used to mint a fresh thirty
+        minutes while the session's expiry stayed put.
+        """
+        now = now or datetime.now(UTC)
+        return {
+            "csrf": csrf_token(claims.subscriber_id, settings.secret_key, claims.expires),
+            "seconds_left": claims.seconds_left(now),
+            "seconds_until_deadline": claims.seconds_until_deadline(now),
+            "session_minutes": settings.manage_session_ttl_minutes,
+        }
 
     @app.post("/api/v1/manage/link", status_code=status.HTTP_202_ACCEPTED)
     def request_manage_link(
@@ -584,7 +615,7 @@ def create_app(
             subscriber = svc.redeem_manage_token(session, token=token)
         except svc.ValidationError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-        return {"csrf": set_session_cookie(response, subscriber.id)}
+        return set_session_cookie(response, subscriber.id)
 
     @app.get("/api/v1/manage/csrf")
     def manage_csrf(request: Request) -> dict:
@@ -594,15 +625,33 @@ def create_app(
         another site from reading the response - which is the same thing that makes the value
         worth anything in the first place.
         """
-        cookie = request.cookies.get(MANAGE_COOKIE, "")
-        subscriber_id = verify_session_token(cookie, settings.secret_key) if cookie else None
-        if subscriber_id is None:
+        claims = session_claims(request)
+        if claims is None:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
-        return {
-            "csrf": csrf_token(
-                subscriber_id, settings.secret_key, settings.manage_session_ttl_minutes
+        return session_state(claims)
+
+    @app.post("/api/v1/manage/extend")
+    def extend_manage_session(request: Request, response: Response) -> dict:
+        """Put the session back to its full length, up to the wall it started with.
+
+        A deliberate action rather than a side effect of activity: the page shows the time left
+        and the person decides. That keeps "this session ends at a predictable moment" true,
+        which sliding-on-every-request would not.
+
+        Needs the CSRF value like any other write - extending a credential's life is a change,
+        and it is exactly the sort of thing another site would like to do on a visitor's behalf.
+        """
+        claims = session_claims(request)
+        if claims is None:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
+        presented = verify_csrf_token(request.headers.get(CSRF_HEADER, ""), settings.secret_key)
+        if presented is None or presented.subscriber_id != claims.subscriber_id:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "missing or stale form token")
+        if claims.seconds_until_deadline() <= 0:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "this session has reached its limit; ask for a new link"
             )
-        }
+        return set_session_cookie(response, claims.subscriber_id, claims.deadline)
 
     @app.post("/api/v1/manage/logout", status_code=status.HTTP_204_NO_CONTENT)
     def close_manage_session() -> Response:

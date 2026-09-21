@@ -199,6 +199,10 @@ class Settings(BaseSettings):
     #: How long the session it opens lasts. Long enough to pick a spot on a map and think about
     #: it, short enough that a borrowed phone is not an open account.
     manage_session_ttl_minutes: int = 30
+    #: The wall a session may not be renewed past, measured from the moment the link was spent.
+    #: Without it the renew button would quietly turn the line above into a formality - which is
+    #: the whole protection: a session that ends at a predictable time whatever the holder does.
+    manage_session_max_minutes: int = 120
 
     #: Bearer token guarding /metrics. Unset means the endpoint does not exist at all - "internal
     #: only" is not expressible on Cloud Run, where every route is reachable from the internet

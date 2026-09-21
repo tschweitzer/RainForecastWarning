@@ -80,6 +80,9 @@
   {# Deliberately below the form and worded so it cannot be read as "discard my changes". It
      also must not be read as unsubscribing: it ends the session, nothing else. #}
   <p class="session-end">
+    <span id="session-left" role="status"></span>
+    <button type="button" class="linklike" id="extend" hidden>Verlängern</button>
+    <br>
     Fertig?
     <button type="button" class="linklike" id="logout">Sitzung auf diesem Gerät beenden</button>
     – die Warnungen laufen weiter.
@@ -128,6 +131,10 @@
   var HAS_OVERLAY = {{ (has_map | default(false)) | tojson }};
   var LAYER_OPACITY = {{ layer_opacity | tojson }};
   var csrf = null;               // set when a session opens; required on every write
+  var expiresAt = null;          // epoch ms; the page counts down to it
+  var deadlineAt = null;         // the wall this session may not be renewed past
+  var sessionMinutes = 30;
+  var ticker = null;
   var current = null;            // the last state the server confirmed
   var map = null, marker = null, ring = null, overlay = null;
 
@@ -174,6 +181,52 @@
   });
 
   // ---- redeeming one ----------------------------------------------------------------------
+  function adoptSession(state) {
+    csrf = state.csrf;
+    // Derived from the server's countdown rather than from a timestamp, so a browser clock that
+    // is wrong - and plenty are - does not show a wrong answer.
+    expiresAt = Date.now() + state.seconds_left * 1000;
+    deadlineAt = Date.now() + state.seconds_until_deadline * 1000;
+    sessionMinutes = state.session_minutes;
+    showTimeLeft();
+    if (!ticker) { ticker = setInterval(showTimeLeft, 1000); }
+  }
+
+  function showTimeLeft() {
+    var left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+    var label = document.getElementById('session-left');
+    var button = document.getElementById('extend');
+    if (left <= 0) {
+      label.textContent = 'Die Sitzung ist abgelaufen – fordere einen neuen Link an.';
+      button.hidden = true;
+      clearInterval(ticker);
+      ticker = null;
+      return;
+    }
+    var minutes = Math.floor(left / 60);
+    var seconds = left % 60;
+    label.textContent = 'Sitzung endet in ' + minutes + ':'
+      + String(seconds).padStart(2, '0') + ' ';
+    // Offered only when there is room left before the wall, so the button never promises
+    // something the server will refuse.
+    button.hidden = deadlineAt - Date.now() < 60000;
+    button.textContent = 'Auf ' + sessionMinutes + ' Minuten verlängern';
+  }
+
+  document.getElementById('extend').addEventListener('click', async function () {
+    var response = await fetch('/api/v1/manage/extend', {
+      method: 'POST', headers: {'X-Rain-CSRF': csrf}
+    });
+    if (!response.ok) {
+      document.getElementById('session-left').textContent = response.status === 409
+        ? 'Diese Sitzung hat ihre Höchstdauer erreicht – fordere einen neuen Link an.'
+        : 'Die Sitzung konnte nicht verlängert werden.';
+      document.getElementById('extend').hidden = true;
+      return;
+    }
+    adoptSession(await response.json());
+  });
+
   async function redeem(token) {
     var body = new URLSearchParams();
     body.set('token', token);
@@ -184,7 +237,7 @@
         + 'Fordere einfach einen neuen an.';
       return false;
     }
-    csrf = (await response.json()).csrf;
+    adoptSession(await response.json());
     return true;
   }
 
@@ -494,7 +547,7 @@
       // back; the cookie is what authorises that, and another site cannot read the answer.
       var again = await fetch('/api/v1/manage/csrf');
       if (!again.ok) { return; }
-      csrf = (await again.json()).csrf;
+      adoptSession(await again.json());
     }
     if (!await load()) { return; }
     gate.hidden = true;
