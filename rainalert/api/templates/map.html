@@ -2,14 +2,11 @@
 {% block title %}Regenradar{% endblock %}
 {% block body %}
 <h1>Regenradar</h1>
-{# The window comes from the server, so this cannot drift from what is actually shown. #}
-<p class="lede">
-  {% if window_hours == 1 %}Die letzte Stunde{% else %}Die letzten {{ window_hours }} Stunden{% endif %}
-  und die nächsten zwei. Ziehen oder abspielen.
-</p>
 
 <div id="banner" class="note" hidden></div>
-<div id="map" style="height:62vh;min-height:320px;border-radius:10px;border:1px solid var(--line)"></div>
+{# Nothing between the heading and the map, and the map sized so the slider is on screen
+   without scrolling - it is the control people come here for. #}
+<div id="map"></div>
 
 <div class="controls">
   <button type="button" id="play" aria-label="Abspielen">▶</button>
@@ -17,6 +14,14 @@
 </div>
 <p id="stamp" class="stamp">…</p>
 <div id="legend" class="legend"></div>
+
+{# The window comes from the server, so this cannot drift from what is actually shown. It sits
+   here, next to the range picker it describes, rather than above the map where it pushed the
+   slider off a phone screen. #}
+<p class="lede window">
+  {% if window_hours == 1 %}Die letzte Stunde{% else %}Die letzten {{ window_hours }} Stunden{% endif %}
+  und die nächsten zwei.
+</p>
 
 <nav class="range" aria-label="Zeitraum">
   <span>Zeitraum:</span>
@@ -51,8 +56,14 @@
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
            color:#456; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
+  /* svh, not vh: on a phone `vh` is the viewport with the browser chrome *hidden*, so a map
+     sized in vh is taller than what is actually on screen and pushes the slider below the fold.
+     The vh line stays first as the fallback for browsers that do not know svh. */
+  #map { height:55vh; height:52svh; min-height:220px;
+         border-radius:10px; border:1px solid var(--line); }
+  .window { margin:.9rem 0 0; }
   .range { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline;
-           margin-top:1rem; font-size:.85rem; color:var(--muted); }
+           margin-top:.35rem; font-size:.85rem; color:var(--muted); }
   .range strong { color:var(--accent); }
   /* Sits under the zoom control and borrows its look, because that is where a locate button
      belongs on a map and Leaflet already styles .leaflet-bar to match. */

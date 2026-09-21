@@ -500,3 +500,36 @@ def test_the_range_picker_marks_the_current_choice(client):
     body = client.get("/map?hours=6").text
     assert '<strong aria-current="true">6 h</strong>' in body
     assert "/map?hours=12" in body  # the others are plain links, shareable and JS-free
+
+
+# --- map page layout -----------------------------------------------------------------------------
+
+
+def test_the_window_sentence_sits_with_the_range_picker(client):
+    """It describes the picker, so it belongs next to it - not above the map, where it was
+    one more thing pushing the slider off a phone screen."""
+    page = client.get("/map").text
+    legend = page.index('id="legend"')
+    sentence = page.index("Die letzten 12 Stunden")
+    picker = page.index('class="range"')
+    assert legend < sentence < picker
+
+
+def test_the_map_leaves_room_for_the_slider(client):
+    """The slider is the control people come to this page for.
+
+    Sized in svh rather than vh: on a phone `vh` is the viewport with the browser chrome
+    *hidden*, so a map sized in vh is taller than what is on screen. Measured in Chromium at
+    375x553 the slider was below the fold before this and is not now.
+    """
+    page = client.get("/map").text
+    assert "52svh" in page
+    assert "55vh" in page, "the vh fallback must stay for browsers without svh"
+    # No inline height on the element, or it would win over the stylesheet.
+    assert 'id="map" style=' not in page
+
+
+def test_the_page_does_not_explain_the_slider(client):
+    """Dropped: a slider does not need to be told to be a slider, and the line cost a row of
+    vertical space on the screen where space was the problem."""
+    assert "Ziehen oder abspielen" not in client.get("/map").text
