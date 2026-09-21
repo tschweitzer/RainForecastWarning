@@ -305,6 +305,45 @@ def test_both_maps_zoom_to_street_level(client, path):
     assert "maxZoom: 18" in client.get(path).text
 
 
+# --- the map marker ------------------------------------------------------------------------------
+
+
+def test_the_marker_icon_is_inline_and_needs_no_network(client):
+    """Leaflet's default marker is a PNG fetched from wherever the library came from.
+
+    `img-src` does not allow unpkg - deliberately, it is a third party that would learn the
+    visitor's IP on every map view - so the browser refused it and drew the broken-image
+    placeholder with its alt text. Confirmed in Chromium: "Refused to load the image ...
+    because it violates the following Content Security Policy directive".
+    """
+    page = client.get("/manage").text
+    assert "L.divIcon" in page
+    assert "<svg viewBox=" in page
+    # The failure mode, spelled out: no raster icon from anywhere.
+    assert "marker-icon" not in page
+    assert "iconAnchor: [13, 38]" in page  # the tip on the coordinate, not the middle
+
+
+def test_the_policy_was_not_widened_to_fix_the_marker(client):
+    """The other way to make the icon appear would have been to allow unpkg in img-src.
+
+    That trades a drawing problem for a privacy one - an image request is a page view reported
+    to a CDN - so it must stay refused, and this says so out loud.
+    """
+    policy = client.get("/manage").headers["content-security-policy"]
+    img_src = next(part for part in policy.split(";") if part.strip().startswith("img-src"))
+    assert "unpkg" not in img_src
+    assert "'self'" in img_src and "data:" in img_src
+
+
+def test_no_page_relies_on_a_third_party_image(client):
+    """Scripts and styles come from the CDN until Leaflet is vendored; images must not."""
+    for path in ("/", "/map", "/manage"):
+        page = client.get(path).text
+        for marker in ('<img src="https://', "src: 'https://", "iconUrl"):
+            assert marker not in page, f"{path} pulls an image from elsewhere"
+
+
 # --- attribution (DESIGN.md 4.2) ----------------------------------------------------------------
 
 

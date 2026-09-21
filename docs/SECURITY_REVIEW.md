@@ -737,7 +737,13 @@ except a nonce for the map bootstrap". That is a good start and above average. N
 - **Mail header injection** — unchanged: `OutboundMessage` rejects CR/LF in `to`, `subject`,
   `click_url` and every header value.
 - **Third-party map tiles** — unchanged, still Q-5/Q-2, and `/manage` loads Leaflet from the same
-  CDN as `/map` (M6: vendor it).
+  CDN as `/map` (M6: vendor it). Scripts and styles come from there; **images do not**, and that
+  asymmetry is deliberate. Leaflet's default marker is a PNG it fetches from wherever the library
+  came from, `img-src` does not list the CDN, and the browser refused it — correctly, though the
+  visible result was a broken-image placeholder until the marker was redrawn as an inline SVG
+  `divIcon` (2026-09-21). Allow-listing the CDN for images would have been the other fix and is
+  the wrong one: an image request is a page view reported to a third party, on a map showing
+  somebody's home.
 
 ---
 

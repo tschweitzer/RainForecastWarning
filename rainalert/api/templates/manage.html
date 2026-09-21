@@ -104,6 +104,10 @@
      some browsers and ignored by others - notably iOS Safari. This one works everywhere. */
   .swatch { width:1.6rem; height:1.6rem; border-radius:5px; border:1px solid var(--line);
             flex:0 0 auto; background:transparent; }
+  /* Leaflet's own .leaflet-div-icon paints a white box with a border behind the content. */
+  .pin { background:none; border:none; cursor:grab; }
+  .pin:active { cursor:grabbing; }
+  .pin svg { display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
   .session-end { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
                  font-size:.85rem; color:var(--muted); }
   /* A button, because it performs an action - but it must not look like one of the two next to
@@ -313,7 +317,28 @@
       radius: Math.max(current.radius_m, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.08,
       interactive: false
     }).addTo(map);
-    marker = L.marker([current.lat, current.lon], {draggable: true}).addTo(map);
+    // Leaflet's default marker is a PNG it fetches from wherever the library came from -
+    // unpkg, here. `img-src` does not allow unpkg and should not: it is a third party, and a
+    // request for the icon tells it the visitor's IP on every map view. So the browser refused
+    // it and drew the broken-image placeholder with its alt text instead.
+    //
+    // Drawn inline rather than allow-listed. No request, no CSP change, and one less thing that
+    // breaks when the library is finally vendored.
+    marker = L.marker([current.lat, current.lon], {
+      draggable: true,
+      keyboard: true,
+      icon: L.divIcon({
+        className: 'pin',           // replaces leaflet-div-icon, which is a white box
+        html: '<svg viewBox="0 0 26 38" width="26" height="38" role="img"'
+          + ' aria-label="Dein Standort">'
+          + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
+          + 'C14.7 35.6 26 22.1 26 13 26 5.8 20.2 0 13 0z" fill="#1f6fb2" stroke="#fff"'
+          + ' stroke-width="2"/>'
+          + '<circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>',
+        iconSize: [26, 38],
+        iconAnchor: [13, 38]        // the tip, not the middle, sits on the coordinate
+      })
+    }).addTo(map);
     marker.on('dragend', function () {
       var at = marker.getLatLng();
       moveTo(at.lat, at.lng);
