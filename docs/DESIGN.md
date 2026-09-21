@@ -1044,6 +1044,14 @@ a private project this is personal data under GDPR.
 - **Secrets** in Secret Manager, never in the repo; `.env.example` holds names only.
 - **Logging:** never log full email addresses or exact coordinates; log `subscriber_id` and
   coordinates rounded to 2 decimals (~1 km) instead.
+- **Consent text is versioned and per channel.** `consent_text_version` records which wording was
+  agreed to, so a record still means something after the text is edited (Art. 7(1)) - it must be
+  bumped whenever that text changes. Since M5 there are **two wordings per version**, one naming
+  an email address and one a push topic, because they describe different data; the subscriber's
+  `channel` is stored alongside, so channel + version identifies exactly what was on screen
+  without a second column. The signup note also stopped claiming that nothing is stored before
+  confirmation: a `pending` row exists from the moment of signup and is deleted after
+  `unconfirmed_purge_hours`, which is what the privacy page had always said.
 
 **Deferred until a public launch (D-18):** Impressum (§5 TMG/DDG), full Datenschutzerklärung,
 Auftragsverarbeitungsvertrag with the mail provider, a cookie/consent banner if third-party tiles are

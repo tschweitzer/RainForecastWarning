@@ -236,6 +236,54 @@ def test_the_bands_get_more_opaque_as_the_rain_gets_heavier():
     assert max(alphas) <= 255
 
 
+# --- the signup page says true things about both channels ---------------------------------------
+
+
+def test_the_consent_text_has_a_wording_for_each_channel(client):
+    """Push subscribers have no email address; telling them one is stored is simply false."""
+    page = " ".join(client.get("/").text.split())  # the template wraps; the sentence does not
+    assert "Ich bin einverstanden, dass mein Push-Thema und mein Standort gespeichert" in page
+    assert "Ich bin einverstanden, dass meine E-Mail-Adresse und mein Standort gespeichert" in page
+
+
+def test_the_signup_note_does_not_claim_nothing_is_stored(client):
+    """It was not true: `subscribe` writes a pending row before anyone confirms.
+
+    The privacy page always said unconfirmed signups are deleted after a while, so the front
+    page was contradicting it - in a consent notice, which is the worst place for it.
+    """
+    page = client.get("/").text
+    assert "Ohne Bestätigung wird nichts gespeichert" not in page
+    assert "Stunden gelöscht" in page
+
+
+def test_both_channel_wordings_are_in_the_page_source(client):
+    """Rendered, not assembled by script - consent should be readable in the page itself."""
+    page = client.get("/").text
+    assert page.count('class="for-ntfy"') >= 2
+    assert page.count('class="for-email"') >= 2
+
+
+def test_the_stored_consent_record_names_the_channel_and_the_version(db, settings):
+    """Two wordings share a version, so the channel is what disambiguates them."""
+    from rainalert import subscriptions as svc
+    from rainalert.db.models import Channel, Subscriber
+
+    with db() as session:
+        svc.subscribe(session, settings, lat=50.1, lon=8.6, channel=Channel.NTFY)
+        row = session.query(Subscriber).one()
+        assert row.channel is Channel.NTFY
+        assert row.consent_text_version == settings.consent_text_version
+
+
+def test_the_privacy_page_covers_both_channels(client):
+    page = client.get("/privacy").text
+    assert "ntfy-Thema" in page
+    assert "E-Mail-Adresse" in page
+    # The public server sees the message text and the topic name; that belongs on this page.
+    assert "ntfy-Server" in page
+
+
 def test_the_session_control_is_outside_the_settings_form(client):
     """Next to Save, anything button-shaped reads as Cancel."""
     page = client.get("/manage").text

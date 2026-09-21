@@ -164,8 +164,17 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me"
     confirm_token_ttl_hours: int = 24
     #: Which wording of the consent text was agreed to, so the record still means something after
-    #: the text is edited (GDPR Art. 7(1)).
-    consent_text_version: str = "2026-09-16"
+    #: the text is edited (GDPR Art. 7(1)). **Bump this whenever the consent text changes**, or
+    #: every existing record points at wording that no longer exists.
+    #:
+    #: There are two wordings per version - one naming an email address, one naming a push topic -
+    #: because they describe different data. The subscriber's `channel` is stored alongside, so
+    #: channel plus version identifies exactly what was on screen without a second column.
+    #:
+    #: 2026-09-21: split by channel, and the signup note stopped claiming that nothing is stored
+    #: before confirmation. A pending row exists from the moment of signup and is deleted after
+    #: `unconfirmed_purge_hours`, which is what the privacy page always said.
+    consent_text_version: str = "2026-09-21"
     #: Unconfirmed subscriptions are deleted after this long (data minimisation, §13).
     unconfirmed_purge_hours: int = 24
 

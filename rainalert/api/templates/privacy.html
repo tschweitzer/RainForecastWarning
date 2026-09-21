@@ -5,7 +5,8 @@
 
 <h2>Was gespeichert wird</h2>
 <ul>
-  <li>Deine E-Mail-Adresse.</li>
+  <li>Je nach Kanal deine E-Mail-Adresse oder dein ntfy-Thema. Das Thema wird von uns erzeugt,
+      nicht von dir gewählt – wir kennen darüber keine Gerätekennung und keine Telefonnummer.</li>
   <li>Dein Standort (Koordinaten) – nur der aktuelle, kein Verlauf.</li>
   <li>Deine Einstellungen und die Warnungen, die verschickt wurden.</li>
   <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
@@ -21,8 +22,14 @@ kein Tracking.</p>
 {{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>
 
 <h2>Löschen</h2>
-<p>Über den Abmeldelink in jeder Mail – das löscht sofort und vollständig.</p>
+<p>Über den Abmeldelink in jeder Warnung – das löscht sofort und vollständig.</p>
 
 <h2>Rechtsgrundlage</h2>
-<p>Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), erteilt durch die Bestätigung per Mail.</p>
+<p>Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), erteilt durch die Bestätigung über den Kanal,
+den du gewählt hast: den Link in der Bestätigungsmail oder das Antippen der Testnachricht.</p>
+
+<h2>Bei Push-Benachrichtigungen (ntfy)</h2>
+<p>Die Nachrichten laufen über den ntfy-Server, der unter „Kanal“ eingestellt ist
+({{ settings.ntfy_server }}). Dieser Server sieht den Text der Warnung und den Namen des Themas.
+Eine Warnung nennt einen Ort und eine Zeit – wähle den Kanal entsprechend.</p>
 {% endblock %}

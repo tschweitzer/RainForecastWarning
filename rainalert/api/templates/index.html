@@ -54,11 +54,19 @@ Vorhersage bis zwei Stunden voraus.</p>
   <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
   <p id="locate-status" class="hint" role="status"></p>
 
+  {# Both wordings are rendered and one is hidden, rather than written by script: the consent
+     text is the thing being agreed to, so it belongs where it can be read in the template and
+     in the page source, not assembled at runtime. Which one was shown follows from the
+     subscriber's stored `channel` plus `consent_text_version` (DESIGN.md §13). #}
   <div class="consent">
     <input type="checkbox" id="consent" required>
     <label for="consent" style="font-weight:400;margin:0">
-      Ich bin einverstanden, dass meine E-Mail-Adresse und mein Standort gespeichert werden,
-      um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über den Abmeldelink.
+      <span class="for-ntfy">Ich bin einverstanden, dass mein Push-Thema und mein Standort
+      gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über den
+      Abmeldelink.</span>
+      <span class="for-email" hidden>Ich bin einverstanden, dass meine E-Mail-Adresse und mein
+      Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über
+      den Abmeldelink.</span>
     </label>
   </div>
 
@@ -67,8 +75,16 @@ Vorhersage bis zwei Stunden voraus.</p>
 <p id="result" role="status"></p>
 
 <div class="note">
-  Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird nichts gespeichert und es
-  kommen keine weiteren Mails.
+  {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
+     as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
+     page always said so; this one contradicted it. #}
+  <span class="for-ntfy">Du bekommst zuerst eine Testnachricht aufs Handy – tippe sie an, dann
+  bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
+  {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
+  Nachrichten.</span>
+  <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird
+  die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine
+  weiteren Mails.</span>
 </div>
 
 {% if has_map %}
@@ -114,6 +130,15 @@ function syncChannelFields() {
   field.hidden = !isEmail;
   // required only when it is the channel, or the browser refuses to submit a hidden empty field
   document.getElementById('email').required = isEmail;
+  // The consent text and the "what happens next" note name what is actually stored and how the
+  // confirmation arrives, both of which differ by channel. An email subscriber is told about an
+  // address and a mail; a push subscriber has no address and gets a notification.
+  Array.prototype.forEach.call(document.querySelectorAll('.for-email'), function (node) {
+    node.hidden = !isEmail;
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.for-ntfy'), function (node) {
+    node.hidden = isEmail;
+  });
 }
 Array.prototype.forEach.call(
   document.querySelectorAll('input[name=channel]'),
