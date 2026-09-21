@@ -116,8 +116,15 @@ class Settings(BaseSettings):
     evaluation_retention_hours: int = 48
 
     # --- Public identity (Q-1: the domain is not chosen yet) ---------------------------------
-    #: Every link in every email is built from this. The placeholder works for local development;
-    #: set it to the real origin at deploy time. Nothing else in the code knows a hostname.
+    #: Every link in every email, push and page is built from this - and nothing else in the
+    #: code knows a hostname, so pointing it at a bare IP over http is all that development on
+    #: a VM needs: `PUBLIC_BASE_URL=http://203.0.113.10:8000`.
+    #:
+    #: **It must be https before anyone but the author subscribes (Q-10).** Three things hang
+    #: off the scheme, not just the links: the confirm and unsubscribe tokens ride in a query
+    #: string and are readable on the wire; the session cookie drops `Secure` (see
+    #: api/app.py set_session_cookie, which keys off this value) so it travels in clear; and
+    #: browsers refuse geolocation outside a secure context, so the locate button cannot work.
     public_base_url: str = "http://localhost:8000"
     #: Likewise a placeholder. Deliverability needs SPF, DKIM and DMARC on whatever domain this
     #: ends up on - without them these mails land in spam and the service is pointless (§12).

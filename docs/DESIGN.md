@@ -1478,6 +1478,7 @@ owns them:
 | Q-8 | Is 12 h the right past span, or would 24 h be more useful? Storage is negligible (~22 MB per 12 h); the real limits are DWD's own file retention and slider usability | M5 |
 | Q-9 | Accept the mail provider's DPA and Google's CDPA before the first friend subscribes (F-12). Ten minutes of clicking, and Art. 28 GDPR applies from the first address handed over — this is not launch paperwork | M3 |
 | Q-7 | Reverse geocoding for a friendly place name in the subject line — worth an extra dependency/service? | M4 |
+| **Q-10** | **`PUBLIC_BASE_URL` must move to `https://` before anyone but the author subscribes.** It is deliberately `http://<the VM's IP>:8000` during development, which needs no code — every link in every message is built from it (§12) — and costs three things while it stays that way: the `confirm` and `unsubscribe` tokens travel in a query string in clear, so anyone on the path can read and spend them; the session cookie drops its `Secure` flag, by design, because a `Secure` cookie over http is silently discarded and login would appear broken; and browsers refuse geolocation outside a secure context, so "Meinen Standort verwenden" cannot work (§11.3). Resolving Q-1 resolves this: set the setting, and the `Secure` flag, the links and the locate button all follow | before the first friend, with Q-1 |
 
 ---
 

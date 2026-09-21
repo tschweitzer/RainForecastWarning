@@ -271,6 +271,41 @@ Then run `make run-ingest` twice more. If rain is approaching your location you 
 psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_minutes = 120;"
 ```
 
+### Getting working links in messages on a VM
+
+Every link in every message - confirmation, settings link, unsubscribe, the tap target on a push
+warning - is built from `PUBLIC_BASE_URL`, and nothing else in the code knows a hostname. So a
+message that points at a reachable address is one line, no code:
+
+```ini
+PUBLIC_BASE_URL=http://203.0.113.10:8000    # the VM's external IP, the port you serve on
+```
+
+Restart the server and every message carries that address:
+
+```
+confirmation   http://203.0.113.10:8000/confirm?token=...
+settings link  http://203.0.113.10:8000/manage#t=...
+unsubscribe    http://203.0.113.10:8000/unsubscribe?token=...
+warning taps   http://203.0.113.10:8000/map
+```
+
+**This is a development setting and it is tracked as Q-10 in DESIGN.md §19.** Over plain http,
+three things are true and all of them stop being acceptable the moment anyone else subscribes:
+
+- The `confirm` and `unsubscribe` tokens travel in a **query string in clear**. Anyone on the
+  path can read them and spend them - confirm somebody else's signup, or unsubscribe them. The
+  settings link is better by luck of its shape: its token is in the fragment, which is never
+  sent over the wire at all.
+- **The session cookie drops its `Secure` flag**, deliberately - a `Secure` cookie over http is
+  discarded by the browser and the login would look broken. So the session travels in clear too.
+- **The locate button cannot work**, because browsers refuse geolocation outside a secure
+  context. That is the section below.
+
+None of it matters while the only subscriber is you and the only traffic is your own testing.
+All of it matters on the first day it is not. Setting `PUBLIC_BASE_URL` to an `https://` origin
+fixes all three at once - the `Secure` flag keys off this same value.
+
 ### "Meinen Standort verwenden" does nothing over http
 
 It is not the button. **Browsers only allow geolocation in a secure context** - https, or

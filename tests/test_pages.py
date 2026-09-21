@@ -28,6 +28,11 @@ def settings():
 
 
 @pytest.fixture()
+def notifier():
+    return ConsoleNotifier()
+
+
+@pytest.fixture()
 def client(db, settings):
     app = create_app(settings, session_factory=db, notifier=ConsoleNotifier())
     return TestClient(app, base_url=settings.public_base_url)
@@ -406,3 +411,53 @@ class _NullStore:
 
     def url_for_forecast(self, nominal_time, lead_minutes):
         return "/overlays/fc/x.png"
+
+
+# --- the development base URL (Q-10) -------------------------------------------------------------
+
+
+def test_every_message_link_follows_the_configured_base_url(db, settings):
+    """An IP over http is all a VM needs, and needs no code - this is why.
+
+    Nothing in the code knows a hostname; every link is built from PUBLIC_BASE_URL. The test
+    exists so that stays true: a link hard-coded anywhere would fail here.
+    """
+    from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
+
+    local = settings.model_copy(update={"public_base_url": "http://203.0.113.10:8000"})
+    messages = [
+        confirmation_message(local, "you@example.com", "T"),
+        confirmation_message(local, "rainalert-abc", "T", channel="ntfy"),
+        manage_link_message(local, "you@example.com", "T"),
+        deletion_receipt(local, "you@example.com"),
+    ]
+    for message in messages:
+        for word in message.text.split():
+            if word.startswith("http") and "creativecommons" not in word:
+                assert word.startswith("http://203.0.113.10:8000"), word
+        if message.click_url:
+            assert message.click_url.startswith("http://203.0.113.10:8000")
+
+
+def test_the_session_cookie_secure_flag_follows_the_same_setting(db, notifier, settings):
+    """Q-10's other half: moving to https is one setting, not a checklist.
+
+    The flag cannot simply be on - a Secure cookie over http is discarded and the login looks
+    broken - so it keys off the base URL, which means switching the scheme switches this too.
+    """
+    from rainalert.api.app import create_app
+
+    cases = (("http://203.0.113.10:8000", False), ("https://rain.example", True))
+    for index, (base, expect_secure) in enumerate(cases):
+        # A fresh address per case: a confirmed subscriber is not sent another confirmation,
+        # so reusing one leaves the second case reading the first case's message.
+        address = f"q10-{index}@example.com"
+        app = create_app(settings.model_copy(update={"public_base_url": base}), db, notifier)
+        client = TestClient(app, base_url=base)
+        client.post("/api/v1/subscriptions", json={"email": address, "lat": 50.1, "lon": 8.6})
+        token = notifier.sent[-1].text.split("token=")[1].split()[0]
+        client.post("/confirm", data={"token": token})
+        client.post("/api/v1/manage/link", json={"channel": "email", "address": address})
+        link = notifier.sent[-1].text.split("/manage#t=")[1].split()[0]
+        response = client.post("/api/v1/manage/session", data={"token": link})
+        assert ("secure" in response.headers["set-cookie"].lower()) is expect_secure, base
