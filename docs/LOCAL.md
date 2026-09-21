@@ -106,8 +106,9 @@ PUBLIC_BASE_URL=http://localhost:8000
 # identifiable, attributed, and light. The first is handled - the tile layer overrides this
 # site's `Referrer-Policy: no-referrer` so tiles carry the origin - and the second is the
 # attribution line below, which is required and must stay. The third is on you: one browser
-# looking at a map is light, an unattended reload loop is not, and maxZoom stays at 12 because
-# 1 km radar has nothing to show below it. For anything public, use a provider you pay or have
+# looking at a map is light, an unattended reload loop is not. Zoom goes to 18 so street names
+# are readable - the radar overlay goes blocky past ~12, which is honest about it being 1 km
+# data. For anything public, use a provider you pay or have
 # signed up with; the policy excludes applications, and a deployed service is one.
 # MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
 # MAP_TILE_ATTRIBUTION=&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
@@ -309,7 +310,7 @@ What you can change, and the limits:
 
 | Field | Range | Why that range |
 |---|---|---|
-| Threshold | 0.01 – 40.0 mm/5 min | 0.01 is RV's own quantum (`PR E-02`); above 40 a cycle is rejected as implausible at ingest, so a higher threshold could never fire |
+| Threshold | a dropdown of the map's seven intensity bands (DESIGN.md §11.1.1) | so "warn me at orange" means the same thing on the settings page and the radar map. The API still accepts 0.01 – 40.0: 0.01 is RV's own quantum (`PR E-02`), and above 40 a cycle is rejected as implausible at ingest so a higher threshold could never fire |
 | Lead time | 5 – 120 min, in steps of 5 | the whole forecast RV carries; `rules.py` walks leads in fives, so 32 would be evaluated as 30 |
 | Radius | 0 – 20 000 m | the `radius_sane` CHECK. Under ~500 m it is the one 1 km grid cell you stand in |
 

@@ -361,8 +361,10 @@ def test_the_page_renders_for_anyone_and_leaks_nothing(client, notifier):
 def test_the_page_renders_the_bounds_it_enforces(client, settings):
     page = client.get("/manage").text
     assert f'max="{settings.max_lead_minutes}"' in page
-    assert f'min="{settings.min_threshold_mm_5min}"' in page
     assert f'max="{settings.max_radius_m}"' in page
+    # The threshold is no longer a free number with a min attribute - it is a dropdown of the
+    # map's intensity bands, and test_pages.py checks that list against the map's own.
+    assert '<select id="threshold"' in page
 
 
 def test_the_read_endpoint_publishes_the_bounds(client, notifier, settings):

@@ -45,11 +45,23 @@
     <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
     <p id="locate-status" class="hint" role="status"></p>
 
-    <label for="threshold">Ab wie viel Regen warnen? (mm pro 5 Minuten)</label>
-    <input type="number" id="threshold" step="0.01"
-           min="{{ bounds.threshold_min }}" max="{{ bounds.threshold_max }}" required>
-    <p class="hint">{{ bounds.threshold_min }} ist der kleinste Wert, den das Radar unterscheidet.
-      0,1 entspricht etwa 1,2 mm pro Stunde – „man wird nass“.</p>
+    <label for="threshold">Ab wie viel Regen warnen?</label>
+    {# The options are the map's own colour bands, rendered from the server so the dropdown and
+       the legend cannot disagree about what a colour means. #}
+    <div class="threshold-row">
+      <span id="threshold-swatch" class="swatch" aria-hidden="true"></span>
+      <select id="threshold" required>
+        {% for band in bounds.intensity_bands %}
+          <option value="{{ band.from_mm_5min }}"
+                  data-rgba="rgba({{ band.rgba[0] }},{{ band.rgba[1] }},{{ band.rgba[2] }},{{ '%.2f'|format(band.rgba[3] / 255) }})">
+            {{ band.label }} – ab {{ band.from_mm_5min }} mm/5 min (~{{ band.approx_mm_per_hour }} mm/h)
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="hint">Die Farben sind dieselben wie auf der <a href="/map">Radarkarte</a>. Die
+      Angabe in mm/h ist umgerechnet – „so viel käme zusammen, wenn es eine Stunde lang so stark
+      regnen würde“.</p>
 
     <label for="lead">Wie weit voraus schauen? (Minuten)</label>
     <input type="number" id="lead" step="{{ bounds.lead_step }}"
@@ -62,9 +74,16 @@
     <p class="hint">Das Radar hat 1 km Auflösung, unter etwa 500 m ist es immer dieselbe Zelle.</p>
 
     <button type="submit">Speichern</button>
-    <button type="button" class="secondary" id="logout">Abmelden (nur dieses Gerät)</button>
   </form>
   <p id="panel-result" role="status"></p>
+
+  {# Deliberately below the form and worded so it cannot be read as "discard my changes". It
+     also must not be read as unsubscribing: it ends the session, nothing else. #}
+  <p class="session-end">
+    Fertig?
+    <button type="button" class="linklike" id="logout">Sitzung auf diesem Gerät beenden</button>
+    – die Warnungen laufen weiter.
+  </p>
 </div>
 
 <p style="margin-top:1.5rem"><a href="/">Zur Anmeldung</a>{% if has_map %} ·
@@ -78,6 +97,19 @@
                    font-weight:normal; }
   .stamp { font-size:.85rem; color:var(--muted); margin:.4rem 0 0;
            font-variant-numeric:tabular-nums; }
+  .threshold-row { display:flex; gap:.6rem; align-items:center; }
+  .threshold-row select { flex:1; padding:.6rem .7rem; font-size:1rem; border:1px solid var(--line);
+                          border-radius:8px; background:var(--bg); color:var(--fg); }
+  /* The selected band's colour, shown separately because option backgrounds are honoured by
+     some browsers and ignored by others - notably iOS Safari. This one works everywhere. */
+  .swatch { width:1.6rem; height:1.6rem; border-radius:5px; border:1px solid var(--line);
+            flex:0 0 auto; background:transparent; }
+  .session-end { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
+                 font-size:.85rem; color:var(--muted); }
+  /* A button, because it performs an action - but it must not look like one of the two next to
+     the form, where anything button-shaped reads as "save" or "cancel". */
+  .linklike { background:none; border:0; padding:0; margin:0; font:inherit; color:var(--accent);
+              text-decoration:underline; cursor:pointer; }
   .ok { color:var(--accent); font-weight:600; }
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
            color:#456; font-size:.68rem; font-weight:600; }
@@ -158,10 +190,53 @@
     return true;
   }
 
+  var threshold = document.getElementById('threshold');
+
+  function paintSwatch() {
+    var option = threshold.options[threshold.selectedIndex];
+    document.getElementById('threshold-swatch').style.background =
+      (option && option.dataset.rgba) || 'transparent';
+  }
+  threshold.addEventListener('change', paintSwatch);
+
+  function selectThreshold(value) {
+    // Numeric comparison, not string: the option values are rendered by the server as 3.0 while
+    // JSON hands back 3, and `select.value = '3'` against an option value of '3.0' silently
+    // selects nothing - which on save would write the first band instead.
+    for (var i = 0; i < threshold.options.length; i++) {
+      if (parseFloat(threshold.options[i].value) === value) {
+        threshold.selectedIndex = i;
+        paintSwatch();
+        return;
+      }
+    }
+    // A stored value that is not one of the bands - the 0.1 default, or anything set through the
+    // API. Kept as its own option rather than snapped to a neighbour, because silently changing
+    // someone's threshold while showing them a settings page is the worst of both.
+    var previous = threshold.querySelector('option[data-custom]');
+    if (previous) { previous.remove(); }
+    var extra = document.createElement('option');
+    extra.dataset.custom = '1';
+    extra.value = String(value);
+    extra.textContent = 'eigener Wert – ab ' + value + ' mm/5 min';
+    // Wearing the colour of the band it falls into, so a custom value is still placed on the
+    // same scale as everything else rather than being a blank.
+    for (var j = threshold.options.length - 1; j >= 0; j--) {
+      var band = threshold.options[j];
+      if (band.dataset.rgba && parseFloat(band.value) <= value) {
+        extra.dataset.rgba = band.dataset.rgba;
+        break;
+      }
+    }
+    threshold.insertBefore(extra, threshold.firstChild);
+    threshold.selectedIndex = 0;
+    paintSwatch();
+  }
+
   function fill() {
     document.getElementById('lat').value = current.lat;
     document.getElementById('lon').value = current.lon;
-    document.getElementById('threshold').value = current.threshold_mm_5min;
+    selectThreshold(current.threshold_mm_5min);
     document.getElementById('lead').value = current.lead_time_minutes;
     document.getElementById('radius').value = current.radius_m;
 
@@ -216,12 +291,16 @@
       return;
     }
     var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
-    // Zoom 11 is about 40 km across: enough to see which town you are in and to judge a radius
-    // of a few kilometres, and within the maxZoom 12 that 1 km radar justifies.
-    map = L.map('map').setView([current.lat, current.lon], 11);
+    // Opens at 11 - about 40 km across, enough to see which town you are in and to judge a
+    // radius of a few kilometres. Zooming in to street level from there is up to you.
+    map = L.map('map', {maxZoom: 18}).setView([current.lat, current.lon], 11);
     if (TILE_URL) {
       L.tileLayer(TILE_URL, {
-        maxZoom: 12,
+        // 18, not the 12 the radar's own resolution would suggest: the basemap is what you
+        // orient by, and street names are the difference between "somewhere in Neuhausen" and
+        // "my street". The radar overlay just scales up past ~12 and goes blocky, which is
+        // honest - it is 1 km data and looks like 1 km data.
+        maxZoom: 18,
         attribution: {{ (settings.map_tile_attribution or '')|tojson }},
         referrerPolicy: 'strict-origin-when-cross-origin'
       }).addTo(map);
@@ -336,7 +415,7 @@
     // move resets the alert state (D-17), a rule change does not. Sent rule-first so that a
     // refused rule does not leave the location already moved.
     var rule = await send('PATCH', '/api/v1/subscriptions/me', {
-      threshold_mm_5min: parseFloat(document.getElementById('threshold').value),
+      threshold_mm_5min: parseFloat(threshold.value),
       lead_time_minutes: parseInt(document.getElementById('lead').value, 10),
       radius_m: parseInt(document.getElementById('radius').value, 10)
     });

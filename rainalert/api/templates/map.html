@@ -65,12 +65,18 @@
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
-  var map = L.map('map', { zoomControl: true }).setView([51.2, 10.4], 6);
+  // maxZoom on the map as well as on the tile layer: with no basemap configured there is no
+  // tile layer to take it from, and Leaflet would then let the graticule zoom forever.
+  var map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 6);
 
   var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
   if (TILE_URL) {
     L.tileLayer(TILE_URL, {
-      maxZoom: 12,
+      // 18, not the 12 the radar's own resolution would suggest: the basemap is what you
+      // orient by, and street names are the difference between "somewhere in Neuhausen" and
+      // "my street". The radar overlay just scales up past ~12 and goes blocky, which is
+      // honest - it is 1 km data and looks like 1 km data.
+      maxZoom: 18,
       attribution: {{ (settings.map_tile_attribution or '')|tojson }},
       // This page sends `Referrer-Policy: no-referrer`, which strips the Referer from tile
       // requests too - so every tile arrives at the provider unidentified. Tile services read
@@ -308,10 +314,15 @@
     slider.value = nowIndex < 0 ? 0 : nowIndex;
     show(+slider.value);
 
+    // The band names go in the title rather than inline: seven of them spelled out wraps to
+    // four lines on a phone and competes with the map for the screen. The settings page spells
+    // them out, because there the name is what you are choosing.
     document.getElementById('legend').innerHTML = (data.colorscale || []).map(function (s) {
       var c = s.rgba;
-      return '<span><i style="background:rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' +
-        (c[3] / 255).toFixed(2) + ')"></i>' + s.from_mm_5min.toFixed(2) + '</span>';
+      var name = s.label ? s.label + ' – ab ' + s.from_mm_5min + ' mm/5 min (~'
+        + s.approx_mm_per_hour + ' mm/h)' : '';
+      return '<span title="' + name + '"><i style="background:rgba(' + c[0] + ',' + c[1] + ',' +
+        c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></i>' + s.from_mm_5min.toFixed(2) + '</span>';
     }).join('') + '<span>mm / 5 min</span>';
   });
 })();

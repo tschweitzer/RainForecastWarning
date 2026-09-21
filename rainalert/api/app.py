@@ -45,6 +45,7 @@ from rainalert.db.models import Channel, Subscriber, Subscription, TokenPurpose
 from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
+from rainalert.radar.overlay import legend
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
 from rainalert.tokens import (
@@ -455,6 +456,9 @@ def create_app(
             "lead_max": settings.max_lead_minutes,
             "lead_step": svc.LEAD_STEP_MINUTES,
             "radius_max": settings.max_radius_m,
+            # The same bands the map is drawn and the legend labelled from, so "warn me at
+            # orange" means one thing on both pages (radar/overlay.py INTENSITY_BANDS).
+            "intensity_bands": legend(),
         }
 
     @app.get("/api/v1/subscriptions/me")

@@ -27,18 +27,42 @@ BOUNDS = ((46.0, 4.0), (55.9, 17.0))
 #: to a couple of hundred kilobytes. 168 of these get loaded over mobile data (§11.1).
 WIDTH = 560
 
-#: mm per 5 min -> RGBA. Below the first stop the pixel is fully transparent, so "no rain" and
-#: "no data" both read as "nothing drawn" - the map is not the place to distinguish them; the
-#: staleness banner and the gap markers are.
-COLOR_STOPS: tuple[tuple[float, tuple[int, int, int, int]], ...] = (
-    (0.05, (120, 180, 255, 130)),
-    (0.15, (60, 140, 240, 170)),
-    (0.35, (40, 190, 150, 190)),
-    (0.70, (245, 210, 70, 205)),
-    (1.50, (240, 140, 45, 220)),
-    (3.00, (225, 60, 60, 235)),
-    (6.00, (170, 40, 140, 245)),
+#: The rain-intensity bands: the one place the scale is defined.
+#:
+#: Each entry is (mm per 5 min at which the band starts, RGBA, German name). Below the first
+#: stop the pixel is fully transparent, so "no rain" and "no data" both read as "nothing drawn" -
+#: the map is not the place to distinguish them; the staleness banner and the gap markers are.
+#:
+#: The map legend, the overlay renderer and the threshold picker on the settings page all read
+#: this, so a colour on the map and a colour in the dropdown mean the same rain by construction
+#: rather than by two people remembering to edit two lists.
+#:
+#: **The names.** Rain intensity is conventionally classified in mm per *hour*, and RV measures
+#: mm per five-minute interval, so the hourly figure in each comment is the 5-minute value times
+#: twelve - i.e. "if it kept raining this hard for an hour". That is the usual way radar
+#: intensities are labelled and it is still an extrapolation, not a measurement: a shower that
+#: rains 6 mm in five minutes and then stops did not deliver 72 mm.
+#:
+#: The boundaries are the ones already chosen for the map, and the names are the conventional
+#: classes those hourly rates fall into (light / moderate / heavy, with DWD's Starkregen warning
+#: thresholds - 15-25 mm/h markant, 25-40 mm/h Unwetter - landing in the top three bands).
+INTENSITY_BANDS: tuple[tuple[float, tuple[int, int, int, int], str], ...] = (
+    (0.05, (120, 180, 255, 130), "Nieselregen"),  # ~0.6 mm/h
+    (0.15, (60, 140, 240, 170), "leichter Regen"),  # ~1.8 mm/h
+    (0.35, (40, 190, 150, 190), "mäßiger Regen"),  # ~4.2 mm/h
+    (0.70, (245, 210, 70, 205), "kräftiger Regen"),  # ~8.4 mm/h
+    (1.50, (240, 140, 45, 220), "starker Regen"),  # ~18 mm/h
+    (3.00, (225, 60, 60, 235), "Starkregen"),  # ~36 mm/h
+    (6.00, (170, 40, 140, 245), "extremer Starkregen"),  # ~72 mm/h
 )
+
+#: What the renderer wants: just the thresholds and their colours.
+COLOR_STOPS: tuple[tuple[float, tuple[int, int, int, int]], ...] = tuple(
+    (threshold, colour) for threshold, colour, _ in INTENSITY_BANDS
+)
+
+#: mm per 5 min -> mm per hour, for labelling only. See the note above on what it does not mean.
+INTERVALS_PER_HOUR = 12
 
 
 @dataclass(frozen=True)
@@ -110,4 +134,12 @@ def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
 
 def legend() -> list[dict]:
     """The colour scale, so the page can draw a legend without hard-coding it twice."""
-    return [{"from_mm_5min": threshold, "rgba": list(colour)} for threshold, colour in COLOR_STOPS]
+    return [
+        {
+            "from_mm_5min": threshold,
+            "rgba": list(colour),
+            "label": label,
+            "approx_mm_per_hour": round(threshold * INTERVALS_PER_HOUR, 1),
+        }
+        for threshold, colour, label in INTENSITY_BANDS
+    ]

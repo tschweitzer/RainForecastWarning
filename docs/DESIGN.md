@@ -815,6 +815,44 @@ Choosing a provider (**Q-5**) is now a deployment decision with no code in it.
 
 ---
 
+### 11.1.1 The intensity scale
+
+Seven bands, defined once in `radar/overlay.py` as `INTENSITY_BANDS`, and read by three things:
+the overlay renderer, the map legend, and the threshold picker on the settings page. That is the
+point of putting them in one place - a colour on the map and a colour in the dropdown mean the
+same rain by construction, rather than because two lists were edited together.
+
+| mm / 5 min | ≈ mm / h | Name | Colour |
+|---|---|---|---|
+| 0.05 | 0.6 | Nieselregen | pale blue |
+| 0.15 | 1.8 | leichter Regen | blue |
+| 0.35 | 4.2 | mäßiger Regen | green |
+| 0.70 | 8.4 | kräftiger Regen | yellow |
+| 1.50 | 18 | starker Regen | orange |
+| 3.00 | 36 | Starkregen | red |
+| 6.00 | 72 | extremer Starkregen | violet |
+
+Below 0.05 the pixel is fully transparent, so "no rain" and "no data" both read as nothing drawn.
+The map is not the place to distinguish them; the staleness banner and the gap markers are.
+
+**On the hourly column.** Rain intensity is conventionally classified in mm per *hour*, and RV
+measures mm per five-minute interval, so the hourly figure is the 5-minute value × 12 — *if it
+kept raining this hard for an hour*. That is the usual way radar intensities are labelled and it
+is still an extrapolation: a shower that drops 6 mm in five minutes and then stops did not
+deliver 72 mm. The names follow the conventional light / moderate / heavy classes those hourly
+rates fall into, with DWD's own Starkregen warning thresholds (15–25 mm/h *markant*, 25–40 mm/h
+*Unwetter*) landing in the top three bands.
+
+The boundaries were chosen for the map first and the names fitted to them afterwards, not the
+other way round — so they are a readable scale rather than a claim that 0.70 mm/5 min is a
+recognised meteorological boundary.
+
+**Where a subscriber's threshold sits.** The picker offers exactly these seven values. A stored
+threshold that is not one of them — the `0.10` column default, or anything set through the API —
+is kept as its own option wearing the colour of the band it falls into, never snapped to a
+neighbour: silently changing someone's threshold while showing them a settings page is worse
+than an odd-looking dropdown.
+
 ### 11.2 Settings page (`/manage`)
 
 Self-service, for the subscriber themselves. There is no admin view: nothing in this service
@@ -838,7 +876,7 @@ settings link is not the place to take that on trust.
 
 | Field | Range | Where the number comes from |
 |---|---|---|
-| `threshold_mm_5min` | 0.01 – 40.0 | RV's quantum (`PR E-02`) to `plausibility_max_mm_5min` |
+| `threshold_mm_5min` | 0.01 – 40.0 | RV's quantum (`PR E-02`) to `plausibility_max_mm_5min`. The page offers the seven bands of §11.1.1; the wider range is what the API accepts |
 | `lead_time_minutes` | 5 – 120, step 5 | every lead RV carries; `rules.py` walks them in fives |
 | `radius_m` | 0 – 20 000 | the `radius_sane` CHECK; under ~500 m it is one grid cell |
 
@@ -848,8 +886,11 @@ and a 500. The `numeric(5,2)` column makes that concrete: `0.001` rounds to `0.0
 and then fails `threshold_positive`, so the edge rounds and compares before the database sees it.
 
 **The map.** Centred on the stored location at zoom 11 - roughly 40 km across, enough to see
-which town you are in and to judge a radius of a few kilometres, and inside the `maxZoom: 12`
-that 1 km radar justifies. A draggable marker and a click handler both write the coordinate
+which town you are in and to judge a radius of a few kilometres - and zoomable to 18, because the
+basemap is what you orient by and street names are the difference between "somewhere in
+Neuhausen" and "my street". `maxZoom` is 18 on both maps; the radar overlay simply scales up past
+~12 and goes blocky, which is honest about it being 1 km data. A draggable marker and a click
+handler both write the coordinate
 fields, rounded to the four decimals the server keeps so the field shows what will be stored.
 The radius is a circle that resizes as the number changes. The current radar frame (t+0 only -
 this page is for choosing a spot, `/map` is for watching weather) is drawn underneath everything
@@ -861,6 +902,11 @@ the fallback is the same graticule-and-cities used by `/map`.
 
 **Saving** is two requests, not one, because a move resets the alert state and a rule change does
 not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
+
+**Ending the session** is a link below the form, not a button beside Save. Two reasons: next to a
+submit button anything button-shaped reads as Cancel, and "Abmelden" in German means both "log
+out" and "cancel my subscription" - on a page with a subscription on it, that is the one word to
+avoid. It says "Sitzung auf diesem Gerät beenden - die Warnungen laufen weiter".
 
 ### 11.3 Browser geolocation
 

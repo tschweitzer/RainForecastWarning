@@ -121,3 +121,69 @@ def test_a_database_with_no_alembic_version_is_reported(client, db):
     response = client.get("/readyz")
     assert response.status_code == 503
     assert "no schema yet" in response.json()["detail"]
+
+
+# --- the intensity scale ------------------------------------------------------------------------
+
+
+def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
+    """The point of the change: a colour means the same rain on both pages.
+
+    Asserted structurally rather than by comparing two hard-coded lists, because two lists is
+    exactly the failure being designed out.
+    """
+    from rainalert.radar.overlay import INTENSITY_BANDS, legend
+
+    page = client.get("/manage").text
+    for threshold, rgba, label in INTENSITY_BANDS:
+        assert f'value="{threshold}"' in page, f"{label} missing from the dropdown"
+        assert f"rgba({rgba[0]},{rgba[1]},{rgba[2]}," in page
+        assert label in page
+    # The same list the map draws its legend from.
+    assert [b["from_mm_5min"] for b in legend()] == [t for t, _, _ in INTENSITY_BANDS]
+
+
+def test_the_renderer_still_sees_only_thresholds_and_colours():
+    """Adding names must not change what the overlay is drawn from."""
+    from rainalert.radar.overlay import COLOR_STOPS, INTENSITY_BANDS
+
+    assert COLOR_STOPS == tuple((t, c) for t, c, _ in INTENSITY_BANDS)
+
+
+def test_the_bands_are_ordered_and_within_what_can_be_stored(settings):
+    from rainalert.radar.overlay import INTENSITY_BANDS
+
+    thresholds = [t for t, _, _ in INTENSITY_BANDS]
+    assert thresholds == sorted(thresholds)
+    for threshold in thresholds:
+        # Every option in the dropdown must be a value the API will actually accept, or the page
+        # offers choices that fail on save.
+        assert settings.min_threshold_mm_5min <= threshold <= settings.plausibility_max_mm_5min
+        assert round(threshold, 2) == threshold  # numeric(5,2) keeps two decimals
+
+
+def test_every_band_is_accepted_by_the_api(settings):
+    """Belt and braces on the above: the values are offered, so they must save."""
+    from rainalert import subscriptions as svc
+    from rainalert.radar.overlay import INTENSITY_BANDS
+
+    for threshold, _, label in INTENSITY_BANDS:
+        assert svc.validate_rule(settings, threshold_mm_5min=threshold) == {
+            "threshold_mm_5min": threshold
+        }, label
+
+
+def test_the_session_control_is_outside_the_settings_form(client):
+    """Next to Save, anything button-shaped reads as Cancel."""
+    page = client.get("/manage").text
+    form = page.split('id="settings-form"')[1].split("</form>")[0]
+    assert 'id="logout"' not in form
+    assert "Sitzung auf diesem Gerät beenden" in page
+    # It ends the session and nothing else, so it must not say "Abmelden", which in German is
+    # also what you call cancelling a subscription.
+    assert "Abmelden (nur dieses Gerät)" not in page
+
+
+@pytest.mark.parametrize("path", ["/map", "/manage"])
+def test_both_maps_zoom_to_street_level(client, path):
+    assert "maxZoom: 18" in client.get(path).text
