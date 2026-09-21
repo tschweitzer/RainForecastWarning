@@ -54,14 +54,12 @@
         {% for band in bounds.intensity_bands %}
           <option value="{{ band.from_mm_5min }}"
                   data-rgba="rgba({{ band.rgba[0] }},{{ band.rgba[1] }},{{ band.rgba[2] }},{{ '%.2f'|format(band.rgba[3] / 255) }})">
-            {{ band.label }} – ab {{ band.from_mm_5min }} mm/5 min (~{{ band.approx_mm_per_hour }} mm/h)
+            {{ band.label }} – ab {{ band.from_mm_5min }} mm/5 min
           </option>
         {% endfor %}
       </select>
     </div>
-    <p class="hint">Die Farben sind dieselben wie auf der <a href="/map">Radarkarte</a>. Die
-      Angabe in mm/h ist umgerechnet – „so viel käme zusammen, wenn es eine Stunde lang so stark
-      regnen würde“.</p>
+    <p class="hint">Die Farben sind dieselben wie auf der <a href="/map">Radarkarte</a>.</p>
 
     <label for="lead">Wie weit voraus schauen? (Minuten)</label>
     <input type="number" id="lead" step="{{ bounds.lead_step }}"

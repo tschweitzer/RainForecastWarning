@@ -146,6 +146,10 @@ def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
         assert f'value="{threshold}"' in page, f"{label} missing from the dropdown"
         assert f"rgba({rgba[0]},{rgba[1]},{rgba[2]}," in page
         assert label in page
+    # Kept short: the option is a name and a threshold. The hourly equivalent is an
+    # extrapolation that needs a sentence to be honest, and there is no room for one in a
+    # dropdown - it stays on the map legend, where it is a tooltip.
+    assert "mm/h" not in page
     # The same list the map draws its legend from.
     assert [b["from_mm_5min"] for b in legend()] == [t for t, _, _ in INTENSITY_BANDS]
 
