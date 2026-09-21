@@ -6,6 +6,8 @@ button silently do nothing: the helper being served at all, every page actually 
 each page having somewhere to put a message when the attempt fails.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -321,7 +323,13 @@ def test_the_marker_icon_is_inline_and_needs_no_network(client):
     assert "<svg viewBox=" in page
     # The failure mode, spelled out: no raster icon from anywhere.
     assert "marker-icon" not in page
-    assert "iconAnchor: [13, 38]" in page  # the tip on the coordinate, not the middle
+    # The anchor must be the bottom centre of whatever size the pin is, or the point of the
+    # pin stops marking the coordinate it is there to mark.
+    size = re.search(r"iconSize: \[(\d+), (\d+)\]", page)
+    anchor = re.search(r"iconAnchor: \[(\d+), (\d+)\]", page)
+    assert size and anchor
+    width, height = int(size[1]), int(size[2])
+    assert (int(anchor[1]), int(anchor[2])) == (width // 2, height)
 
 
 def test_the_policy_was_not_widened_to_fix_the_marker(client):

@@ -329,14 +329,17 @@
       keyboard: true,
       icon: L.divIcon({
         className: 'pin',           // replaces leaflet-div-icon, which is a white box
-        html: '<svg viewBox="0 0 26 38" width="26" height="38" role="img"'
+        // 20x29 is 26x38 at ~75%. The viewBox stays 0 0 26 38, so the path is untouched and
+        // the browser scales it - the only numbers that move are the rendered size and the
+        // anchor, which must stay at the bottom centre.
+        html: '<svg viewBox="0 0 26 38" width="20" height="29" role="img"'
           + ' aria-label="Dein Standort">'
           + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
           + 'C14.7 35.6 26 22.1 26 13 26 5.8 20.2 0 13 0z" fill="#1f6fb2" stroke="#fff"'
           + ' stroke-width="2"/>'
           + '<circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>',
-        iconSize: [26, 38],
-        iconAnchor: [13, 38]        // the tip, not the middle, sits on the coordinate
+        iconSize: [20, 29],
+        iconAnchor: [10, 29]        // the tip, not the middle, sits on the coordinate
       })
     }).addTo(map);
     marker.on('dragend', function () {
