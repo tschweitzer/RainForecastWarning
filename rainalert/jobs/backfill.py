@@ -36,7 +36,12 @@ from rainalert.radar.client import (
     FetchError,
     archive_name,
 )
-from rainalert.radar.decoder import RVFormatError, read_frames
+from rainalert.radar.decoder import (
+    RVArchiveRejected,
+    RVFormatError,
+    read_analysis_frame,
+    read_frames,
+)
 from rainalert.radar.overlay import build_projection, render_frame
 from rainalert.storage import ArchiveStore, OverlayStore
 
@@ -74,6 +79,28 @@ class BackfillReport:
     failed: int = 0
 
 
+def _analysis_frame(path: Path):
+    """The t+0 frame of one archive, the cheap way, with the thorough way as a fallback.
+
+    ``read_analysis_frame`` stops unpacking after the first tar member, which is the whole win
+    here: bz2 is a stream, so reaching member 25 means unpacking 1 through 24 on the way, and
+    that unpacking is ~96% of the time. RV writes the analysis frame first, so one member is
+    all that has to come out.
+
+    If an archive ever does not start with t+0 it raises rather than guessing, and this falls
+    back to reading the whole thing - slow, but correct, and it says so in the log.
+    """
+    try:
+        return read_analysis_frame(path)
+    except RVArchiveRejected as exc:
+        logger.info("%s: %s - falling back to a full read", path.name, exc)
+        frames = read_frames(path, analysis_only=True)
+        for frame in frames:
+            if frame.lead_minutes == 0:
+                return frame
+        raise RVFormatError(f"{path.name} holds no analysis frame") from exc
+
+
 def rerender_observed(
     archive_dir: str | Path, overlays: OverlayStore, limit: int | None = None
 ) -> BackfillReport:
@@ -104,20 +131,17 @@ def rerender_observed(
     for path in paths:
         report.archives += 1
         try:
-            frames = read_frames(path, analysis_only=True)
+            frame = _analysis_frame(path)
         except (RVFormatError, OSError):  # RVFormatError now covers tar-level damage too
             # One unreadable archive must not stop the rest; the timeline simply keeps that gap.
             report.failed += 1
             logger.warning("could not read %s", path.name, exc_info=True)
             continue
         try:
-            for frame in frames:
-                if frame.lead_minutes != 0:
-                    continue
-                overlays.put_observed(frame.nominal_time, render_frame(frame, projection))
-                report.rendered += 1
+            overlays.put_observed(frame.nominal_time, render_frame(frame, projection))
+            report.rendered += 1
         finally:
-            del frames
+            del frame
         # Progress, so a run that dies says where it got to. A silent job that is killed leaves
         # nothing to distinguish "too big" from "stuck".
         if report.archives % 25 == 0:

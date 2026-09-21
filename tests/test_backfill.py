@@ -475,38 +475,70 @@ def _archive_dir(tmp_path, copies: int):
     return tmp_path
 
 
-def test_rerender_decodes_only_the_frame_it_renders(tmp_path, monkeypatch):
-    """The bug that killed it on a 1 GB VM: 25 grids decoded, 24 thrown away.
+def test_rerender_unpacks_only_the_first_member(tmp_path, monkeypatch):
+    """The cost that made a 600-archive run take half an hour.
 
-    A grid is 1200x1100 float32 plus a bool mask - 6.6 MB each, 165 MB for a full cycle - and
-    the loop only ever renders t+0. Asserted on the call rather than on a memory figure, because
-    the fixture is trimmed to three frames: a threshold loose enough to be stable would be far
-    too loose to catch decoding twenty-five.
+    bz2 is a stream, so reaching member 25 means unpacking 1 through 24 on the way - and that
+    unpacking is ~96% of the time. `analysis_only` saved the grids but not the unpacking. The
+    fast path stops after the first tar member, which is where RV puts t+0.
+
+    Asserted as "the whole-archive reader is never called", because that is the property; a
+    timing assertion would be flaky and a memory one cannot discriminate on a trimmed fixture.
     """
     from rainalert.jobs import backfill
     from rainalert.storage import LocalOverlayStore
 
-    calls = []
-    real = backfill.read_frames
+    full_reads = []
+    monkeypatch.setattr(
+        backfill, "read_frames", lambda *a, **k: full_reads.append(a) or pytest.fail("full read")
+    )
 
-    def spy(archive, **kwargs):
-        calls.append(kwargs)
-        return real(archive, **kwargs)
-
-    monkeypatch.setattr(backfill, "read_frames", spy)
     archives = _archive_dir(tmp_path / "raw", 3)
-    backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+    report = backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
 
-    assert calls, "read_frames was never called"
-    assert all(kwargs.get("analysis_only") is True for kwargs in calls), calls
+    assert report.rendered == 3
+    assert not full_reads
 
 
-def test_rerender_releases_each_cycle_before_reading_the_next(tmp_path, monkeypatch):
-    """Peak must be the size of one cycle, not two.
+def test_rerender_falls_back_when_the_first_member_is_not_the_analysis_frame(
+    tmp_path, monkeypatch, caplog
+):
+    """Correct, if slow, for an archive that does not start with t+0. Never a wrong picture."""
+    from rainalert.jobs import backfill
+    from rainalert.radar.decoder import RVArchiveRejected
+    from rainalert.storage import LocalOverlayStore
+
+    monkeypatch.setattr(
+        backfill,
+        "read_analysis_frame",
+        lambda path: (_ for _ in ()).throw(RVArchiveRejected("first member is lead +5")),
+    )
+    archives = _archive_dir(tmp_path / "raw", 2)
+    report = backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+
+    assert report.rendered == 2, "the fallback must still produce the frames"
+    assert report.failed == 0
+
+
+def test_rerender_renders_the_same_picture_either_way(tmp_path):
+    """The fast path is an optimisation, so its output must be byte-identical."""
+    from rainalert.radar.decoder import read_analysis_frame, read_frames
+    from rainalert.radar.overlay import build_projection, render_frame
+
+    projection = build_projection()
+    quick = read_analysis_frame(WET)
+    thorough = next(f for f in read_frames(WET, analysis_only=True) if f.lead_minutes == 0)
+
+    assert quick.nominal_time == thorough.nominal_time
+    assert render_frame(quick, projection) == render_frame(thorough, projection)
+
+
+def test_rerender_releases_each_frame_before_reading_the_next(tmp_path, monkeypatch):
+    """Peak must be the size of one frame, not the size of the batch.
 
     Rebinding a loop variable frees the previous value only *after* the right-hand side has been
-    evaluated, so without an explicit release two whole cycles are alive at the moment the second
-    finishes decoding - which is how a job needing ~230 MB comes to need ~460 MB.
+    evaluated, so without an explicit release two cycles are alive at the moment the second
+    finishes decoding.
     """
     import weakref
 
@@ -514,19 +546,16 @@ def test_rerender_releases_each_cycle_before_reading_the_next(tmp_path, monkeypa
     from rainalert.storage import LocalOverlayStore
 
     alive = []
-    real = backfill.read_frames
+    real = backfill.read_analysis_frame
 
-    class Frames(list):
-        """A plain list cannot be weak-referenced; this one can, and behaves identically."""
+    def spy(path):
+        # Before handing back a new frame, every earlier one must already be collected.
+        assert all(ref() is None for ref in alive), "a previous frame was still referenced"
+        frame = real(path)
+        alive.append(weakref.ref(frame))
+        return frame
 
-    def spy(archive, **kwargs):
-        # Before handing back a new cycle, every earlier one must already be collected.
-        assert all(ref() is None for ref in alive), "a previous cycle was still referenced"
-        frames = Frames(real(archive, **kwargs))
-        alive.append(weakref.ref(frames))
-        return frames
-
-    monkeypatch.setattr(backfill, "read_frames", spy)
+    monkeypatch.setattr(backfill, "read_analysis_frame", spy)
     archives = _archive_dir(tmp_path / "raw", 4)
     report = backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
 

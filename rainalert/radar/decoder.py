@@ -348,6 +348,101 @@ def _decompress_bounded(data: bytes) -> bytes:
     return bytes(out)
 
 
+def _decompress_first_member(data: bytes) -> bytes:
+    """Decompress only as far as the first tar member, then stop.
+
+    bz2 is a stream, so the only way to reach member 3 is to unpack members 1 and 2 on the way -
+    which is why ``analysis_only`` saves the *grids* but not the unpacking, and unpacking is
+    ~96% of the time. Reading one member means stopping after about 2.6 MB of a 66 MB tar.
+
+    Measured on a real 25-member cycle: 2.254 s and a 252 MB peak for the whole archive against
+    0.055 s and 9 MB for this. The difference is the 24 members nobody asked for.
+
+    The same two guards apply as in ``_decompress_bounded``: the declared size is read from the
+    ustar header before anything is unpacked, and the running total is capped. Neither can be
+    skipped here just because less is being read - a header claiming 4 GB is exactly the case
+    they exist for.
+    """
+    decompressor = bz2.BZ2Decompressor()
+    out = bytearray()
+    needed: int | None = None
+    position = 0
+    try:
+        while True:
+            if decompressor.needs_input:
+                if position >= len(data):
+                    break
+                chunk = data[position : position + _DECOMPRESS_CHUNK]
+                position += _DECOMPRESS_CHUNK
+            else:
+                chunk = b""
+            out += decompressor.decompress(chunk, _DECOMPRESS_CHUNK)
+
+            if needed is None and len(out) >= 512:
+                declared = _declared_size(bytes(out[:512]))
+                if declared is None:
+                    raise RVArchiveRejected("first member has no readable ustar header")
+                if declared > MAX_MEMBER_BYTES:
+                    raise RVArchiveRejected(
+                        f"first member declares {declared} bytes, limit is {MAX_MEMBER_BYTES}"
+                    )
+                # Header, payload, and the padding tar rounds every member up to.
+                needed = 512 + declared + (-declared % 512)
+            if needed is not None and len(out) >= needed:
+                break
+            if len(out) > MAX_TOTAL_BYTES:
+                raise RVArchiveRejected(
+                    f"archive expands past the total limit of {MAX_TOTAL_BYTES} bytes"
+                )
+            if decompressor.eof:
+                break
+    except RVArchiveRejected:
+        raise
+    except (OSError, EOFError, ValueError) as exc:
+        raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
+
+    if needed is None or len(out) < needed:
+        raise RVArchiveRejected("archive ends before its first member is complete")
+    # Two zero blocks, so tarfile sees a properly terminated archive rather than a truncated one.
+    return bytes(out[:needed]) + b"\0" * 1024
+
+
+def read_analysis_frame(archive: Path | str | bytes) -> RVFrame:
+    """Decode the t+0 frame alone, unpacking only the part of the archive that holds it.
+
+    For re-rendering, where the archive was already validated when it was stored and the only
+    thing wanted now is the one frame the map shows. It deliberately does **not** see the other
+    24 headers, so it cannot do the completeness and mixed-nominal-time checks ``read_cycle``
+    does - which is exactly why it is a separate function and not a flag on the others.
+
+    RV writes the analysis frame first. If it ever does not, this raises rather than guessing,
+    and the caller can fall back to ``read_frames``.
+    """
+    compressed = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+    plain = _decompress_first_member(compressed)
+    try:
+        with tarfile.open(mode="r:", fileobj=io.BytesIO(plain)) as tar:
+            members = [m for m in tar.getmembers() if m.isfile()]
+            if not members:
+                raise RVArchiveRejected("archive holds no files")
+            handle = tar.extractfile(members[0])
+            if handle is None:
+                raise RVArchiveRejected("first member is not a file")
+            blob = handle.read(members[0].size + 1)
+    except tarfile.TarError as exc:
+        raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
+    if len(blob) != members[0].size:
+        raise RVArchiveRejected(
+            f"member {members[0].name!r} declared {members[0].size} bytes, delivered {len(blob)}"
+        )
+    frame = decode_frame(blob)
+    if frame.lead_minutes != 0:
+        raise RVArchiveRejected(
+            f"first member is lead +{frame.lead_minutes}, not the analysis frame"
+        )
+    return frame
+
+
 def _check_limits(members: list[tarfile.TarInfo]) -> None:
     """Reject the archive as a whole before any member is read.
 

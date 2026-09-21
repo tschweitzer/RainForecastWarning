@@ -520,9 +520,12 @@ journalctl -k --since '10 minutes ago' | grep -i oom    # same thing, if journal
 
 One cycle is 25 frames of 1200x1100 float32 plus a mask - 6.6 MB each, 165 MB decoded in full -
 so a job that holds more than it needs runs out of room on a 1 GB machine quickly. The rerender
-now decodes only the frame it renders and releases each cycle before reading the next; if a
-machine still cannot hold a run, `LIMIT` is the way down, and the newest archives are the ones
-anybody is looking at.
+reads **only the first tar member**, which is where RV puts the analysis frame, so it neither
+unpacks nor holds the other 24. Measured per archive: 2.25 s and a 252 MB peak reading the whole
+cycle, against 0.055 s and 9 MB reading one member.
+
+If a machine still cannot hold a run, `LIMIT` is the way down, and the newest archives are the
+ones anybody is looking at.
 
 **After a `git pull`, run `make migrate` before restarting.** A pull can bring a schema change
 with it, and new code on an old schema connects perfectly well and then fails on the first

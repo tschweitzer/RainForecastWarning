@@ -151,3 +151,88 @@ def test_member_shorter_than_declared_is_rejected(tmp_path):
 def test_good_fixture_still_decodes(wet_cycle):
     """The limits must not reject the real thing."""
     assert len(read_frames(wet_cycle)) == 3
+
+
+# --- the fast path is a second way in, and needs the same guards -----------------------------
+
+
+def test_the_fast_path_refuses_the_bomb_too(tmp_path):
+    """read_analysis_frame unpacks less, which is not the same as trusting more."""
+    from rainalert.radar.decoder import read_analysis_frame
+
+    bomb = tmp_path / "bomb.tar.bz2"
+    bomb.write_bytes(_archive([("DE1200_RV2609161355_000", 512 * 1024 * 1024)]))
+
+    with pytest.raises(RVArchiveRejected, match="limit"):
+        read_analysis_frame(bomb)
+
+
+def test_the_fast_path_bomb_never_allocates_more_than_the_limit(tmp_path):
+    import tracemalloc
+
+    from rainalert.radar.decoder import read_analysis_frame
+
+    bomb = tmp_path / "bomb.tar.bz2"
+    bomb.write_bytes(_archive([("DE1200_RV2609161355_000", 512 * 1024 * 1024)]))
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(RVArchiveRejected):
+            read_analysis_frame(bomb)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 2 * MAX_TOTAL_BYTES, f"peaked at {peak / 1e6:.0f} MB"
+
+
+@pytest.mark.parametrize(
+    ("content", "label"),
+    [
+        (b"", "empty"),
+        (b"<html>404</html>", "an error page where an archive was expected"),
+        (b"BZh9" + b"\xff" * 64, "a bz2 header and then noise"),
+    ],
+)
+def test_the_fast_path_refuses_damaged_archives(tmp_path, content, label):
+    from rainalert.radar.decoder import read_analysis_frame
+
+    path = tmp_path / "bad.tar.bz2"
+    path.write_bytes(content)
+    with pytest.raises(RVArchiveRejected):
+        read_analysis_frame(path)
+
+
+def test_the_fast_path_refuses_an_archive_truncated_mid_member(tmp_path):
+    """Stopping early must not mean accepting an archive that stops early."""
+    from rainalert.radar.decoder import read_analysis_frame
+
+    whole = _archive([("DE1200_RV2609161355_000", 4096)])
+    path = tmp_path / "cut.tar.bz2"
+    path.write_bytes(whole[: len(whole) // 2])
+    with pytest.raises(RVArchiveRejected):
+        read_analysis_frame(path)
+
+
+def test_the_fast_path_refuses_an_archive_that_does_not_start_with_t0(tmp_path, wet_cycle):
+    """It must say so rather than render a forecast frame as if it were the analysis."""
+    import bz2
+    import io
+    import tarfile
+
+    from rainalert.radar.decoder import read_analysis_frame
+
+    raw = bz2.decompress(wet_cycle.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(raw)) as tar:
+        members = [(m, tar.extractfile(m).read()) for m in tar.getmembers()]
+
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as writer:
+        for info, payload in reversed(members):  # t+120 first
+            fresh = tarfile.TarInfo(name=info.name)
+            fresh.size = len(payload)
+            writer.addfile(fresh, io.BytesIO(payload))
+
+    path = tmp_path / "reordered.tar.bz2"
+    path.write_bytes(bz2.compress(out.getvalue()))
+    with pytest.raises(RVArchiveRejected, match="analysis frame"):
+        read_analysis_frame(path)
