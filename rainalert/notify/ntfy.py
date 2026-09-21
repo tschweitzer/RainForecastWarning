@@ -11,9 +11,45 @@ today while the mail questions are still open.
 
 from __future__ import annotations
 
+from urllib.parse import quote, urlencode, urlparse
+
 import httpx
 
 from rainalert.notify.base import DeliveryResult, OutboundMessage
+
+#: What the topic is called in the app's subscription list. Without it the entry is the raw
+#: generated topic - `rainalert-94RPFjNgVX2YthqV6pqRw` - which is unguessable on purpose and
+#: unreadable as a consequence.
+DISPLAY_NAME = "Regenwarnung"
+
+
+def deep_link(server: str, topic: str, display: str | None = DISPLAY_NAME) -> str:
+    """An `ntfy://` URL that opens the app on this topic and subscribes it.
+
+    The form comes from ntfy's own documentation: `ntfy://<host>/<topic>` opens the app's detail
+    view and "subscribes to the topic if not already subscribed", with `?secure=false` for a
+    server reached over http and `?display=` for the name shown in the list.
+
+    Deliberately **not** `https://<host>/<topic>`, which is what this used to offer: the same
+    docs say "Android deep linking of http/https links is very brittle and limited", so that
+    form generally lands on ntfy's web page rather than opening the app. It stays available as
+    the fallback, because a custom scheme does nothing at all when the app is missing.
+    """
+    parsed = urlparse(server)
+    host = parsed.netloc or parsed.path.strip("/")
+    if not host:
+        raise ValueError(f"cannot derive a host from {server!r}")
+
+    query: dict[str, str] = {}
+    # https is the default the app assumes, so the parameter is only needed to say otherwise -
+    # which a self-hosted server on plain http does need.
+    if parsed.scheme == "http":
+        query["secure"] = "false"
+    if display:
+        query["display"] = display
+
+    link = f"ntfy://{host}/{quote(topic, safe='')}"
+    return f"{link}?{urlencode(query)}" if query else link
 
 
 class NtfyNotifier:

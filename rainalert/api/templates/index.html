@@ -237,15 +237,30 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   row.appendChild(copy);
   steps.appendChild(row);
 
+  // The app link first, because it is the one that actually does the subscribing: ntfy's docs
+  // say `ntfy://<host>/<topic>` "subscribes to the topic if not already subscribed", while an
+  // https topic URL is explicitly not an app link - "Android deep linking of http/https links
+  // is very brittle and limited". A custom scheme does nothing at all without the app though,
+  // so the web page stays as the second line rather than replacing it.
   var open = document.createElement('p');
   open.className = 'alt';
-  var link = document.createElement('a');
-  link.href = data.subscribe_url;
-  link.rel = 'noopener';
-  link.textContent = 'Oder: Thema direkt öffnen';
-  open.appendChild(link);
-  open.appendChild(document.createTextNode(' (öffnet die App, sonst die ntfy-Seite)'));
+  var appLink = document.createElement('a');
+  appLink.href = data.app_url;
+  appLink.rel = 'noopener';
+  appLink.textContent = 'In der ntfy-App öffnen und abonnieren';
+  open.appendChild(appLink);
   steps.appendChild(open);
+
+  var web = document.createElement('p');
+  web.className = 'alt';
+  web.appendChild(document.createTextNode('Passiert nichts? Dann ist die App nicht installiert – '));
+  var webLink = document.createElement('a');
+  webLink.href = data.subscribe_url;
+  webLink.rel = 'noopener';
+  webLink.textContent = 'im Browser öffnen';
+  web.appendChild(webLink);
+  web.appendChild(document.createTextNode('.'));
+  steps.appendChild(web);
 
   var other = document.createElement('details');
   var summary = document.createElement('summary');

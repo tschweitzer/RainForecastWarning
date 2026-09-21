@@ -46,6 +46,7 @@ from rainalert.db.models import Channel, Subscriber, Subscription, TokenPurpose
 from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
+from rainalert.notify.ntfy import deep_link as ntfy_deep_link
 from rainalert.radar.overlay import LAYER_OPACITY, legend
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
@@ -374,6 +375,9 @@ def create_app(
                     "channel": "ntfy",
                     "topic": result.address,
                     "server": settings.ntfy_server,
+                    # Two links, because neither covers everyone. The app link subscribes in
+                    # one tap but does nothing without the app; the web one always resolves.
+                    "app_url": ntfy_deep_link(settings.ntfy_server, result.address),
                     "subscribe_url": f"{settings.ntfy_server.rstrip('/')}/{result.address}",
                 },
                 status_code=status.HTTP_202_ACCEPTED,

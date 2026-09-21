@@ -232,10 +232,19 @@ NOTIFIER=ntfy
 
 Install the ntfy app, sign up with "Push aufs Handy" selected, and the page hands you a topic.
 
-**On the phone you want warned** - the normal case - copy the topic and paste it into the app's
-"subscribe to topic" field. That works on every platform whatever the app registered as a link
-handler. The "Thema direkt öffnen" link is quicker when the app claims it and lands on ntfy's own
-page for the topic when it does not, so it is never a dead end.
+**On the phone you want warned** - the normal case - tap **„In der ntfy-App öffnen und
+abonnieren"**. That is an `ntfy://` deep link, which ntfy's documentation says "subscribes to the
+topic if not already subscribed", so it is one tap rather than a copy and paste. It also carries
+`?display=Regenwarnung`, so the app lists it under a readable name instead of the generated
+topic.
+
+Two things it cannot do. A custom scheme does **nothing at all** when the app is not installed -
+no error, no fallback - which is why the line under it offers the web page, and why the topic and
+its copy button stay above both. And the documented behaviour is for the **Android** app; on iOS
+it is worth trying before relying on it.
+
+Copying the topic into the app's "subscribe to topic" field still works everywhere and is the
+thing to fall back on.
 
 **Signing up on a desktop instead?** Open "Auf einem anderen Gerät abonnieren" and scan the QR
 with the phone.
