@@ -207,6 +207,7 @@ def verify(args: argparse.Namespace) -> int:
 def rerender(args: argparse.Namespace) -> int:
     """Rebuild the map timeline from stored archives. Touches DWD not at all."""
     import logging
+    import os
 
     from rainalert.config import get_settings
     from rainalert.jobs.backfill import rerender_observed
@@ -217,8 +218,20 @@ def rerender(args: argparse.Namespace) -> int:
     if not settings.archive_dir or not settings.overlay_dir:
         print("set ARCHIVE_DIR and OVERLAY_DIR", file=sys.stderr)
         return 2
+
+    # Set here rather than with `nice` in the Makefile, so it applies however this is started -
+    # from make, from cron, or by hand. It only yields to other processes on the same machine;
+    # a shared-core VM's own throttle is what --pause is for.
+    try:
+        os.nice(10)
+    except (AttributeError, OSError):  # not POSIX, or not permitted
+        pass
+
     report = rerender_observed(
-        settings.archive_dir, LocalOverlayStore(settings.overlay_dir), args.limit
+        settings.archive_dir,
+        LocalOverlayStore(settings.overlay_dir),
+        args.limit,
+        pause_seconds=args.pause,
     )
     print(
         f"{report.rendered} frame(s) from {report.archives} archive(s), {report.failed} unreadable"
@@ -458,6 +471,13 @@ def build_parser() -> argparse.ArgumentParser:
         "rerender", help="rebuild map overlays from archives already held (no DWD traffic)"
     )
     b.add_argument("--limit", type=int, default=None, help="only the newest N archives")
+    b.add_argument(
+        "--pause",
+        type=float,
+        default=0.0,
+        help="seconds to wait between archives; keeps a small VM responsive at the cost of "
+        "a longer run (try 0.5 on a shared-core instance)",
+    )
     b.set_defaults(func=rerender)
     return parser
 

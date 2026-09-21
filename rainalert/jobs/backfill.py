@@ -102,7 +102,10 @@ def _analysis_frame(path: Path):
 
 
 def rerender_observed(
-    archive_dir: str | Path, overlays: OverlayStore, limit: int | None = None
+    archive_dir: str | Path,
+    overlays: OverlayStore,
+    limit: int | None = None,
+    pause_seconds: float = 0.0,
 ) -> BackfillReport:
     """Re-render the t+0 frame of every archived cycle.
 
@@ -128,6 +131,7 @@ def rerender_observed(
         paths = paths[:limit]
 
     logger.info("re-rendering %d archive(s) from %s", len(paths), archive_dir)
+    started = time.monotonic()
     for path in paths:
         report.archives += 1
         try:
@@ -145,7 +149,24 @@ def rerender_observed(
         # Progress, so a run that dies says where it got to. A silent job that is killed leaves
         # nothing to distinguish "too big" from "stuck".
         if report.archives % 25 == 0:
-            logger.info("  %d/%d archives, %d frames", report.archives, len(paths), report.rendered)
+            done = time.monotonic() - started
+            rate = done / report.archives
+            logger.info(
+                "  %d/%d archives, %d frames, %.0fs elapsed, ~%.0fs left",
+                report.archives,
+                len(paths),
+                report.rendered,
+                done,
+                rate * (len(paths) - report.archives),
+            )
+
+        # A duty cycle, not politeness to a server: this is the only CPU-bound loop in the
+        # project, and on a shared-core VM running it flat out drains the burst allowance and
+        # then everything on the box - sshd included - runs at the baseline rate. Pausing
+        # between archives keeps the average under that baseline, so the job takes longer and
+        # the machine stays usable. 0 means go as fast as the CPU allows.
+        if pause_seconds:
+            time.sleep(pause_seconds)
     logger.info(
         "re-rendered %d observed frame(s) from %d archive(s), %d unreadable",
         report.rendered,

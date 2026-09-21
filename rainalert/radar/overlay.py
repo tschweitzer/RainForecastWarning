@@ -35,6 +35,10 @@ BOUNDS = ((46.0, 4.0), (55.9, 17.0))
 #: sampling it meant two thirds of the wet cells in a frame were never drawn at all.
 WIDTH = 1120
 
+#: How many source rows to project at once. Small enough that the float64 intermediates stay a
+#: few MB, large enough that pyproj is still called in useful batches rather than per row.
+_PROJECTION_BAND_ROWS = 100
+
 #: The rain-intensity bands: the one place the scale is defined.
 #:
 #: Each entry is (mm per 5 min at which the band starts, RGBA, German name). Below the first
@@ -142,37 +146,52 @@ def build_projection(spec: GridSpec = DE1200, width: int = WIDTH) -> Projection:
     rows = np.floor((gy - ys[0]) / spec.res_km).astype(np.int64)
     inside = (rows >= 0) & (rows < spec.rows) & (cols >= 0) & (cols < spec.cols)
 
+    # Narrow before anything else keeps a reference: a 1120x1361 index array is 12.2 MB as
+    # int64 and 3.0 MB as int16, and the largest index either of these can hold is 1199.
+    rows = np.clip(rows, 0, spec.rows - 1).astype(np.int16)
+    cols = np.clip(cols, 0, spec.cols - 1).astype(np.int16)
+    del gx, gy, lon, lat, mesh_x, mesh_y
+
     # The other direction: where does each source cell land? Cell centres, not corners, so a
     # cell is attributed to the pixel containing its middle rather than its lower-left edge.
-    source_x, source_y = np.meshgrid(xs + spec.res_km / 2, ys + spec.res_km / 2)
-    source_lon, source_lat = Transformer.from_crs(
+    #
+    # Built a band of rows at a time. Doing it whole needs a dozen 1200x1100 float64
+    # intermediates at once - meshgrids, two transforms, the floors - which is ~135 MB of peak
+    # that the allocator then hangs on to. On a 1 GB machine that peak is the difference
+    # between a job that runs and a box that stops responding.
+    to_wgs84_from_radolan = Transformer.from_crs(
         CRS.from_proj4(RADOLAN_PROJ), CRS.from_epsg(4326), always_xy=True
-    ).transform(source_x, source_y)
-    merc_x, merc_y = to_mercator.transform(source_lon, source_lat)
-    target_col = np.floor((merc_x - x0) / (x1 - x0) * width).astype(np.int64)
-    # y is flipped for the same reason as above: image rows run north to south.
-    target_row = np.floor((y1 - merc_y) / (y1 - y0) * height).astype(np.int64)
-    landed = (target_row >= 0) & (target_row < height) & (target_col >= 0) & (target_col < width)
-    target = (target_row * width + target_col)[landed]
-    source = np.flatnonzero(landed.ravel())
+    )
+    centres_x = xs + spec.res_km / 2
+    targets: list[np.ndarray] = []
+    sources: list[np.ndarray] = []
+    for start in range(0, spec.rows, _PROJECTION_BAND_ROWS):
+        stop = min(start + _PROJECTION_BAND_ROWS, spec.rows)
+        band_x, band_y = np.meshgrid(centres_x, ys[start:stop] + spec.res_km / 2)
+        band_lon, band_lat = to_wgs84_from_radolan.transform(band_x, band_y)
+        merc_x, merc_y = to_mercator.transform(band_lon, band_lat)
+        target_col = np.floor((merc_x - x0) / (x1 - x0) * width).astype(np.int64)
+        # y is flipped for the same reason as above: image rows run north to south.
+        target_row = np.floor((y1 - merc_y) / (y1 - y0) * height).astype(np.int64)
+        landed = (
+            (target_row >= 0) & (target_row < height) & (target_col >= 0) & (target_col < width)
+        )
+        targets.append((target_row * width + target_col)[landed].astype(np.int32))
+        sources.append((np.flatnonzero(landed.ravel()) + start * spec.cols).astype(np.int32))
+
+    target = np.concatenate(targets)
+    source = np.concatenate(sources)
+    del targets, sources
 
     # Sorted once, here, so that rendering a frame is a reduceat over contiguous runs rather
     # than a scattered np.maximum.at - which is the same arithmetic and about eight times
     # slower, measured, because it cannot vectorise over repeated indices.
     order = np.argsort(target, kind="stable")
     target, source = target[order], source[order]
-    starts = np.flatnonzero(np.r_[True, np.diff(target) != 0])
+    del order
+    starts = np.flatnonzero(np.r_[True, np.diff(target) != 0]).astype(np.int32)
 
-    return Projection(
-        np.clip(rows, 0, spec.rows - 1),
-        np.clip(cols, 0, spec.cols - 1),
-        inside,
-        width,
-        height,
-        source,
-        starts,
-        target[starts],
-    )
+    return Projection(rows, cols, inside, width, height, source, starts, target[starts])
 
 
 def colorize(values: np.ndarray) -> np.ndarray:

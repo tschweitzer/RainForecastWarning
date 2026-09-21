@@ -174,8 +174,11 @@ verify:
 
 # LIMIT=100 does only the newest N archives. An escape hatch for a machine that cannot hold a
 # whole run: the newest frames are the ones anybody is looking at.
+# The job runs at nice 10 by itself. PAUSE=0.5 additionally idles between archives, which is
+# what keeps a shared-core VM responsive - nice only arbitrates between local processes, it
+# cannot stop the hypervisor throttling a box that has burned its CPU allowance.
 rerender:
-	$(PY) -m rainalert.cli rerender $(if $(LIMIT),--limit $(LIMIT))
+	$(PY) -m rainalert.cli rerender $(if $(LIMIT),--limit $(LIMIT)) $(if $(PAUSE),--pause $(PAUSE))
 
 pin-base:
 	@docker pull python:3.11-slim >/dev/null && \

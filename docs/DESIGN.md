@@ -862,7 +862,15 @@ least as strongly as it really is. Never weaker, never absent.
 
 **The cost**, honestly: 62 kB a frame against 26 kB, so a full 168-frame timeline is 10.5 MB
 instead of 4.5 MB; 246 ms a frame against 96 ms, so ingest spends ~6.2 s per cycle rendering
-instead of ~2.4 s. Bandwidth was the original reason for 560 and it is a real cost - but halving
+instead of ~2.4 s.
+
+The projection itself is the other cost, and it is paid once: 20.9 MB of index arrays, and a
+~60 MB spike while they are built. Both were larger until the arrays were narrowed to the
+dtypes their values need (`int16` for grid indices whose maximum is 1199, `int32` for flat
+offsets) and the forward map was built a band of rows at a time - a dozen 1200x1100 `float64`
+intermediates at once was ~135 MB of peak the allocator then held on to, which on a 1 GB
+machine is the difference between a job that runs and a box that stops responding. Re-rendering
+250 archives holds steady at 165 MB resident, measured, from the first to the last. Bandwidth was the original reason for 560 and it is a real cost - but halving
 the linear resolution of the product the service exists to show is a strange way to pay it.
 
 **What is still lost, and deliberately:**

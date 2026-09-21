@@ -563,6 +563,58 @@ def test_rerender_releases_each_frame_before_reading_the_next(tmp_path, monkeypa
     assert len(alive) == 4
 
 
+def test_rerender_does_not_accumulate_across_a_long_run(tmp_path, monkeypatch):
+    """Memory must be flat in the number of archives, not rising.
+
+    Measured live on 250 archives, the resident set sits at 165 MB and does not move. This is
+    the cheap version of that: Python-level allocation sampled early and late in a run, which
+    is where a leak would show - a reference kept per archive, a growing cache, a handle never
+    released.
+    """
+    import tracemalloc
+
+    from rainalert.jobs import backfill
+    from rainalert.storage import LocalOverlayStore
+
+    archives = _archive_dir(tmp_path / "raw", 24)
+    seen = []
+    real = backfill._analysis_frame
+
+    def spy(path):
+        frame = real(path)
+        seen.append(tracemalloc.get_traced_memory()[0])
+        return frame
+
+    monkeypatch.setattr(backfill, "_analysis_frame", spy)
+    tracemalloc.start()
+    try:
+        backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "overlays"))
+    finally:
+        tracemalloc.stop()
+
+    early = sum(seen[2:6]) / 4
+    late = sum(seen[-4:]) / 4
+    # Generous, because the allocator is not deterministic - but a per-archive leak of even a
+    # single frame (6.6 MB) over twenty archives would be far outside it.
+    assert late < early * 1.25 + 2e6, f"early {early / 1e6:.1f} MB, late {late / 1e6:.1f} MB"
+
+
+def test_rerender_can_pause_between_archives(tmp_path, monkeypatch):
+    """The duty cycle that keeps a shared-core VM responsive."""
+    from rainalert.jobs import backfill
+    from rainalert.storage import LocalOverlayStore
+
+    slept = []
+    monkeypatch.setattr(backfill.time, "sleep", slept.append)
+    archives = _archive_dir(tmp_path / "raw", 3)
+    backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "ov"), pause_seconds=0.25)
+    assert slept == [0.25, 0.25, 0.25]
+
+    slept.clear()
+    backfill.rerender_observed(archives, LocalOverlayStore(tmp_path / "ov2"))
+    assert slept == [], "no pause by default"
+
+
 def test_rerender_skips_an_unreadable_archive_and_keeps_going(tmp_path):
     from rainalert.jobs.backfill import rerender_observed
     from rainalert.storage import LocalOverlayStore

@@ -507,7 +507,16 @@ on disk, without a single request to DWD:
 ```sh
 make rerender                     # minutes, no network, no DWD traffic
 make rerender LIMIT=100           # only the newest 100 archives
+make rerender PAUSE=0.5           # idle between archives; slower, but the box stays usable
 ```
+
+**If the whole VM becomes unresponsive part-way through**, that is CPU, not memory. The job runs
+at `nice 10` so it yields to sshd and the web server, but nice only arbitrates between processes
+on the machine - it cannot stop a shared-core instance being throttled once it has burned its
+CPU allowance, and then *everything* on the box runs at the baseline rate. `PAUSE=0.5` keeps the
+average below that baseline: roughly twice the wall-clock time, and an ssh session that still
+responds. Memory is not the cause - it is flat at ~165 MB from the first archive to the last,
+measured over 250 of them, and there is a test asserting it does not grow.
 
 **If it ends in `Killed`** - `make: *** [Makefile:177: rerender] Killed` - that is the kernel's
 OOM killer, not the program exiting. `make` reports the signal and nothing else, so the reason
