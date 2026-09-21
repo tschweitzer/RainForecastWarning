@@ -102,6 +102,10 @@ PUBLIC_BASE_URL=http://localhost:8000
 # MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
 # MAP_TILE_ATTRIBUTION=&copy; Example Maps
 #
+# Pick a MUTED style. The radar is the foreground; a basemap with saturated green landcover
+# hides the "mäßiger Regen" band, which is green too. Grey "positron"/"light"/"canvas" styles
+# are the usual choice for exactly this reason. See "Choosing a basemap" below.
+#
 # On OpenStreetMap's own servers during development: their policy asks that the application be
 # identifiable, attributed, and light. The first is handled - the tile layer overrides this
 # site's `Referrer-Policy: no-referrer` so tiles carry the origin - and the second is the
@@ -401,6 +405,34 @@ built around (DESIGN.md §4.3). After an hour or two, `http://localhost:8000/map
 to slide through, and this is also the closest thing to M2's "24 h unattended" criterion that can be
 done without deploying.
 
+### Choosing a basemap
+
+The radar is the thing being read; the basemap only has to answer "where is that". A style with
+strong green landcover actively fights the overlay, because `mäßiger Regen` is green as well.
+What you want is low saturation, roads and place names, no terrain.
+
+**Preview them all in one place:** <https://leaflet-extras.github.io/leaflet-providers/preview/>
+lists the tile providers that work with Leaflet and renders each one live, so you can pan to
+your area and compare before editing `.env`. That is the fastest way to answer this for yourself.
+
+The styles usually chosen as a backdrop for weather data:
+
+| Style | Tile URL template | Notes |
+|---|---|---|
+| CARTO Positron | `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` | Light grey, roads + labels, almost no colour. The default choice for data overlays |
+| CARTO Positron, no labels | `.../light_nolabels/{z}/{x}/{y}{r}.png` | The same without place names - quieter, harder to orient by |
+| CARTO Dark Matter | `.../dark_all/{z}/{x}/{y}{r}.png` | Dark equivalent; bright radar colours pop hardest against it |
+| Esri World Light Gray | `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}` | Note the `{z}/{y}/{x}` order, not `{z}/{x}/{y}` |
+| Stadia Alidade Smooth | `https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png` | Needs a free API key since 2023 |
+
+Attribution is not optional - every one of these requires it, and `MAP_TILE_ATTRIBUTION` is
+where it goes. CARTO wants `&copy; <a href="https://carto.com/attributions">CARTO</a>` alongside
+the OpenStreetMap credit, Esri wants its own line, and each has usage limits that a development
+map will not notice and a public service will. Check the provider's terms before deploying -
+the same argument as §2's note about OpenStreetMap's own servers.
+
+`{r}` is Leaflet's retina placeholder and expands to `@2x` on high-density screens.
+
 ### Choosing how far back the map looks
 
 The slider shows the last 12 hours by default. The picker at the foot of `/map` changes that, and
@@ -465,6 +497,15 @@ make ingest-loop-bg            # one ingest every 5 min - this is M2's 24 h crit
 make status                    # what is running
 make logs NAME=serve           # tail -f the log
 make stop NAME=ingest-loop     # stop it, and its children
+```
+
+**Changed the colour palette or the overlay opacity?** Those are baked into the rendered PNGs,
+so the change only shows on cycles ingested afterwards - the map keeps showing hours of frames
+drawn the old way. `make rerender` rebuilds the whole stored timeline from the archives already
+on disk, without a single request to DWD:
+
+```sh
+make rerender                     # minutes, no network, no DWD traffic
 ```
 
 **After a `git pull`, run `make migrate` before restarting.** A pull can bring a schema change

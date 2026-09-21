@@ -122,6 +122,7 @@
   // Picking a spot needs a map; showing rain on it needs a configured overlay store.
   // They are separate: a fresh install with no radar yet must still be able to move.
   var HAS_OVERLAY = {{ (has_map | default(false)) | tojson }};
+  var LAYER_OPACITY = {{ layer_opacity | tojson }};
   var csrf = null;               // set when a session opens; required on every write
   var current = null;            // the last state the server confirmed
   var map = null, marker = null, ring = null, overlay = null;
@@ -349,7 +350,7 @@
       var frames = data.frames || [];
       var now = frames.filter(function (f) { return f.offset_minutes === 0; })[0];
       if (!now || !data.bounds) { return; }
-      overlay = L.imageOverlay(now.url, data.bounds, {opacity: 0.6}).addTo(map);
+      overlay = L.imageOverlay(now.url, data.bounds, {opacity: LAYER_OPACITY}).addTo(map);
       // Under the marker, or the radar hides the thing being positioned.
       overlay.bringToBack();
       var when = new Date(now.valid_time);

@@ -202,6 +202,40 @@ def test_every_default_threshold_agrees(settings):
     assert DEFAULT_THRESHOLD == settings.default_threshold_mm_5min
 
 
+def test_there_is_only_one_opacity(client):
+    """The palette's alpha used to be multiplied again by the Leaflet layer's.
+
+    That put the lightest band at an effective 0.38 on the map and 0.31 on the settings page -
+    invisible over a basemap - and made the palette impossible to reason about, because no
+    number in it was the number you saw.
+    """
+    from rainalert.radar.overlay import LAYER_OPACITY
+
+    assert LAYER_OPACITY == 1.0
+    for path in ("/map", "/manage"):
+        page = client.get(path).text
+        assert "opacity: LAYER_OPACITY" in page or "opacity: LAYER_OPACITY}" in page
+        # No second opacity typed into the template to multiply it back down.
+        assert "opacity: 0.75" not in page
+        assert "opacity: 0.6}" not in page
+
+
+def test_the_lightest_band_is_actually_visible():
+    """A floor, so the faintest rain cannot drift back to invisible unnoticed."""
+    from rainalert.radar.overlay import INTENSITY_BANDS
+
+    lightest = INTENSITY_BANDS[0][1][3] / 255
+    assert lightest >= 0.5, f"the lightest band is at {lightest:.2f} over the basemap"
+
+
+def test_the_bands_get_more_opaque_as_the_rain_gets_heavier():
+    from rainalert.radar.overlay import INTENSITY_BANDS
+
+    alphas = [rgba[3] for _, rgba, _ in INTENSITY_BANDS]
+    assert alphas == sorted(alphas)
+    assert max(alphas) <= 255
+
+
 def test_the_session_control_is_outside_the_settings_form(client):
     """Next to Save, anything button-shaped reads as Cancel."""
     page = client.get("/manage").text

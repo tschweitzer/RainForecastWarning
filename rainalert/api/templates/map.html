@@ -67,6 +67,8 @@
 (function () {
   // maxZoom on the map as well as on the tile layer: with no basemap configured there is no
   // tile layer to take it from, and Leaflet would then let the graticule zoom forever.
+  var LAYER_OPACITY = {{ layer_opacity | tojson }};
+
   var map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 6);
 
   var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
@@ -235,7 +237,9 @@
     }
     var img = preload(frame.url);
     if (layer) { layer.setUrl(frame.url); } else {
-      layer = L.imageOverlay(frame.url, bounds, { opacity: 0.75 }).addTo(map);
+      // The alpha is baked into the PNG (radar/overlay.py INTENSITY_BANDS), so this is 1.0
+      // and the palette is the single place that decides how strong rain looks.
+      layer = L.imageOverlay(frame.url, bounds, { opacity: LAYER_OPACITY }).addTo(map);
     }
     if (!layer._map) { layer.addTo(map); }
     for (var d = -WINDOW; d <= WINDOW; d++) {

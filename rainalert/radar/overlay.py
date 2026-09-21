@@ -46,15 +46,24 @@ WIDTH = 560
 #: The boundaries are the ones already chosen for the map, and the names are the conventional
 #: classes those hourly rates fall into (light / moderate / heavy, with DWD's Starkregen warning
 #: thresholds - 15-25 mm/h markant, 25-40 mm/h Unwetter - landing in the top three bands).
+#: **The alpha here is the final one.** It used to be multiplied again by the Leaflet layer's
+#: own opacity - 0.75 on the map, 0.6 on the settings page - which put the lightest band at an
+#: effective 0.38 and 0.31: light blue at a third strength over a basemap, which is close to
+#: invisible. Two opacities multiplying is also a bad way to reason about a palette, so the
+#: layer is now drawn at 1.0 and this column is what you actually see.
 INTENSITY_BANDS: tuple[tuple[float, tuple[int, int, int, int], str], ...] = (
-    (0.05, (120, 180, 255, 130), "Nieselregen"),  # ~0.6 mm/h
-    (0.15, (60, 140, 240, 170), "leichter Regen"),  # ~1.8 mm/h
-    (0.35, (40, 190, 150, 190), "mäßiger Regen"),  # ~4.2 mm/h
-    (0.70, (245, 210, 70, 205), "kräftiger Regen"),  # ~8.4 mm/h
-    (1.50, (240, 140, 45, 220), "starker Regen"),  # ~18 mm/h
-    (3.00, (225, 60, 60, 235), "Starkregen"),  # ~36 mm/h
-    (6.00, (170, 40, 140, 245), "extremer Starkregen"),  # ~72 mm/h
+    (0.05, (120, 180, 255, 140), "Nieselregen"),  # ~0.6 mm/h
+    (0.15, (60, 140, 240, 173), "leichter Regen"),  # ~1.8 mm/h
+    (0.35, (40, 190, 150, 199), "mäßiger Regen"),  # ~4.2 mm/h
+    (0.70, (245, 210, 70, 217), "kräftiger Regen"),  # ~8.4 mm/h
+    (1.50, (240, 140, 45, 230), "starker Regen"),  # ~18 mm/h
+    (3.00, (225, 60, 60, 240), "Starkregen"),  # ~36 mm/h
+    (6.00, (170, 40, 140, 247), "extremer Starkregen"),  # ~72 mm/h
 )
+
+#: What the Leaflet layers draw at. A constant rather than a number typed into two templates,
+#: because the whole point of the change above is that there is one opacity, not two.
+LAYER_OPACITY = 1.0
 
 #: What the renderer wants: just the thresholds and their colours.
 COLOR_STOPS: tuple[tuple[float, tuple[int, int, int, int]], ...] = tuple(

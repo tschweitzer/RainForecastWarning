@@ -45,7 +45,7 @@ from rainalert.db.models import Channel, Subscriber, Subscription, TokenPurpose
 from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
-from rainalert.radar.overlay import legend
+from rainalert.radar.overlay import LAYER_OPACITY, legend
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
 from rainalert.tokens import (
@@ -674,6 +674,7 @@ def create_app(
                 "settings": settings,
                 "has_map": overlay_store is not None,
                 "bounds": rule_bounds(),
+                "layer_opacity": LAYER_OPACITY,
             },
         )
 
@@ -700,6 +701,7 @@ def create_app(
                 "settings": settings,
                 "window_hours": window,
                 "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
+                "layer_opacity": LAYER_OPACITY,
             },
         )
 

@@ -822,15 +822,30 @@ the overlay renderer, the map legend, and the threshold picker on the settings p
 point of putting them in one place - a colour on the map and a colour in the dropdown mean the
 same rain by construction, rather than because two lists were edited together.
 
-| mm / 5 min | ≈ mm / h | Name | Colour |
-|---|---|---|---|
-| 0.05 | 0.6 | Nieselregen | pale blue |
-| 0.15 | 1.8 | leichter Regen | blue |
-| 0.35 | 4.2 | mäßiger Regen | green |
-| 0.70 | 8.4 | kräftiger Regen | yellow |
-| 1.50 | 18 | starker Regen | orange |
-| 3.00 | 36 | Starkregen | red |
-| 6.00 | 72 | extremer Starkregen | violet |
+| mm / 5 min | ≈ mm / h | Name | Colour | Opacity |
+|---|---|---|---|---|
+| 0.05 | 0.6 | Nieselregen | pale blue | 0.55 |
+| 0.15 | 1.8 | leichter Regen | blue | 0.68 |
+| 0.35 | 4.2 | mäßiger Regen | green | 0.78 |
+| 0.70 | 8.4 | kräftiger Regen | yellow | 0.85 |
+| 1.50 | 18 | starker Regen | orange | 0.90 |
+| 3.00 | 36 | Starkregen | red | 0.94 |
+| 6.00 | 72 | extremer Starkregen | violet | 0.97 |
+
+**One opacity, not two.** The alpha above is what you see. It used to be multiplied again by the
+Leaflet layer's own opacity — 0.75 on `/map`, 0.6 on `/manage` — which put the lightest band at
+an effective 0.38 and 0.31: pale blue at a third strength over a basemap, close to invisible, and
+a palette in which no number was the number on screen. `LAYER_OPACITY` is 1.0 and the templates
+read it from the server, so there is one place that decides how strong rain looks.
+
+Changing these values only affects **newly rendered** PNGs. `make rerender` rebuilds the whole
+stored timeline from the archives already on disk without touching DWD — raw archives are kept
+for the same window the map shows (`raw_retention_hours`), so it covers everything visible.
+
+**On the green band.** `mäßiger Regen` is a green-teal, which disappears over a basemap with a
+lot of green landcover — the reason `MAP_TILE_URL` wants a muted, low-saturation style (§2 of
+LOCAL.md). If a green-heavy basemap is ever the only option, move this band rather than fighting
+it: the boundary is what carries meaning, the hue is free.
 
 Below 0.05 the pixel is fully transparent, so "no rain" and "no data" both read as nothing drawn.
 The map is not the place to distinguish them; the staleness banner and the gap markers are.
