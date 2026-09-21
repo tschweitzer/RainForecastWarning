@@ -499,7 +499,7 @@ make logs NAME=serve           # tail -f the log
 make stop NAME=ingest-loop     # stop it, and its children
 ```
 
-**Changed the colour palette or the overlay opacity?** Those are baked into the rendered PNGs,
+**Changed the colour palette, the overlay opacity or `WIDTH`?** Those are baked into the rendered PNGs,
 so the change only shows on cycles ingested afterwards - the map keeps showing hours of frames
 drawn the old way. `make rerender` rebuilds the whole stored timeline from the archives already
 on disk, without a single request to DWD:

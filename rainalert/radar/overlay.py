@@ -23,9 +23,17 @@ from rainalert.radar.grid import DE1200, RADOLAN_PROJ, GridSpec, cell_corners
 #: Germany plus border areas, as (south, west), (north, east). Leaflet takes exactly this.
 BOUNDS = ((46.0, 4.0), (55.9, 17.0))
 
-#: Half the native resolution: ~2 km per pixel, which is plenty for a phone and keeps each frame
-#: to a couple of hundred kilobytes. 168 of these get loaded over mobile data (§11.1).
-WIDTH = 560
+#: Chosen so that one output pixel is never coarser than one source cell.
+#:
+#: The grid is 1 km. In Web Mercator a pixel covers more ground the further south it is, so the
+#: binding case is the southern edge: at 46 N the image spans 1006 km, and 1120 px puts a pixel
+#: at 0.90 km there and 0.72 km at the northern edge. Below about 1006 px the south would start
+#: merging cells.
+#:
+#: It was 560 (1.5-1.8 km per pixel) until 2026-09-21, chosen for bandwidth. That halved the
+#: linear resolution of the product this service exists to show, and combined with point
+#: sampling it meant two thirds of the wet cells in a frame were never drawn at all.
+WIDTH = 1120
 
 #: The rain-intensity bands: the one place the scale is defined.
 #:
@@ -76,13 +84,31 @@ INTERVALS_PER_HOUR = 12
 
 @dataclass(frozen=True)
 class Projection:
-    """The source pixel each output pixel takes its value from."""
+    """How source cells and output pixels correspond, in both directions.
+
+    Two mappings, because neither alone is enough.
+
+    ``rows``/``cols`` is the **inverse** map: for each output pixel, the source cell its centre
+    falls in. It guarantees every pixel gets a value, which matters wherever the output is finer
+    than the source - otherwise the picture would have holes.
+
+    ``scatter_*`` is the **forward** map: for each source cell, the output pixel it lands in,
+    pre-sorted into groups so a frame can be max-reduced per pixel in one pass. It guarantees
+    every source cell is accounted for, which the inverse map does not: with 1 km cells and
+    pixels of a similar size, sampling one cell per pixel silently discarded most of them.
+    """
 
     rows: np.ndarray
     cols: np.ndarray
     inside: np.ndarray
     width: int
     height: int
+    #: Flat source indices, ordered so that cells sharing an output pixel are adjacent.
+    scatter_source: np.ndarray
+    #: Where each output pixel's run begins in ``scatter_source``.
+    scatter_starts: np.ndarray
+    #: The flat output pixel each run belongs to.
+    scatter_pixels: np.ndarray
 
 
 def build_projection(spec: GridSpec = DE1200, width: int = WIDTH) -> Projection:
@@ -115,8 +141,37 @@ def build_projection(spec: GridSpec = DE1200, width: int = WIDTH) -> Projection:
     cols = np.floor((gx - xs[0]) / spec.res_km).astype(np.int64)
     rows = np.floor((gy - ys[0]) / spec.res_km).astype(np.int64)
     inside = (rows >= 0) & (rows < spec.rows) & (cols >= 0) & (cols < spec.cols)
+
+    # The other direction: where does each source cell land? Cell centres, not corners, so a
+    # cell is attributed to the pixel containing its middle rather than its lower-left edge.
+    source_x, source_y = np.meshgrid(xs + spec.res_km / 2, ys + spec.res_km / 2)
+    source_lon, source_lat = Transformer.from_crs(
+        CRS.from_proj4(RADOLAN_PROJ), CRS.from_epsg(4326), always_xy=True
+    ).transform(source_x, source_y)
+    merc_x, merc_y = to_mercator.transform(source_lon, source_lat)
+    target_col = np.floor((merc_x - x0) / (x1 - x0) * width).astype(np.int64)
+    # y is flipped for the same reason as above: image rows run north to south.
+    target_row = np.floor((y1 - merc_y) / (y1 - y0) * height).astype(np.int64)
+    landed = (target_row >= 0) & (target_row < height) & (target_col >= 0) & (target_col < width)
+    target = (target_row * width + target_col)[landed]
+    source = np.flatnonzero(landed.ravel())
+
+    # Sorted once, here, so that rendering a frame is a reduceat over contiguous runs rather
+    # than a scattered np.maximum.at - which is the same arithmetic and about eight times
+    # slower, measured, because it cannot vectorise over repeated indices.
+    order = np.argsort(target, kind="stable")
+    target, source = target[order], source[order]
+    starts = np.flatnonzero(np.r_[True, np.diff(target) != 0])
+
     return Projection(
-        np.clip(rows, 0, spec.rows - 1), np.clip(cols, 0, spec.cols - 1), inside, width, height
+        np.clip(rows, 0, spec.rows - 1),
+        np.clip(cols, 0, spec.cols - 1),
+        inside,
+        width,
+        height,
+        source,
+        starts,
+        target[starts],
     )
 
 
@@ -129,11 +184,38 @@ def colorize(values: np.ndarray) -> np.ndarray:
 
 
 def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
-    """One frame to PNG bytes."""
+    """One frame to PNG bytes, losing no wet cell.
+
+    Each output pixel shows the **heaviest** rain among the source cells that fall in it. That
+    is the same rule the alerting uses over a subscriber's radius (sampler.sample), and for the
+    same reason: a pixel one of whose cells is under a shower is a pixel where you get wet, and
+    averaging would dilute exactly the small convective cells this service exists to catch.
+
+    It is also the difference between a picture and a sample of one. Taking one cell per pixel -
+    which is what this did until 2026-09-21 - left two thirds of a frame's wet cells undrawn and
+    could miss the heaviest cell in the country entirely.
+    """
     projection = projection or build_projection()
     values = np.where(frame.missing, np.nan, frame.values)
+
+    # Start from the inverse map, so every pixel has a value even where the output is finer
+    # than the source. NaN means "nothing to draw", which colorize renders transparent.
     sampled = values[projection.rows, projection.cols]
     sampled[~projection.inside] = np.nan
+
+    # Then raise each pixel to the maximum of the cells that actually landed in it. -1 stands in
+    # for missing so that a real reading always wins over no reading, and so that a pixel whose
+    # cells are all missing keeps the NaN it started with rather than becoming 0 mm.
+    readings = np.maximum.reduceat(
+        np.nan_to_num(values.ravel()[projection.scatter_source], nan=-1.0),
+        projection.scatter_starts,
+    )
+    flat = sampled.ravel()
+    current = np.nan_to_num(flat[projection.scatter_pixels], nan=-1.0)
+    combined = np.maximum(current, readings)
+    flat[projection.scatter_pixels] = np.where(combined < 0, np.nan, combined)
+    sampled = flat.reshape(projection.height, projection.width)
+
     image = Image.fromarray(colorize(sampled), mode="RGBA")
     buffer = io.BytesIO()
     # optimize=True costs a little CPU per frame and saves rather more bandwidth on 168 of them.

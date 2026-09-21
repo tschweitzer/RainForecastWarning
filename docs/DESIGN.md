@@ -831,6 +831,54 @@ Choosing a provider (**Q-5**) is now a deployment decision with no code in it.
 
 ---
 
+### 11.1.2 Fidelity of the overlay
+
+The overlay used to be a **sample** of the radar rather than a picture of it, in two ways at
+once, and the two compounded.
+
+It was rendered at 560 px, so one pixel covered 1.5-1.8 km against 1 km cells; and each pixel
+took **one** source cell (`np.floor` on the inverse projection) rather than considering the
+others. Measured on a real frame: 28.8% of source cells appeared in the image at all, 66% of the
+wet cells were never drawn, and the heaviest cell in the country - 11.80 mm/5 min - was absent,
+because it fell between sample points.
+
+Two changes, and it is worth being clear about which one does the work:
+
+1. **`WIDTH` 560 -> 1120.** At the southern edge, the binding case in Mercator, a pixel is now
+   0.90 km against 1 km cells. The mapping becomes **exactly one source cell per pixel** -
+   measured mean 1.00, maximum 1 - so nothing is merged. This is what makes the picture faithful.
+2. **Max-pooling.** Each pixel shows the heaviest of the cells that land in it, via a forward
+   scatter computed once in `build_projection` and reduced per frame. At 1120 this is a no-op,
+   since groups are single cells. It is there so the guarantee does not silently depend on
+   `WIDTH`: at the old 560 a pixel held 2.9 cells on average and 89% held more than one, and
+   that is the case the test suite exercises.
+
+Max rather than mean, matching `sampler.sample`: a pixel one of whose cells is under a shower is
+a pixel where you get wet, and averaging dilutes exactly the small convective cells this service
+exists to catch.
+
+**The guarantee, asserted per cell in `tests/test_overlay.py`:** every source cell is drawn at
+least as strongly as it really is. Never weaker, never absent.
+
+**The cost**, honestly: 62 kB a frame against 26 kB, so a full 168-frame timeline is 10.5 MB
+instead of 4.5 MB; 246 ms a frame against 96 ms, so ingest spends ~6.2 s per cycle rendering
+instead of ~2.4 s. Bandwidth was the original reason for 560 and it is a real cost - but halving
+the linear resolution of the product the service exists to show is a strange way to pay it.
+
+**What is still lost, and deliberately:**
+
+- **Values below the first band.** 0.05 mm/5 min is the palette floor, so 98,300 cells of that
+  frame carrying 0 < v < 0.05 are transparent. That is a palette decision (§11.1.1), not a
+  sampling one, and the heaviest such cell was 0.040 mm/5 min.
+- **Exact values.** The PNG carries seven bands, not numbers. A pixel says "at least this much",
+  which is what a legend can express.
+- **Cells outside `BOUNDS`.** The DE1200 rectangle reaches 45.69-56.22 N, the image 46-55.9 N.
+  Checked: no wet cell fell outside on the test frame, and the service area (47-56 N, 5-16 E) is
+  strictly inside the image, so no subscriber's location can be clipped.
+
+None of this affects **whether anyone is warned**. Alerting reads `frame.values` at full
+resolution through `sampler.sample` and has never looked at the overlay.
+
 ### 11.1.1 The intensity scale
 
 Seven bands, defined once in `radar/overlay.py` as `INTENSITY_BANDS`, and read by three things:
