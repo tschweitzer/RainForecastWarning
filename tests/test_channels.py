@@ -151,7 +151,7 @@ def test_the_confirmation_carries_a_tappable_link(db):
         _env_file=None,
     )
     message = confirmation_message(settings, "rainalert-abc", "tok123", channel="ntfy")
-    assert message.click_url == "https://rain.example/confirm?token=tok123"
+    assert message.click_url == "https://rain.example/confirm#t=tok123"
     assert "tok123" in message.text  # and in the body, for anyone reading it as text
 
 
@@ -215,7 +215,6 @@ def test_the_whole_push_flow_end_to_end(db, settings):
 
     The one test that would have caught a confirmation link that never reaches a phone.
     """
-    import re
 
     from fastapi.testclient import TestClient
 
@@ -236,8 +235,8 @@ def test_the_whole_push_flow_end_to_end(db, settings):
 
     # tapping it means opening the Click URL, which is a GET; confirming is the POST behind it
     link = rec.requests[0].headers["Click"]
-    token = re.search(r"token=([^&]+)", link).group(1)
-    assert client.get(f"/confirm?token={token}").status_code == 200  # the page, changes nothing
+    token = link.split("/confirm#t=")[1]
+    assert client.get("/confirm").status_code == 200  # the page, changes nothing
     assert client.post("/confirm", data={"token": token}).status_code == 200
 
     with db() as session:
@@ -303,3 +302,42 @@ def test_a_rate_limited_signup_is_not_blamed_on_the_input(client, db):
             "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
         )
     assert last.status_code == 429
+
+
+def test_a_push_body_never_carries_the_one_click_url():
+    """The notifier appends an unsubscribe line when the body has none, and that line comes from
+    the `List-Unsubscribe` header - which is the RFC 8058 one-click URL, with the token in a
+    query string (D-33).
+
+    Checked on what is actually published rather than on the OutboundMessage, because the
+    appending happens inside `send`: a test that reads `message.text` sees the body before the
+    notifier has touched it, and would pass with the leak reinstated.
+    """
+    rec = Recorder()
+    _notifier(rec).send(
+        OutboundMessage(
+            to="rainalert-abc",
+            subject="Regen in etwa 20 Minuten",
+            text="Es faengt bald an zu regnen.\n\nAbmelden: https://rain.example/unsubscribe#t=tok",
+            headers={"List-Unsubscribe": "<https://rain.example/unsubscribe?token=tok>"},
+        )
+    )
+    published = rec.requests[0].content.decode("utf-8")
+    assert "/unsubscribe#t=tok" in published
+    assert "?token=" not in published, "the logged one-click shape reached a push body"
+
+
+def test_a_push_still_gets_an_unsubscribe_line_when_the_body_has_none():
+    """The append is not dead code - it is what stops a push arriving with no way out."""
+    rec = Recorder()
+    _notifier(rec).send(
+        OutboundMessage(
+            to="rainalert-abc",
+            subject="Regen",
+            text="Es faengt bald an zu regnen.",
+            headers={"List-Unsubscribe": "<https://rain.example/unsubscribe?token=tok>"},
+        )
+    )
+    assert (
+        "Abmelden: https://rain.example/unsubscribe?token=tok" in rec.requests[0].content.decode()
+    )

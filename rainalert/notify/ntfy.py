@@ -108,10 +108,15 @@ class NtfyNotifier:
             headers["Authorization"] = f"Bearer {self.token}"
         # Unsubscribe is not a mail header here, but the link still belongs in the body so the
         # reader has it without going to the website.
+        #
+        # Matched on the label rather than on the header's URL: the header carries the RFC 8058
+        # one-click form, which has the token in the query string, while the body carries the
+        # fragment form a person should click (D-26). Comparing the two URLs would find them
+        # different and append the logged shape to every push.
         unsubscribe = message.headers.get("List-Unsubscribe", "").strip("<>")
 
         body = message.text
-        if unsubscribe and unsubscribe not in body:
+        if unsubscribe and "Abmelden:" not in body:
             body = f"{body}\n\nAbmelden: {unsubscribe}"
 
         try:

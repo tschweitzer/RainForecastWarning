@@ -66,7 +66,7 @@ def subscribed(client, notifier, email="friend@example.com", lat=MUNICH[0], lon=
     helper to its own docstring.
     """
     client.post("/api/v1/subscriptions", json={"email": email, "lat": lat, "lon": lon})
-    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
     client.post("/confirm", data={"token": token})
     client.cookies.delete(MANAGE_COOKIE)
     assert client.get("/api/v1/subscriptions/me").status_code == 401
@@ -265,7 +265,7 @@ def test_the_csrf_endpoint_needs_the_cookie(client, notifier):
 def test_the_api_token_still_works_and_needs_no_form_token(client, notifier, db):
     """The app's credential is unaffected: it cannot be sent by a cross-site request anyway."""
     client.post("/api/v1/subscriptions", json={"email": "app@example.com", "lat": 50.1, "lon": 8.6})
-    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
     api = client.post("/confirm", data={"token": token}).text.split("<code>")[1].split("</code>")[0]
     headers = {"Authorization": f"Bearer {api}"}
     assert (
@@ -526,7 +526,7 @@ def ntfy_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1]):
         "/api/v1/subscriptions", json={"channel": "ntfy", "lat": lat, "lon": lon}
     )
     topic = response.json()["topic"]
-    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
     client.post("/confirm", data={"token": token})
     return topic
 
@@ -538,7 +538,7 @@ def test_confirming_leaves_a_working_session(client, notifier, db):
         "/api/v1/subscriptions",
         json={"email": "new@example.com", **dict(zip(("lat", "lon"), MUNICH))},
     )
-    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
     confirmed = client.post("/confirm", data={"token": token})
 
     assert confirmed.status_code == 200
@@ -553,7 +553,7 @@ def test_the_session_from_confirming_can_write_and_is_not_open_ended(client, not
         "/api/v1/subscriptions",
         json={"email": "new@example.com", "lat": MUNICH[0], "lon": MUNICH[1]},
     )
-    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
     client.post("/confirm", data={"token": token})
 
     state = client.get("/api/v1/manage/csrf").json()

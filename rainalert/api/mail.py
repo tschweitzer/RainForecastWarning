@@ -26,7 +26,7 @@ def confirmation_message(
     it, and it reached their phone - so the message says what the tap is for rather than warning
     about a stranger.
     """
-    link = f"{settings.public_base_url.rstrip('/')}/confirm?token={token}"
+    link = f"{settings.public_base_url.rstrip('/')}/confirm#t={token}"
     if channel == "email":
         text = f"""Hallo,
 
@@ -203,7 +203,13 @@ def alert_message(
 
     base = settings.public_base_url.rstrip("/")
     token = unsubscribe_token(subscriber.id, settings.secret_key)
-    unsubscribe_url = f"{base}/unsubscribe?token={token}"
+    # What a person clicks, in the fragment (D-26) so the token cannot reach a request log.
+    unsubscribe_url = f"{base}/unsubscribe#t={token}"
+    # What a *mail client* POSTs for RFC 8058, which cannot use a fragment: the client sends the
+    # URI with a fixed body of its own and never runs the page, so the URI is the only place the
+    # identity can live. This one shape is unavoidable, which is why it is a separate variable
+    # rather than the same string used twice.
+    one_click_url = f"{base}/unsubscribe?token={token}"
 
     text = f"""Es faengt bald an zu regnen.
 
@@ -222,7 +228,7 @@ Abmelden: {unsubscribe_url}
         "Auto-Submitted": "auto-generated",
         # RFC 8058: lets a mail client offer one-click unsubscribe, which keeps complaints (and
         # therefore the sending domain's reputation) out of the spam button.
-        "List-Unsubscribe": f"<{unsubscribe_url}>",
+        "List-Unsubscribe": f"<{one_click_url}>",
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
     }
     if settings.mail_reply_to:

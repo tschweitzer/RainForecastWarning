@@ -3,8 +3,29 @@
 <h1>Abmelden</h1>
 <p class="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
 nicht rückgängig machen.</p>
-<form method="post" action="/unsubscribe">
-  <input type="hidden" name="token" value="{{ token }}">
+<form method="post" action="/unsubscribe" id="form">
+  <input type="hidden" name="token" id="token" value="{{ token }}">
   <button type="submit">Abmelden und alles löschen</button>
 </form>
+<p class="hint error" id="no-token" hidden>Diesem Link fehlt der Abmeldecode. Öffne ihn noch
+einmal direkt aus der Nachricht.</p>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  // The token rides in the fragment (D-26). A fragment is never sent to the server, so unlike
+  // `?token=` it cannot reach a request log, a proxy's history or a `Referer` header. The
+  // server-rendered value stays as the fallback so links sent before this change still work;
+  // nothing generates that shape any more.
+  var field = document.getElementById('token');
+  var hash = window.location.hash || '';
+  if (hash.indexOf('#t=') === 0) {
+    field.value = decodeURIComponent(hash.slice(3));
+    // Erased, and replaceState so Back does not return to a URL still carrying the token.
+    history.replaceState(null, '', window.location.pathname);
+  }
+  if (!field.value) {
+    document.getElementById('form').hidden = true;
+    document.getElementById('no-token').hidden = false;
+  }
+})();
+</script>
 {% endblock %}

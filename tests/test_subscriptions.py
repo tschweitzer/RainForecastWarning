@@ -48,7 +48,7 @@ def subscribe(client, email="friend@example.com", lat=FRANKFURT[0], lon=FRANKFUR
 
 def confirm_token_from(notifier) -> str:
     body = notifier.sent[-1].text
-    return body.split("token=")[1].split()[0]
+    return body.split("/confirm#t=")[1].split()[0]
 
 
 # --- double opt-in ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def test_get_confirm_changes_nothing(client, notifier, db):
     user ever clicks, and hand the scanner the bearer token (SECURITY_REVIEW.md F-4)."""
     subscribe(client)
     token = confirm_token_from(notifier)
-    page = client.get(f"/confirm?token={token}")
+    page = client.get("/confirm")
     assert page.status_code == 200
     with db() as session:
         assert session.query(Subscriber).one().confirmed_at is None  # untouched
@@ -223,9 +223,9 @@ def test_get_unsubscribe_changes_nothing_but_post_deletes(client, notifier, db):
     """A prefetching client must not be able to delete someone's account."""
     subscribe(client)
     page = client.post("/confirm", data={"token": confirm_token_from(notifier)})
-    unsub = page.text.split("/unsubscribe?token=")[1].split("<")[0].strip()
+    unsub = page.text.split("/unsubscribe#t=")[1].split("<")[0].strip()
 
-    assert client.get(f"/unsubscribe?token={unsub}").status_code == 200
+    assert client.get("/unsubscribe").status_code == 200
     with db() as session:
         assert session.query(Subscriber).count() == 1  # still there
 
@@ -339,3 +339,42 @@ def test_the_form_does_not_constrain_decimals(client):
     body = client.get("/").text
     assert 'step="any"' in body
     assert 'name="lat" step="0.0001"' not in body
+
+
+def test_no_message_we_send_puts_a_token_in_a_query_string(client, notifier, db):
+    """D-26, applied to the two links that still broke it.
+
+    uvicorn and Cloud Run both log the full request URL, so `?token=` hands the credential to
+    the log; a fragment is never sent to the server at all. Asserted over the message bodies
+    rather than per-link, so a third link added later is covered without anyone remembering to
+    come back here.
+    """
+    subscribe(client)
+    client.post("/confirm", data={"token": confirm_token_from(notifier)})
+
+    for message in notifier.sent:
+        assert "?token=" not in message.text, f"{message.subject} leaks a token in a query string"
+        assert "?token=" not in (message.click_url or "")
+
+
+def test_the_confirmation_link_is_tappable_and_carries_the_token_in_the_fragment(
+    client, notifier, db
+):
+    subscribe(client)
+    message = notifier.sent[-1]
+    assert "/confirm#t=" in message.text
+    # Push has nowhere to put a link except the Click header, so it has to carry the same shape.
+    assert (message.click_url or "").startswith("http")
+    assert "#t=" in (message.click_url or "")
+
+
+def test_the_pages_say_so_when_a_link_arrives_without_its_token(client, db):
+    """A bare /confirm is what a mail scanner or a truncated link produces. The button must not
+    sit there looking ready to work."""
+    for path in ("/confirm", "/unsubscribe"):
+        page = client.get(path)
+        assert page.status_code == 200
+        assert 'id="no-token"' in page.text
+        # The fragment is read by script, so the page needs the nonce to be allowed to run.
+        assert "csp_nonce" not in page.text  # rendered, not left as a literal
+        assert "<script nonce=" in page.text

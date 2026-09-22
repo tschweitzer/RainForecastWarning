@@ -471,7 +471,7 @@ def test_the_session_cookie_secure_flag_follows_the_same_setting(db, notifier, s
         app = create_app(settings.model_copy(update={"public_base_url": base}), db, notifier)
         client = TestClient(app, base_url=base)
         client.post("/api/v1/subscriptions", json={"email": address, "lat": 50.1, "lon": 8.6})
-        token = notifier.sent[-1].text.split("token=")[1].split()[0]
+        token = notifier.sent[-1].text.split("/confirm#t=")[1].split()[0]
         client.post("/confirm", data={"token": token})
         client.post("/api/v1/manage/link", json={"channel": "email", "address": address})
         link = notifier.sent[-1].text.split("/manage#t=")[1].split()[0]
