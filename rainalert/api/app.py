@@ -429,11 +429,14 @@ def create_app(
 
     # ---- confirm --------------------------------------------------------------------------
     @app.get("/confirm", response_class=HTMLResponse, include_in_schema=False)
-    def confirm_page(request: Request, token: str = "") -> HTMLResponse:
-        """Renders a button. Changes nothing - a mail scanner may follow this freely."""
-        return TEMPLATES.TemplateResponse(
-            request, "confirm.html", {"token": token, "settings": settings}
-        )
+    def confirm_page(request: Request) -> HTMLResponse:
+        """Renders a button. Changes nothing - a mail scanner may follow this freely.
+
+        Takes no `token` parameter: the page reads it from the fragment, and accepting one from
+        the query string as well would leave the shape D-26 exists to remove still working, and
+        still logged, for anyone who sent such a URL.
+        """
+        return TEMPLATES.TemplateResponse(request, "confirm.html", {"settings": settings})
 
     @app.post("/confirm", response_class=HTMLResponse, include_in_schema=False)
     def confirm_submit(
@@ -770,11 +773,12 @@ def create_app(
 
     # ---- unsubscribe ----------------------------------------------------------------------
     @app.get("/unsubscribe", response_class=HTMLResponse, include_in_schema=False)
-    def unsubscribe_page(request: Request, token: str = "") -> HTMLResponse:
-        """Side-effect free: a prefetching client must not be able to delete an account."""
-        return TEMPLATES.TemplateResponse(
-            request, "unsubscribe.html", {"token": token, "settings": settings}
-        )
+    def unsubscribe_page(request: Request) -> HTMLResponse:
+        """Side-effect free: a prefetching client must not be able to delete an account.
+
+        No `token` parameter here either, for the reason on `confirm_page`.
+        """
+        return TEMPLATES.TemplateResponse(request, "unsubscribe.html", {"settings": settings})
 
     @app.post("/unsubscribe", response_class=HTMLResponse, include_in_schema=False)
     def unsubscribe_submit(

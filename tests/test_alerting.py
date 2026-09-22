@@ -136,14 +136,16 @@ def test_rain_coming_produces_exactly_one_warning(db, settings, frames):
 
     message = notifier.sent[0]
     assert "Regen in etwa 60 Minuten" == message.subject
-    # What a person clicks is the fragment form, so the token cannot reach a log (D-26).
+    # The fragment form, so the token cannot reach a log (D-26) - in the body and in the header
+    # alike, which is only possible because the header no longer promises it may be POSTed.
     assert "/unsubscribe#t=" in message.text
-    assert "/unsubscribe?token=" not in message.text
-    # The RFC 8058 header cannot use a fragment: the mail client POSTs the URI itself and never
-    # runs the page, so the URI is the only place the identity can live.
-    assert message.headers["List-Unsubscribe"].startswith("<")
-    assert "/unsubscribe?token=" in message.headers["List-Unsubscribe"]
-    assert message.headers["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+    assert (
+        message.headers["List-Unsubscribe"] == f"<{message.text.split('Abmelden: ')[1].split()[0]}>"
+    )
+    assert "List-Unsubscribe-Post" not in message.headers, (
+        "one-click was advertised and answered 400; do not re-add it without the handler (Q-13)"
+    )
+    assert "?token=" not in str(message.headers)
 
 
 def test_a_second_cycle_of_the_same_front_sends_nothing(db, settings, frames):

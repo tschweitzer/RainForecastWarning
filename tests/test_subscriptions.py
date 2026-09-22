@@ -368,6 +368,15 @@ def test_the_confirmation_link_is_tappable_and_carries_the_token_in_the_fragment
     assert "#t=" in (message.click_url or "")
 
 
+def test_the_query_parameter_is_gone_rather_than_deprecated(client, db):
+    """Accepting `?token=` as well would leave the logged shape working for anyone who still
+    sent one - a second code path kept alive for data that only ever existed in development."""
+    for path in ("/confirm", "/unsubscribe"):
+        page = client.get(f"{path}?token=would-have-worked-before")
+        assert page.status_code == 200
+        assert "would-have-worked-before" not in page.text
+
+
 def test_the_pages_say_so_when_a_link_arrives_without_its_token(client, db):
     """A bare /confirm is what a mail scanner or a truncated link produces. The button must not
     sit there looking ready to work."""

@@ -139,7 +139,7 @@ def test_outbox_prints_a_link_that_can_actually_be_opened(tmp_path, monkeypatch,
         "MIME-Version: 1.0\n"
         "\n"
         "Zum Bestaetigen:\n"
-        "http://localhost:8000/confirm?token=3DabcDEF123456789012345678901234567890=\n"
+        "http://localhost:8000/confirm#t=3DabcDEF123456789012345678901234567890=\n"
         "TAIL\n"
     )
     monkeypatch.setenv("MAIL_OUTBOX_DIR", str(outbox))
@@ -148,5 +148,5 @@ def test_outbox_prints_a_link_that_can_actually_be_opened(tmp_path, monkeypatch,
 
     assert main(["outbox"]) == 0
     out = capsys.readouterr().out
-    assert "token=abcDEF123456789012345678901234567890TAIL" in out
+    assert "#t=abcDEF123456789012345678901234567890TAIL" in out
     assert "=3D" not in out  # the encoding is decoded, not echoed

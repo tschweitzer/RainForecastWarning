@@ -203,13 +203,8 @@ def alert_message(
 
     base = settings.public_base_url.rstrip("/")
     token = unsubscribe_token(subscriber.id, settings.secret_key)
-    # What a person clicks, in the fragment (D-26) so the token cannot reach a request log.
+    # In the fragment (D-26), so the token cannot reach a request log.
     unsubscribe_url = f"{base}/unsubscribe#t={token}"
-    # What a *mail client* POSTs for RFC 8058, which cannot use a fragment: the client sends the
-    # URI with a fixed body of its own and never runs the page, so the URI is the only place the
-    # identity can live. This one shape is unavoidable, which is why it is a separate variable
-    # rather than the same string used twice.
-    one_click_url = f"{base}/unsubscribe?token={token}"
 
     text = f"""Es faengt bald an zu regnen.
 
@@ -226,10 +221,13 @@ Abmelden: {unsubscribe_url}
     headers = {
         "From": settings.mail_from,
         "Auto-Submitted": "auto-generated",
-        # RFC 8058: lets a mail client offer one-click unsubscribe, which keeps complaints (and
-        # therefore the sending domain's reputation) out of the spam button.
-        "List-Unsubscribe": f"<{one_click_url}>",
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+        # A link, not RFC 8058 one-click. `List-Unsubscribe-Post` would promise a mail client it
+        # may POST this URI, and two things follow from that promise: the client never runs the
+        # page, so the token would have to sit in the query string where a log gets it (D-26),
+        # and the handler would have to read it from there - which it does not, so the promise
+        # was answered 400 for as long as it was made (D-33). Without the POST header the URI is
+        # opened rather than posted, so it can be the same fragment link a person clicks.
+        "List-Unsubscribe": f"<{unsubscribe_url}>",
     }
     if settings.mail_reply_to:
         headers["Reply-To"] = settings.mail_reply_to

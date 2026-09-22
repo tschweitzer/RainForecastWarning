@@ -4,7 +4,7 @@
 <p class="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
 nicht rückgängig machen.</p>
 <form method="post" action="/unsubscribe" id="form">
-  <input type="hidden" name="token" id="token" value="{{ token }}">
+  <input type="hidden" name="token" id="token" value="">
   <button type="submit">Abmelden und alles löschen</button>
 </form>
 <p class="hint error" id="no-token" hidden>Diesem Link fehlt der Abmeldecode. Öffne ihn noch
@@ -12,9 +12,9 @@ einmal direkt aus der Nachricht.</p>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // The token rides in the fragment (D-26). A fragment is never sent to the server, so unlike
-  // `?token=` it cannot reach a request log, a proxy's history or a `Referer` header. The
-  // server-rendered value stays as the fallback so links sent before this change still work;
-  // nothing generates that shape any more.
+  // a query parameter it cannot reach a request log, a proxy's history or a `Referer` header.
+  // This is the only way the field is filled: the server does not read a token from the query,
+  // so the old shape is gone rather than deprecated.
   var field = document.getElementById('token');
   var hash = window.location.hash || '';
   if (hash.indexOf('#t=') === 0) {
