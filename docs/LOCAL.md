@@ -247,7 +247,9 @@ Copying the topic into the app's "subscribe to topic" field still works everywhe
 thing to fall back on.
 
 **Signing up on a desktop instead?** Open "Auf einem anderen Gerät abonnieren" and scan the QR
-with the phone.
+with the phone. It encodes the `https://` subscribe URL, not the `ntfy://` one - a phone camera
+will not open a custom scheme - and it arrives inline in the signup response rather than from a
+`/qr` endpoint, so the topic never lands in a query string (DESIGN.md D-31).
 
 Either way the last step is the same: a test notification arrives, and tapping it confirms the
 subscription. That tap replaces opening an inbox - and if nothing arrives, the warnings would not
@@ -367,6 +369,20 @@ message also carries `…/manage#r=<token>`, which does the same thing from the 
 
 **The form on `/manage`**, for a new device or a cleared history: give the topic or the address
 and the link is sent.
+
+#### If you think the topic has leaked
+
+A push topic is the whole credential. Anyone who has one can subscribe to it on the ntfy server,
+ask for a settings link on it, and read the location - so treat a leaked topic as a leaked
+password, not as a leaked username. There is no rotate button, on purpose (DESIGN.md D-32);
+the recovery is:
+
+1. Open `/manage` and delete the subscription.
+2. Sign up again.
+
+That mints a topic in a browser session the other party is not in, so they never learn it, and
+the old one stops being published to. What it costs you is retyping the location, threshold,
+lead time and radius - which is the only thing a rotate button would have saved.
 
 ```sh
 make serve                      # then open http://localhost:8000/manage

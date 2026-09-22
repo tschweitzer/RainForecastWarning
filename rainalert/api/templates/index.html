@@ -266,11 +266,15 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   var summary = document.createElement('summary');
   summary.textContent = 'Auf einem anderen Gerät abonnieren';
   other.appendChild(summary);
-  var qr = document.createElement('img');
-  qr.src = '/qr?text=' + encodeURIComponent(data.subscribe_url);
-  qr.alt = 'QR-Code zum Abonnieren';
-  qr.className = 'qr';
-  other.appendChild(qr);
+  // Inline, from the response body. This used to be an <img> pointing at a /qr endpoint with
+  // the subscribe URL in its query string, which put the topic in the access log - and a topic
+  // is the credential, not a hint. Parsed rather than assigned to innerHTML: the markup is our
+  // own server's, but this way that does not have to be taken on trust by whoever reads it.
+  var svg = new DOMParser().parseFromString(data.qr_svg, 'image/svg+xml').documentElement;
+  svg.setAttribute('class', 'qr');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'QR-Code zum Abonnieren');
+  other.appendChild(document.importNode(svg, true));
   steps.appendChild(other);
 
   var two = document.createElement('p');

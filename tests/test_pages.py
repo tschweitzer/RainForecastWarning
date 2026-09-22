@@ -533,15 +533,30 @@ def test_the_page_offers_the_app_link_before_the_web_one(client):
     assert "Passiert nichts? Dann ist die App nicht installiert" in page
 
 
-def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings):
+def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings, db):
     """A phone camera will not open a custom scheme, and the QR exists for the desktop case -
-    sign up on a laptop, scan with a phone. The web page has a subscribe button on it."""
-    ok = client.get(f"/qr?text={settings.ntfy_server}/rainalert-abc")
-    assert ok.status_code == 200
-    # And the allow-list still refuses everything else, which is what stops /qr being a
-    # redirector the site vouches for.
-    assert client.get("/qr?text=ntfy://ntfy.sh/rainalert-abc").status_code == 400
-    assert client.get("/qr?text=https://example.com/anything").status_code == 400
+    sign up on a laptop, scan with a phone. The web page has a subscribe button on it.
+
+    Checked by re-encoding both candidates and seeing which one matches, because an SVG that is
+    merely well formed would pass whatever URL went into it.
+    """
+    import io
+
+    import segno
+
+    def encoded(text):
+        buffer = io.BytesIO()
+        segno.make(text, error="m").save(
+            buffer, kind="svg", scale=4, xmldecl=False, omitsize=True, svgclass=None
+        )
+        return buffer.getvalue().decode("utf-8")
+
+    body = client.post(
+        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
+    ).json()
+
+    assert body["qr_svg"] == encoded(body["subscribe_url"])
+    assert body["qr_svg"] != encoded(body["app_url"])
 
 
 # --- the settings button on a notification -----------------------------------------------------

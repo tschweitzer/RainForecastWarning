@@ -336,6 +336,31 @@ def create_app(
         return Response(render_metrics(session, settings), media_type="text/plain; version=0.0.4")
 
     # ---- subscribe ------------------------------------------------------------------------
+    def qr_svg(text: str) -> str:
+        """The subscribe URL as an inline QR, for joining a topic shown on a desktop.
+
+        Inline, and not an `<img src="/qr?text=...">` as it used to be, because that put the
+        topic in a query string - and a topic is not a hint, it is the credential: whoever has
+        it can subscribe, ask for a settings link on it and read the location. tokens.py states
+        the rule it was breaking ("a token must never travel in a URL that ends up in a log"),
+        and uvicorn and Cloud Run both log the query string.
+
+        Returning it in the response body costs one round trip less and removes the endpoint
+        that had to be allow-listed to stop it encoding somebody else's URL.
+        """
+        import io
+
+        import segno
+
+        buffer = io.BytesIO()
+        # `omitsize` swaps the fixed width/height for a viewBox, so the page can size it in
+        # CSS the way it sized the old <img>; without one the box scales and the code inside
+        # it does not. `svgclass=None` keeps segno's own class off, so the page's applies.
+        segno.make(text, error="m").save(
+            buffer, kind="svg", scale=4, xmldecl=False, omitsize=True, svgclass=None
+        )
+        return buffer.getvalue().decode("utf-8")
+
     @app.post("/api/v1/subscriptions", status_code=status.HTTP_202_ACCEPTED)
     def create_subscription(
         payload: SubscribeRequest,
@@ -381,6 +406,7 @@ def create_app(
             )
 
         if payload.channel == "ntfy":
+            subscribe_url = f"{settings.ntfy_server.rstrip('/')}/{result.address}"
             # The topic has to come back: the subscriber cannot receive anything until their app
             # is subscribed to it, and they have no other way to learn what it is. Nothing is
             # disclosed by returning it - it was created for this request, a moment ago.
@@ -393,7 +419,8 @@ def create_app(
                     # Two links, because neither covers everyone. The app link subscribes in
                     # one tap but does nothing without the app; the web one always resolves.
                     "app_url": ntfy_deep_link(settings.ntfy_server, result.address),
-                    "subscribe_url": f"{settings.ntfy_server.rstrip('/')}/{result.address}",
+                    "subscribe_url": subscribe_url,
+                    "qr_svg": qr_svg(subscribe_url),
                 },
                 status_code=status.HTTP_202_ACCEPTED,
             )
@@ -843,28 +870,6 @@ def create_app(
     #: and hands it to anyone with a camera, so without this it is a redirector: point it at any
     #: URL and the site vouches for it. Restricting it to the configured ntfy server means the
     #: only thing it can ever encode is a topic on the server we publish to.
-    QR_ALLOWED_PREFIXES = (settings.ntfy_server.rstrip("/") + "/",)
-    MAX_QR_TEXT = 512
-
-    @app.get("/qr", include_in_schema=False)
-    def qr_code(text: str = "") -> Response:
-        """A QR for the ntfy subscribe URL, so a phone can join a topic shown on a desktop."""
-        import io
-
-        import segno
-
-        if len(text) > MAX_QR_TEXT or not text.startswith(QR_ALLOWED_PREFIXES):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "refusing to encode that")
-
-        buffer = io.BytesIO()
-        segno.make(text, error="m").save(buffer, kind="svg", scale=4)
-        return Response(
-            buffer.getvalue(),
-            media_type="image/svg+xml",
-            # The topic is in the URL. Caches along the way have no business keeping it.
-            headers={"Cache-Control": "no-store"},
-        )
-
     @app.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
     def privacy(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(request, "privacy.html", {"settings": settings})

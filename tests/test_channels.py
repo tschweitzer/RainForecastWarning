@@ -248,21 +248,23 @@ def test_the_whole_push_flow_end_to_end(db, settings):
         assert subscriber.subscriptions[0].status is SubscriptionStatus.ACTIVE
 
 
-def test_the_qr_endpoint_refuses_to_encode_anything_else(client):
-    """It takes text from a query string and hands it to a camera.
+def test_the_topic_never_travels_in_a_url(client, db):
+    """The QR used to be `<img src="/qr?text=https://ntfy.sh/<topic>">`.
 
-    Unrestricted, the site would vouch for any URL anyone put in front of it.
+    A topic is not a hint, it is the credential: whoever has one can subscribe to it, ask for a
+    settings link on it and read the location. tokens.py states the rule that shape was breaking
+    - "a token must never travel in a URL that ends up in a log" - and uvicorn and Cloud Run both
+    log the query string. So the QR comes back in the response body and the endpoint is gone,
+    which also retires the allow-list that kept it from encoding somebody else's URL.
     """
-    from rainalert.config import Settings
+    response = client.post(
+        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
+    )
+    body = response.json()
+    assert body["qr_svg"].lstrip().startswith("<svg")
 
-    server = Settings(database_url="postgresql+psycopg://x", _env_file=None).ntfy_server
-    ok = client.get("/qr", params={"text": f"{server}/rainalert-abc"})
-    assert ok.status_code == 200
-    assert ok.headers["content-type"].startswith("image/svg+xml")
-    assert ok.headers["Cache-Control"] == "no-store"  # the topic is in the URL
-
-    for hostile in ("https://evil.example/pay", "javascript:alert(1)", "x" * 600):
-        assert client.get("/qr", params={"text": hostile}).status_code == 400
+    assert client.get("/qr", params={"text": body["subscribe_url"]}).status_code == 404
+    assert "?text=" not in client.get("/").text
 
 
 def test_the_phone_can_subscribe_without_scanning_its_own_screen(client):
