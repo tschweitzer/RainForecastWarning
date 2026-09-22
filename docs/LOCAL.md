@@ -341,7 +341,32 @@ locate button, no matter what the page does.
 ### Changing the settings from the web page
 
 `/manage` is the settings page: threshold, lead time, radius and location, with the location
-pickable on a map. It needs no access key - you ask for a link on the channel you signed up with.
+pickable on a map. It needs no access key - reaching it always comes down to the one thing the
+service can check, which is that a message sent to the channel arrived.
+
+There are three ways in, and only the last one involves typing anything.
+
+**Confirming.** Tapping the confirmation notification already proves the channel reaches you -
+the same proof a magic link gives, a few seconds earlier - so `POST /confirm` opens the session
+itself and the page that follows has a button straight into the settings. A new subscriber never
+needs a link at all.
+
+**The "Einstellungen" button on a notification** (push only). The message sent right after
+confirming carries it and says to keep that message; every rain alert carries it too, because
+alerts are the ones that reliably arrive again. Tapping it POSTs a long-lived token back to
+`/api/v1/manage/request`, and we send the ordinary magic link to the same topic. Two taps, both
+inside the app, and the generated topic never has to be copied out of it.
+
+That token is durable on purpose, and it is safe to leave sitting in a kept notification because
+of what it cannot do: it **asks** for a link, it does not admit anyone, and the link it triggers
+goes to the subscriber's own channel. A forwarded screenshot of an alert is therefore not a key
+to somebody's home coordinates - whoever can read the notification could already read the topic.
+Taps are capped per subscriber (`MANAGE_REQUEST_LIMIT_PER_HOUR`, default 5/h) so a copied token
+cannot be used to buzz its owner's phone either. For a client that renders no buttons, the anchor
+message also carries `…/manage#r=<token>`, which does the same thing from the browser.
+
+**The form on `/manage`**, for a new device or a cleared history: give the topic or the address
+and the link is sent.
 
 ```sh
 make serve                      # then open http://localhost:8000/manage

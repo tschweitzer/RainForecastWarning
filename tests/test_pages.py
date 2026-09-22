@@ -6,14 +6,26 @@ button silently do nothing: the helper being served at all, every page actually 
 each page having somewhere to put a message when the attempt fails.
 """
 
+import json
 import re
+import uuid
+from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from rainalert.api.app import create_app
+from rainalert.api.mail import settings_anchor_message
 from rainalert.config import Settings
-from rainalert.notify import ConsoleNotifier
+from rainalert.notify import ConsoleNotifier, MessageAction, OutboundMessage
+from rainalert.notify.ntfy import MAX_ACTIONS, NtfyNotifier, _actions_header
+from rainalert.tokens import (
+    manage_request_token,
+    session_token,
+    verify_manage_request_token,
+    verify_session_token,
+)
 
 
 @pytest.fixture()
@@ -530,3 +542,98 @@ def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings):
     # redirector the site vouches for.
     assert client.get("/qr?text=ntfy://ntfy.sh/rainalert-abc").status_code == 400
     assert client.get("/qr?text=https://example.com/anything").status_code == 400
+
+
+# --- the settings button on a notification -----------------------------------------------------
+
+
+def _ntfy_settings(**kwargs):
+    return Settings(
+        database_url="postgresql+psycopg://unused",
+        public_base_url="https://rain.example.invalid",
+        mail_from="RainAlert <noreply@rain.example.invalid>",
+        secret_key="test-secret",
+        _env_file=None,
+        **kwargs,
+    )
+
+
+def test_the_action_header_follows_ntfys_documented_short_form():
+    header = _actions_header(
+        (
+            MessageAction(
+                label="Einstellungen", url="https://rain.example.invalid/x", body='{"token":"a"}'
+            ),
+        )
+    )
+    assert header == (
+        "http, Einstellungen, https://rain.example.invalid/x, method=POST, "
+        'headers.Content-Type=application/json, body={"token":"a"}'
+    )
+
+
+@pytest.mark.parametrize("bad", ["a,b", "a;b", '"a', "'a", "a\nb"])
+def test_an_action_refuses_a_value_that_would_break_the_header(bad):
+    """The header's separators are the comma and the semicolon; a value carrying one would
+    silently become a second action, or a malformed one."""
+    with pytest.raises(ValueError):
+        MessageAction(label=bad, url="https://rain.example.invalid/x")
+
+
+def test_more_actions_than_ntfy_renders_is_refused_rather_than_silently_dropped():
+    action = MessageAction(label="x", url="https://rain.example.invalid/x")
+    with pytest.raises(ValueError):
+        _actions_header((action,) * (MAX_ACTIONS + 1))
+
+
+def test_the_notifier_sends_the_action_header_only_when_there_is_an_action():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers)
+        return httpx.Response(200)
+
+    notifier = NtfyNotifier(transport=httpx.MockTransport(handler))
+    action = MessageAction(label="Einstellungen", url="https://rain.example.invalid/x", body="t=1")
+    notifier.send(OutboundMessage(to="topic", subject="s", text="t"))
+    notifier.send(OutboundMessage(to="topic", subject="s", text="t", actions=(action,)))
+
+    assert "Actions" not in seen[0]
+    assert seen[1]["Actions"].startswith("http, Einstellungen,")
+
+
+def test_a_request_token_round_trips_and_is_not_interchangeable_with_a_session():
+    """Purpose is inside the MAC, so the durable token cannot be spent as a session and the
+    session cookie cannot be replayed at the request endpoint."""
+    subscriber_id = uuid.uuid4()
+    request = manage_request_token(subscriber_id, "secret", 365)
+    assert verify_manage_request_token(request, "secret").subscriber_id == subscriber_id
+
+    assert verify_session_token(request, "secret") is None
+    session = session_token(subscriber_id, "secret", 30)
+    assert verify_manage_request_token(session, "secret") is None
+    assert verify_manage_request_token(request, "other-secret") is None
+
+
+def test_a_request_token_stops_working_once_it_is_old():
+    subscriber_id = uuid.uuid4()
+    minted = datetime.now(UTC)
+    token = manage_request_token(subscriber_id, "secret", 1, now=minted)
+    assert verify_manage_request_token(token, "secret", minted + timedelta(hours=23)) is not None
+    assert verify_manage_request_token(token, "secret", minted + timedelta(days=1)) is None
+
+
+def test_the_anchor_message_carries_the_button_and_a_fallback_in_the_fragment():
+    settings = _ntfy_settings()
+    token = manage_request_token(uuid.uuid4(), settings.secret_key, 365)
+    message = settings_anchor_message(settings, "rainalert-abc", token)
+
+    (action,) = message.actions
+    assert action.url == "https://rain.example.invalid/api/v1/manage/request"
+    assert json.loads(action.body) == {"token": token}
+    # A comma in the body would be read as the start of the next action parameter.
+    assert "," not in action.body
+    # The fallback for a client without buttons. In the fragment, never the query string, so it
+    # cannot reach a server log or a Referer header (F-4/F-8).
+    assert f"/manage#r={token}" in message.text
+    assert "?token=" not in message.text

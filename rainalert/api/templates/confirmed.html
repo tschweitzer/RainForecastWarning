@@ -1,7 +1,21 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Angemeldet</h1>
+{% if channel == "ntfy" %}
+<p class="lede">Du bekommst jetzt eine Push-Nachricht, wenn Regen aufzieht.</p>
+{% else %}
 <p class="lede">Du bekommst jetzt eine Mail, wenn Regen aufzieht.</p>
+{% endif %}
+
+<p>
+  <a href="/manage"><button type="button">Einstellungen öffnen</button></a>
+</p>
+<p class="hint">
+  Ort, Schwelle, Vorwarnzeit und Umkreis – du bist gerade angemeldet und kommst direkt hinein.
+  {% if channel == "ntfy" %}
+  Später erreichst du das jederzeit über den Knopf „Einstellungen“ in deinen Nachrichten.
+  {% endif %}
+</p>
 
 <div class="note">
   <strong>Zugangsschlüssel</strong> – wird später von der App gebraucht. Er wird nur jetzt

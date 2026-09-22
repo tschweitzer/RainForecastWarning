@@ -15,12 +15,15 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 
-from rainalert.notify.base import DeliveryResult, OutboundMessage
+from rainalert.notify.base import DeliveryResult, MessageAction, OutboundMessage
 
 #: What the topic is called in the app's subscription list. Without it the entry is the raw
 #: generated topic - `rainalert-94RPFjNgVX2YthqV6pqRw` - which is unguessable on purpose and
 #: unreadable as a consequence.
 DISPLAY_NAME = "Regenwarnung"
+
+#: What ntfy renders. Documented in publish.md as "up to three user actions per notification".
+MAX_ACTIONS = 3
 
 
 def deep_link(server: str, topic: str, display: str | None = DISPLAY_NAME) -> str:
@@ -52,6 +55,26 @@ def deep_link(server: str, topic: str, display: str | None = DISPLAY_NAME) -> st
     return f"{link}?{urlencode(query)}" if query else link
 
 
+def _actions_header(actions: tuple[MessageAction, ...]) -> str:
+    """ntfy's `Actions` header, short form.
+
+    `http, <label>, <url>, method=POST, body=<body>` per ntfy's publish docs, actions separated
+    by semicolons. `MessageAction` has already refused any value containing a separator, so no
+    quoting is needed and none is emitted.
+
+    ntfy renders at most three buttons; more are not an error, they are silently dropped, which
+    would be a feature that looks present and is not. Nothing here sends more than one, so this
+    only has to not lie about it.
+    """
+    if len(actions) > MAX_ACTIONS:
+        raise ValueError(f"ntfy shows at most {MAX_ACTIONS} actions, got {len(actions)}")
+    return "; ".join(
+        f"http, {action.label}, {action.url}, method=POST, "
+        f"headers.Content-Type={action.content_type}, body={action.body}"
+        for action in actions
+    )
+
+
 class NtfyNotifier:
     def __init__(
         self,
@@ -79,6 +102,8 @@ class NtfyNotifier:
         headers = {"Title": message.subject}
         if message.click_url:
             headers["Click"] = message.click_url
+        if message.actions:
+            headers["Actions"] = _actions_header(message.actions)
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         # Unsubscribe is not a mail header here, but the link still belongs in the body so the

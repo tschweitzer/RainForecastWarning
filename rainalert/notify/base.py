@@ -7,6 +7,36 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
+class MessageAction:
+    """A tappable button on a push notification, which POSTs to us and stays in the app.
+
+    Only push has these; email ignores them. The point of the POST is that the reader never
+    leaves the notification shade to reach us - the alternative, a link, means a browser, and
+    a browser means the token lands in a URL bar and a history entry.
+    """
+
+    label: str
+    url: str
+    #: Already encoded for ``content_type`` - the renderer does not encode anything.
+    body: str = ""
+    content_type: str = "application/json"
+
+    def __post_init__(self) -> None:
+        # These become one header, in a format whose separators are the comma and the semicolon.
+        # Quoting around them is possible but the values here are a fixed label, our own URL and
+        # a signed token, none of which has any business containing either - so refuse rather
+        # than quote, and keep the header shape beyond argument.
+        for value in (self.label, self.url, self.body, self.content_type):
+            if any(char in value for char in ",;\r\n"):
+                raise ValueError("action fields must not contain a comma or semicolon")
+            # A quote is only a delimiter where a value *begins* - ntfy's own documented example
+            # passes `body={"action": "close"}` unquoted, so quotes inside a value are ordinary
+            # characters. One at the front would be read as opening a quoted value instead.
+            if value[:1] in ('"', "'"):
+                raise ValueError("action fields must not begin with a quote")
+
+
+@dataclass(frozen=True)
 class OutboundMessage:
     to: str
     subject: str
@@ -18,6 +48,8 @@ class OutboundMessage:
     #: ignores this; push notifications have nowhere to put a link *except* here, so a
     #: confirmation that works in mail and not on a phone is exactly what this prevents.
     click_url: str | None = None
+    #: Buttons rendered on a push notification. Email has nowhere to put these and drops them.
+    actions: tuple[MessageAction, ...] = ()
 
     def __post_init__(self) -> None:
         # Header injection: a newline in a field that becomes a header lets an attacker append

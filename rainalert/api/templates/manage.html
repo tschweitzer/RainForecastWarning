@@ -530,8 +530,29 @@
   });
 
   // ---- what to show ------------------------------------------------------------------------
+  // The fallback behind the notification button, for a client that renders no buttons. Same
+  // durable token, same endpoint - it just arrives via a tap on a link instead of on a button.
+  // In the fragment for the same reason the magic link is: a fragment never reaches a server
+  // log, a proxy or a Referer header.
+  async function requestLink(token) {
+    var response = await fetch('/api/v1/manage/request', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: token})
+    });
+    gateResult.textContent = response.ok
+      ? 'Wir haben dir einen Link geschickt – schau in deine Nachrichten.'
+      : 'Gerade zu viele Anfragen. Bitte versuch es in einer Stunde noch einmal.';
+  }
+
   async function start() {
     var hash = window.location.hash || '';
+    var request = hash.indexOf('#r=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
+    if (request) {
+      history.replaceState(null, '', window.location.pathname);
+      await requestLink(request);
+      return;
+    }
     var token = hash.indexOf('#t=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
     if (token) {
       // Erased before anything else can read it, and replaceState so Back does not return to a

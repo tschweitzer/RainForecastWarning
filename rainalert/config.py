@@ -197,6 +197,10 @@ class Settings(BaseSettings):
     #: Magic-link requests. Deliberately as tight as signing up: the endpoint takes an address
     #: and sends mail to it, so it is the same mail-bomb lever as POST /subscriptions.
     manage_link_limit_per_hour: int = 5
+    #: Taps on the "Einstellungen" button in a notification, counted per subscriber rather than
+    #: per IP. The token that button carries is durable and travels in every alert, so the cap
+    #: is what stops a copy of one being used to buzz its owner's phone indefinitely.
+    manage_request_limit_per_hour: int = 5
     rate_limit_retention_days: int = 7
 
     # --- Self-service settings page (§11.2) ----------------------------------------------------
@@ -210,6 +214,10 @@ class Settings(BaseSettings):
     #: Without it the renew button would quietly turn the line above into a formality - which is
     #: the whole protection: a session that ends at a predictable time whatever the holder does.
     manage_session_max_minutes: int = 120
+    #: How long the notification button keeps working. Long, because the message it rides in is
+    #: one the reader is asked to keep; harmless, because the button only asks for a link that
+    #: is itself short-lived and goes to the subscriber's own channel (tokens.py).
+    manage_request_ttl_days: int = 365
 
     #: Bearer token guarding /metrics. Unset means the endpoint does not exist at all - "internal
     #: only" is not expressible on Cloud Run, where every route is reachable from the internet

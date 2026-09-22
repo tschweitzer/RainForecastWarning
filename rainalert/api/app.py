@@ -37,7 +37,12 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from rainalert import subscriptions as svc
-from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
+from rainalert.api.mail import (
+    confirmation_message,
+    deletion_receipt,
+    manage_link_message,
+    settings_anchor_message,
+)
 from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check
 from rainalert.attribution import ATTRIBUTION_HTML
@@ -53,8 +58,10 @@ from rainalert.timeline import build_timeline
 from rainalert.tokens import (
     csrf_token,
     hash_address,
+    manage_request_token,
     session_token,
     verify_csrf_token,
+    verify_manage_request_token,
     verify_session_token,
     verify_unsubscribe_token,
 )
@@ -165,6 +172,14 @@ class RuleRequest(BaseModel):
     threshold_mm_5min: float | None = Field(default=None, gt=0, le=1000)
     lead_time_minutes: int | None = Field(default=None, ge=0, le=1000)
     radius_m: int | None = Field(default=None, ge=0, le=100_000)
+
+
+class ManageRequestByToken(BaseModel):
+    """The durable token from a notification button, handed back to ask for the real link."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(default="", max_length=512)
 
 
 class ManageLinkRequest(BaseModel):
@@ -403,15 +418,36 @@ def create_app(
             return TEMPLATES.TemplateResponse(
                 request, "error.html", {"message": str(exc), "settings": settings}, status_code=400
             )
-        return TEMPLATES.TemplateResponse(
+        subscriber = session.get(Subscriber, result.subscriber_id)
+        if subscriber is not None and subscriber.channel == Channel.NTFY:
+            # The message the reader is asked to keep: their permanent way back into settings
+            # without ever copying the topic out of the app.
+            deliver(
+                settings_anchor_message(
+                    settings,
+                    subscriber.address,
+                    manage_request_token(
+                        subscriber.id, settings.secret_key, settings.manage_request_ttl_days
+                    ),
+                )
+            )
+
+        response = TEMPLATES.TemplateResponse(
             request,
             "confirmed.html",
             {
                 "api_token": result.api_token,
                 "unsubscribe_token": result.unsubscribe_token,
+                "channel": subscriber.channel.value if subscriber else Channel.EMAIL.value,
                 "settings": settings,
             },
         )
+        # Confirming *is* the proof the settings page asks for. Reaching this line means a token
+        # we sent to the channel came back, which is exactly what redeeming a magic link proves -
+        # so making them go and fetch a second one would be ceremony, not security. The session
+        # is the ordinary one: same length, same wall, same cookie.
+        set_session_cookie(response, result.subscriber_id)
+        return response
 
     # ---- authenticated API ----------------------------------------------------------------
     def current_subscriber(
@@ -608,6 +644,47 @@ def create_app(
         if subscriber is not None and subscriber.confirmed_at is not None:
             token = svc.issue_manage_token(session, settings, subscriber)
             deliver(manage_link_message(settings, subscriber.address, token))
+        return {"status": "check your messages"}
+
+    @app.post("/api/v1/manage/request", status_code=status.HTTP_202_ACCEPTED)
+    def request_manage_link_by_token(
+        payload: ManageRequestByToken, request: Request, session: Session = Depends(get_session)
+    ) -> dict:
+        """The notification button: hand back the durable token, get the real link on the topic.
+
+        This exists so that changing a setting does not begin with copying a generated topic out
+        of the ntfy app and into a form. The token identifies the subscriber; it does not admit
+        anyone, and the link it triggers goes to the subscriber's own channel, so holding a copy
+        of one buys nothing that reading the notification did not already buy (tokens.py).
+
+        What a copy *could* buy is noise on someone else's phone, so the cap is per subscriber
+        and not only per IP: the button is tapped from whatever network the phone is on, and an
+        IP counter alone would be counting the wrong thing.
+
+        Always 202, and deliberately not "that token is invalid": the answer must not tell a
+        holder whether the subscription behind an expired token still exists.
+        """
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        if not hit_and_check(
+            session, f"manage:ip:{ip}", settings.manage_link_limit_per_hour, timedelta(hours=1)
+        ):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
+
+        claims = verify_manage_request_token(payload.token, settings.secret_key)
+        if claims is None:
+            return {"status": "check your messages"}
+        if not hit_and_check(
+            session,
+            f"manage:req:{claims.subscriber_id}",
+            settings.manage_request_limit_per_hour,
+            timedelta(hours=1),
+        ):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
+
+        subscriber = session.get(Subscriber, claims.subscriber_id)
+        if subscriber is not None and subscriber.confirmed_at is not None:
+            link = svc.issue_manage_token(session, settings, subscriber)
+            deliver(manage_link_message(settings, subscriber.address, link))
         return {"status": "check your messages"}
 
     @app.post("/api/v1/manage/session")

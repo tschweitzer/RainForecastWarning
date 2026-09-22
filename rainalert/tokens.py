@@ -196,3 +196,32 @@ def csrf_token(
 
 def verify_csrf_token(token: str, secret: str, now=None) -> SignedToken | None:
     return _verify("csrf", token, secret, now)
+
+
+def manage_request_token(
+    subscriber_id: uuid.UUID, secret: str, ttl_days: int, now: datetime | None = None
+) -> str:
+    """The durable token that rides in a notification and can *ask* for a settings link.
+
+    It is deliberately the weakest credential in the system. Everything else that reaches the
+    settings page is short-lived precisely because it opens someone's home coordinates; this one
+    is long-lived because it has to survive in a notification the reader is told to keep, and it
+    can survive there safely only because holding it grants nothing except "send the real link
+    to the channel that already received this message".
+
+    So a forwarded screenshot of an alert is not a key. Whoever can read the notification can
+    read the topic, and whoever can read the topic could already ask for a link through the
+    settings form - the token adds convenience, not reach.
+
+    Signed rather than stored for the same reason as the unsubscribe token: the plaintext is
+    never kept, so every future alert can mint a working one from the id alone (see the module
+    docstring). Rotating SECRET_KEY invalidates them all; deleting the subscriber makes them
+    resolve to nobody, which is the revocation that matters.
+    """
+    at = now or datetime.now(UTC)
+    expires = int((at + timedelta(days=ttl_days)).timestamp())
+    return _sign("request", subscriber_id, expires, expires, secret)
+
+
+def verify_manage_request_token(token: str, secret: str, now=None) -> SignedToken | None:
+    return _verify("request", token, secret, now)

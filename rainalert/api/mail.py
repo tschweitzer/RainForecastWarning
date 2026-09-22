@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -9,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
-from rainalert.notify import OutboundMessage
-from rainalert.tokens import unsubscribe_token
+from rainalert.db.models import Channel
+from rainalert.notify import MessageAction, OutboundMessage
+from rainalert.tokens import manage_request_token, unsubscribe_token
 
 
 def confirmation_message(
@@ -64,6 +66,61 @@ nichts gespeichert und es kommt nichts weiter.
             # Tells well-behaved automation this is not a human conversation.
             "Auto-Submitted": "auto-generated",
         },
+    )
+
+
+def settings_action(settings: Settings, token: str) -> MessageAction:
+    """The "Einstellungen" button that rides on every push we send.
+
+    Tapping it POSTs the durable request token back to us and we send the ordinary magic link to
+    the same topic. Two taps, both inside the app, and the topic never has to be copied out of
+    it - which was the whole of the old detour.
+
+    The button asks; it does not admit. That split is what lets the token be durable enough to
+    sit in a notification the reader keeps (tokens.py).
+    """
+    return MessageAction(
+        label="Einstellungen",
+        url=f"{settings.public_base_url.rstrip('/')}/api/v1/manage/request",
+        # JSON, and JSON without a space in it. ntfy's header grammar splits parameters on the
+        # comma, and its documented example passes a JSON body unquoted - which works only while
+        # the JSON itself has no comma in it. One key, so it has none, and `separators` keeps it
+        # that way rather than leaving it to json.dumps' defaults.
+        body=json.dumps({"token": token}, separators=(",", ":")),
+    )
+
+
+def settings_anchor_message(settings: Settings, to: str, token: str) -> OutboundMessage:
+    """Sent once, right after confirmation: the message the reader is asked to keep.
+
+    A rain alert carries the same button, but a rain alert is transient - it is swiped away the
+    moment it has been read. This one exists to be the stable entry point, and says so.
+
+    It is push-only by design. A mailbox is something people can type from memory, so the
+    settings form already serves email; a generated topic is not, which is the asymmetry this
+    whole flow is about.
+    """
+    fallback = f"{settings.public_base_url.rstrip('/')}/manage#r={token}"
+    text = f"""Alles eingerichtet. Ab jetzt melden wir uns, bevor es bei dir anfaengt zu regnen.
+
+Behalte diese Nachricht am besten. Mit dem Knopf "Einstellungen" forderst du jederzeit einen
+Link an, um Ort, Schwelle, Vorwarnzeit und Umkreis zu aendern - ohne dein Thema irgendwo
+eintippen zu muessen.
+
+Der Link kommt dann als neue Nachricht hier an und gilt {settings.manage_link_ttl_minutes} Minuten.
+
+Falls dein Client keine Knoepfe anzeigt, geht es auch hierueber:
+{fallback}
+
+--
+{ATTRIBUTION}
+"""
+    return OutboundMessage(
+        to=to,
+        subject="Regenwarnung ist aktiv",
+        text=text,
+        actions=(settings_action(settings, token),),
+        headers={"From": settings.mail_from, "Auto-Submitted": "auto-generated"},
     )
 
 
@@ -170,6 +227,20 @@ Abmelden: {unsubscribe_url}
     }
     if settings.mail_reply_to:
         headers["Reply-To"] = settings.mail_reply_to
+    # The same button as the anchor notification, because the anchor is one swipe from being
+    # gone and an alert is the one message that reliably arrives again. Push only: the header
+    # is meaningless to a mail client, and email has the settings form already.
+    actions = ()
+    if subscriber.channel == Channel.NTFY:
+        actions = (
+            settings_action(
+                settings,
+                manage_request_token(
+                    subscriber.id, settings.secret_key, settings.manage_request_ttl_days
+                ),
+            ),
+        )
+
     return OutboundMessage(
         to=subscriber.address,
         subject=f"Regen in etwa {lead} Minuten",
@@ -177,5 +248,6 @@ Abmelden: {unsubscribe_url}
         # On push this is where the reader lands when they tap the warning. The map, so the
         # first thing they see is the rain that is coming rather than a sign-up form.
         click_url=f"{settings.public_base_url.rstrip('/')}/map",
+        actions=actions,
         headers=headers,
     )

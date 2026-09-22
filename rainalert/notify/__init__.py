@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from rainalert.notify.base import (
     DeliveryResult,
+    MessageAction,
     Notifier,
     OutboundMessage,
     PushNotifier,
@@ -27,6 +28,7 @@ __all__ = [
     "ConsoleNotifier",
     "DeliveryResult",
     "FileNotifier",
+    "MessageAction",
     "Notifier",
     "NtfyNotifier",
     "OutboundMessage",

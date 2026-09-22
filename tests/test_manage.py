@@ -6,6 +6,7 @@ a threshold that becomes a 500 in the database rather than a sentence on the for
 show up by clicking through the page once.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -17,7 +18,12 @@ from rainalert.api.app import CSRF_HEADER, MANAGE_COOKIE, create_app
 from rainalert.config import Settings
 from rainalert.db.models import AuthToken, Subscriber, Subscription, TokenPurpose
 from rainalert.notify import ConsoleNotifier
-from rainalert.tokens import csrf_token, session_token, verify_csrf_token
+from rainalert.tokens import (
+    csrf_token,
+    session_token,
+    verify_csrf_token,
+    verify_manage_request_token,
+)
 
 MUNICH = (48.1533, 11.5574)
 HAMBURG = (53.5511, 9.9937)
@@ -52,10 +58,18 @@ def client(db, settings, notifier):
 
 
 def subscribed(client, notifier, email="friend@example.com", lat=MUNICH[0], lon=MUNICH[1]):
-    """A confirmed, active email subscriber."""
+    """A confirmed, active email subscriber - and *only* that.
+
+    Confirming now also opens a session, which is the point of that change but would quietly
+    wreck every test below it: they would start authorised, and a magic link that had stopped
+    working would still look like it worked. So the cookie goes, and the assertion holds this
+    helper to its own docstring.
+    """
     client.post("/api/v1/subscriptions", json={"email": email, "lat": lat, "lon": lon})
     token = notifier.sent[-1].text.split("token=")[1].split()[0]
     client.post("/confirm", data={"token": token})
+    client.cookies.delete(MANAGE_COOKIE)
+    assert client.get("/api/v1/subscriptions/me").status_code == 401
     return email
 
 
@@ -501,3 +515,158 @@ def test_a_tampered_cookie_is_refused(client, notifier, settings):
     }.items():
         put_session_cookie(client, forged)
         assert client.get("/api/v1/subscriptions/me").status_code == 401, label
+
+
+# --- getting in without copying the topic -------------------------------------------------
+
+
+def ntfy_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1]):
+    """A confirmed push subscriber, still signed in - which is the behaviour under test."""
+    response = client.post(
+        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": lat, "lon": lon}
+    )
+    topic = response.json()["topic"]
+    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    client.post("/confirm", data={"token": token})
+    return topic
+
+
+def test_confirming_leaves_a_working_session(client, notifier, db):
+    """Confirming proves the same thing redeeming a magic link proves - a token we sent to the
+    channel came back - so a second link to prove it again is ceremony."""
+    client.post(
+        "/api/v1/subscriptions",
+        json={"email": "new@example.com", **dict(zip(("lat", "lon"), MUNICH))},
+    )
+    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    confirmed = client.post("/confirm", data={"token": token})
+
+    assert confirmed.status_code == 200
+    assert MANAGE_COOKIE in confirmed.cookies
+    me = client.get("/api/v1/subscriptions/me")
+    assert me.status_code == 200
+    assert me.json()["address"] == "new@example.com"
+
+
+def test_the_session_from_confirming_can_write_and_is_not_open_ended(client, notifier, db):
+    client.post(
+        "/api/v1/subscriptions",
+        json={"email": "new@example.com", "lat": MUNICH[0], "lon": MUNICH[1]},
+    )
+    token = notifier.sent[-1].text.split("token=")[1].split()[0]
+    client.post("/confirm", data={"token": token})
+
+    state = client.get("/api/v1/manage/csrf").json()
+    assert write(client, state["csrf"], threshold_mm_5min=0.25).status_code == 204
+    # The ordinary session, not a longer one bought by arriving a different way.
+    assert state["seconds_left"] <= 30 * 60
+    assert state["seconds_until_deadline"] <= 120 * 60
+
+
+def test_confirming_a_topic_sends_the_anchor_message_with_the_button(client, notifier, db):
+    topic = ntfy_subscribed(client, notifier)
+    anchor = notifier.sent[-1]
+
+    assert anchor.to == topic
+    (action,) = anchor.actions
+    assert action.url.endswith("/api/v1/manage/request")
+    # It only works if the reader keeps it, so it has to say so.
+    assert "Behalte diese Nachricht" in anchor.text
+
+
+def test_confirming_an_address_sends_no_anchor(client, notifier, db):
+    """Push only. A mailbox can be typed from memory, so the settings form already serves it;
+    a generated topic cannot, which is the whole asymmetry."""
+    before = len(notifier.sent)
+    subscribed(client, notifier)
+    assert len(notifier.sent) == before + 1  # the confirmation, and nothing after it
+
+
+def request_token(notifier) -> str:
+    return json.loads(notifier.sent[-1].actions[0].body)["token"]
+
+
+def test_the_button_sends_the_magic_link_to_the_topic(client, notifier, db):
+    topic = ntfy_subscribed(client, notifier)
+    token = request_token(notifier)
+
+    response = client.post("/api/v1/manage/request", json={"token": token})
+    assert response.status_code == 202
+    assert notifier.sent[-1].to == topic
+    assert "/manage#t=" in notifier.sent[-1].text
+
+    # And that link is the ordinary one, so it still opens the ordinary session.
+    client.cookies.delete(MANAGE_COOKIE)
+    opened = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
+    assert opened.status_code == 200
+
+
+def test_the_button_can_be_used_more_than_once(client, notifier, db):
+    """The durable token is not spent by using it - the short-lived link it mints is."""
+    ntfy_subscribed(client, notifier)
+    token = request_token(notifier)
+
+    assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
+    assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
+
+
+def test_the_request_token_cannot_itself_open_a_session(client, notifier, db):
+    """The button asks; it does not admit. That split is what lets it be durable enough to sit
+    in a notification the reader keeps."""
+    ntfy_subscribed(client, notifier)
+    token = request_token(notifier)
+    client.cookies.delete(MANAGE_COOKIE)
+
+    assert client.post("/api/v1/manage/session", data={"token": token}).status_code == 401
+    assert client.get("/api/v1/subscriptions/me").status_code == 401
+
+
+@pytest.mark.parametrize("token", ["", "nonsense", "request.not-a-uuid.1.1.x"])
+def test_a_token_that_does_not_verify_is_answered_the_same_as_one_that_does(
+    client, notifier, db, token
+):
+    """Never "that token is invalid": the answer must not tell a holder whether the
+    subscription behind an expired token still exists."""
+    ntfy_subscribed(client, notifier)
+    before = len(notifier.sent)
+
+    response = client.post("/api/v1/manage/request", json={"token": token})
+    assert response.status_code == 202
+    assert len(notifier.sent) == before
+
+
+def test_a_token_for_a_deleted_subscriber_sends_nothing(client, notifier, db):
+    ntfy_subscribed(client, notifier)
+    token = request_token(notifier)
+    state = client.get("/api/v1/manage/csrf").json()
+    assert write(client, state["csrf"], method="DELETE").status_code == 204
+    before = len(notifier.sent)
+
+    assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
+    assert len(notifier.sent) == before
+
+
+def test_the_button_is_capped_per_subscriber(client, notifier, db, settings):
+    """Per subscriber, not only per IP: the button is tapped from whatever network the phone is
+    on, so an IP counter alone would be counting the wrong thing."""
+    ntfy_subscribed(client, notifier)
+    token = request_token(notifier)
+
+    for _ in range(settings.manage_request_limit_per_hour):
+        assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
+    assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 429
+
+
+def test_a_valid_token_of_another_purpose_is_not_accepted_by_the_button(client, notifier, db):
+    """Garbage is the easy half. The half that matters is a token that verifies perfectly -
+    just as something else - which is why the purpose is inside the MAC and not a prefix."""
+    ntfy_subscribed(client, notifier)
+    who = verify_manage_request_token(request_token(notifier), "test-secret").subscriber_id
+    before = len(notifier.sent)
+
+    for wrong in (
+        session_token(who, "test-secret", 30),
+        csrf_token(who, "test-secret", int(datetime.now(UTC).timestamp()) + 600),
+    ):
+        assert client.post("/api/v1/manage/request", json={"token": wrong}).status_code == 202
+        assert len(notifier.sent) == before, "a token minted for something else was accepted"
