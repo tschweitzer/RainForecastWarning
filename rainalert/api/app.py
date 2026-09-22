@@ -444,9 +444,20 @@ def create_app(
     ) -> HTMLResponse:
         try:
             result = svc.confirm(session, settings, token=token)
-        except svc.ValidationError as exc:
+        except svc.ValidationError:
+            # The service's own messages are English, which is right for the API and wrong on a
+            # German page. Saying the same thing for expired and already-used is deliberate:
+            # both are fixed by asking for a new one, and neither needs confirming to a stranger.
             return TEMPLATES.TemplateResponse(
-                request, "error.html", {"message": str(exc), "settings": settings}, status_code=400
+                request,
+                "error.html",
+                {
+                    "message": "Dieser Bestätigungslink gilt nicht mehr. Er läuft nach "
+                    f"{settings.confirm_token_ttl_hours} Stunden ab und kann nur einmal benutzt "
+                    "werden – melde dich einfach noch einmal an.",
+                    "settings": settings,
+                },
+                status_code=400,
             )
         subscriber = session.get(Subscriber, result.subscriber_id)
         if subscriber is not None and subscriber.channel == Channel.NTFY:

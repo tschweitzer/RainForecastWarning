@@ -80,14 +80,15 @@
   <p class="session-end">
     <span id="session-left" role="status"></span>
     <button type="button" class="linklike" id="extend" hidden>Verlängern</button>
-    <br>
+  </p>
+  <p class="session-end-note">
     Fertig?
     <button type="button" class="linklike" id="logout">Sitzung auf diesem Gerät beenden</button>
     – die Warnungen laufen weiter.
   </p>
 </div>
 
-<p style="margin-top:1.5rem"><a href="/">Zur Anmeldung</a>{% if has_map %} ·
+<p style="margin-top:1.5rem"><a href="/">Zur Startseite</a>{% if has_map %} ·
   <a href="/map">Regenradar</a>{% endif %}</p>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -109,6 +110,15 @@
   .pin { background:none; border:none; cursor:grab; }
   .pin:active { cursor:grabbing; }
   .pin svg { display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+  /* The countdown and the sign-off were one paragraph, so they ran together as one sentence
+     across the line break. Two paragraphs, and the second quieter than the first. */
+  .session-end-note { margin:.45rem 0 0; font-size:.85rem; color:var(--muted); }
+  /* With no tile provider the container shows Leaflet's default light grey, which is a bright
+     slab on a dark page. The page's own surface keeps it part of the design in both themes. */
+  .leaflet-container { background: var(--bg); }
+  /* A generated topic has no spaces in it, so it broke mid-token and left "· aktiv" stranded
+     on the next line. */
+  #who { overflow-wrap:anywhere; }
   .session-end { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
                  font-size:.85rem; color:var(--muted); }
   /* A button, because it performs an action - but it must not look like one of the two next to

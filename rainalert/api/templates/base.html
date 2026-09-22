@@ -12,6 +12,15 @@
             --warn:#ff8d82; }
   }
   * { box-sizing: border-box; }
+  /* Without this every link fell back to the user agent's #0000EE, which is 1.93:1 against the
+     dark background - WCAG wants 4.5:1 for body text - and off the palette in light mode too.
+     `--accent` measures 8.5:1 dark and 5.5:1 light. Visited is set to the same colour on
+     purpose: the default #551A8B is 1.66:1 on the dark background, and nothing here is a
+     browsing history worth marking. */
+  a { color: var(--accent); }
+  a:visited { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px; }
   body { margin:0; padding:0 16px; background:var(--bg); color:var(--fg);
          font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
   main { max-width: 34rem; margin: 0 auto; padding: 2rem 0 3rem; }

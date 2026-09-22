@@ -74,7 +74,7 @@ Vorhersage bis zwei Stunden voraus.</p>
 </form>
 <p id="result" role="status"></p>
 
-<div class="note">
+<div class="note" id="what-happens">
   {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
      as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
      page always said so; this one contradicted it. #}
@@ -283,6 +283,11 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   steps.appendChild(two);
 
   out.appendChild(steps);
+  // The standing note says what will happen when you sign up. Once you have, step 2 says the
+  // same thing in the past tense a few lines above it, so leaving it there reads as a second,
+  // conflicting instruction.
+  var standing = document.getElementById('what-happens');
+  if (standing) { standing.hidden = true; }
 });
 </script>
 {% endblock %}

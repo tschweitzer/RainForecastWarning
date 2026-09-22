@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Abmelden</h1>
-<p class="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
+<p class="lede" id="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
 nicht rückgängig machen.</p>
 <form method="post" action="/unsubscribe" id="form">
   <input type="hidden" name="token" id="token" value="">
@@ -24,6 +24,9 @@ einmal direkt aus der Nachricht.</p>
   }
   if (!field.value) {
     document.getElementById('form').hidden = true;
+    // The lede promises the very thing this state cannot deliver ("ein Klick noch"), so it goes
+    // with the button rather than sitting above the explanation contradicting it.
+    document.getElementById('lede').hidden = true;
     document.getElementById('no-token').hidden = false;
   }
 })();

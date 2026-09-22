@@ -223,7 +223,8 @@ def test_get_unsubscribe_changes_nothing_but_post_deletes(client, notifier, db):
     """A prefetching client must not be able to delete someone's account."""
     subscribe(client)
     page = client.post("/confirm", data={"token": confirm_token_from(notifier)})
-    unsub = page.text.split("/unsubscribe#t=")[1].split("<")[0].strip()
+    # The link is an <a href> now, so the token ends at the quote, not at the next tag.
+    unsub = page.text.split("/unsubscribe#t=")[1].split('"')[0].strip()
 
     assert client.get("/unsubscribe").status_code == 200
     with db() as session:

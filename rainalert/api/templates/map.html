@@ -52,15 +52,21 @@
             font-size:.78rem; color:var(--muted); }
   .legend span { display:inline-flex; align-items:center; gap:.3rem; }
   .legend i { width:.9rem; height:.9rem; border-radius:3px; display:inline-block; }
-  /* Place labels for the no-basemap case: readable, but never louder than the radar. */
+  /* Place labels for the no-basemap case: readable, but never louder than the radar.
+     Themed rather than a fixed slate, because these only ever appear when no tile provider is
+     configured - so the surface behind them is the page's own, which is near-black in dark
+     mode, where a fixed #456 all but disappears. */
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
-           color:#456; font-size:.68rem; font-weight:600; }
+           color:var(--fg); opacity:.75; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
   /* svh, not vh: on a phone `vh` is the viewport with the browser chrome *hidden*, so a map
      sized in vh is taller than what is actually on screen and pushes the slider below the fold.
      The vh line stays first as the fallback for browsers that do not know svh. */
   #map { height:55vh; height:52svh; min-height:220px;
          border-radius:10px; border:1px solid var(--line); }
+  /* With no tile provider the container shows Leaflet's default light grey, which is a bright
+     slab on a dark page. The page's own surface keeps it part of the design in both themes. */
+  .leaflet-container { background: var(--bg); }
   .window { margin:.9rem 0 0; }
   .range { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline;
            margin-top:.35rem; font-size:.85rem; color:var(--muted); }
