@@ -477,6 +477,7 @@ def create_app(
                     manage_request_token(
                         subscriber.id, settings.secret_key, settings.manage_request_ttl_days
                     ),
+                    subscriber.id,
                 )
             )
 
@@ -691,7 +692,7 @@ def create_app(
         # the person, and a settings link is not the place to take that on trust.
         if subscriber is not None and subscriber.confirmed_at is not None:
             token = svc.issue_manage_token(session, settings, subscriber)
-            deliver(manage_link_message(settings, subscriber.address, token))
+            deliver(manage_link_message(settings, subscriber.address, token, subscriber.id))
         return {"status": "check your messages"}
 
     @app.post("/api/v1/manage/request", status_code=status.HTTP_202_ACCEPTED)
@@ -732,7 +733,7 @@ def create_app(
         subscriber = session.get(Subscriber, claims.subscriber_id)
         if subscriber is not None and subscriber.confirmed_at is not None:
             link = svc.issue_manage_token(session, settings, subscriber)
-            deliver(manage_link_message(settings, subscriber.address, link))
+            deliver(manage_link_message(settings, subscriber.address, link, subscriber.id))
         return {"status": "check your messages"}
 
     @app.post("/api/v1/manage/session")

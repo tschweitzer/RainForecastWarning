@@ -451,7 +451,7 @@ def test_every_message_link_follows_the_configured_base_url(db, settings):
     messages = [
         confirmation_message(local, "you@example.com", "T"),
         confirmation_message(local, "rainalert-abc", "T", channel="ntfy"),
-        manage_link_message(local, "you@example.com", "T"),
+        manage_link_message(local, "you@example.com", "T", uuid.uuid4()),
         deletion_receipt(local, "you@example.com"),
     ]
     for message in messages:
@@ -658,7 +658,7 @@ def test_a_request_token_stops_working_once_it_is_old():
 def test_the_anchor_message_carries_the_button_and_a_fallback_in_the_fragment():
     settings = _ntfy_settings()
     token = manage_request_token(uuid.uuid4(), settings.secret_key, 365)
-    message = settings_anchor_message(settings, "rainalert-abc", token)
+    message = settings_anchor_message(settings, "rainalert-abc", token, uuid.uuid4())
 
     (action,) = message.actions
     assert action.url == "https://rain.example.invalid/api/v1/manage/request"
@@ -832,3 +832,68 @@ def test_the_desktop_reader_is_asked_where_not_told(client):
     assert "Auf dem Handy" in body and "In diesem Browser" in body
     # The honest cost of the browser route, said where it is chosen rather than discovered.
     assert "Schläft der Rechner" in body
+
+
+# --- the way out is on every message that follows the confirmation --------------------------
+
+
+def _every_message(settings):
+    """One place that knows all of them, so a message added later shows up here unclassified
+    rather than quietly shipping without a way out."""
+    import uuid as _uuid
+    from types import SimpleNamespace
+
+    from rainalert.api.mail import (
+        alert_message,
+        confirmation_message,
+        deletion_receipt,
+        manage_link_message,
+        settings_anchor_message,
+    )
+    from rainalert.db.models import Channel
+
+    who = _uuid.uuid4()
+    subscriber = SimpleNamespace(id=who, address="rainalert-abc", channel=Channel.NTFY)
+    subscription = SimpleNamespace(timezone="Europe/Berlin")
+    payload = {
+        "predicted_start_at": "2026-09-23T14:30:00+00:00",
+        "cycle_time": "2026-09-23T14:00:00+00:00",
+        "lead_minutes": 30,
+        "peak_mm_5min": 0.4,
+    }
+    return {
+        "confirmation": (confirmation_message(settings, "rainalert-abc", "T"), False),
+        "anchor": (settings_anchor_message(settings, "rainalert-abc", "T", who), True),
+        "manage link": (manage_link_message(settings, "rainalert-abc", "T", who), True),
+        "alert": (alert_message(None, settings, subscriber, subscription, payload), True),
+        "deletion receipt": (deletion_receipt(settings, "rainalert-abc", channel="ntfy"), False),
+    }
+
+
+def test_every_message_after_the_confirmation_offers_a_way_out(client, settings):
+    """Somebody who wants to stop reaches for whichever message is in front of them. A settings
+    link that offers no exit says "you can change this" while hiding the change they came for.
+    """
+    for name, (message, expected) in _every_message(settings).items():
+        has_it = "Abmelden: " in message.text
+        assert has_it is expected, f"{name}: unsubscribe link present={has_it}, wanted={expected}"
+
+
+def test_the_confirmation_and_the_receipt_are_the_two_exceptions(client, settings):
+    """Neither is a message you can act on: before confirming there is nothing to leave, and an
+    unconfirmed signup deletes itself; after the receipt the subscription is already gone."""
+    messages = _every_message(settings)
+    assert messages["confirmation"][1] is False
+    assert messages["deletion receipt"][1] is False
+    # And the receipt says what *is* still to do on push - stop the app listening.
+    assert "abbestellen" in messages["deletion receipt"][0].text
+
+
+def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
+    """Three messages carry it. Built three times, they drift - and the shape matters: the token
+    rides in the fragment so it cannot reach a request log (D-26)."""
+    for name, (message, expected) in _every_message(settings).items():
+        if not expected:
+            continue
+        assert "/unsubscribe#t=" in message.text, name
+        assert "/unsubscribe?token=" not in message.text, name

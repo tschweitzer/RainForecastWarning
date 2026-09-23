@@ -69,6 +69,27 @@ nichts gespeichert und es kommt nichts weiter.
     )
 
 
+def unsubscribe_url(settings: Settings, subscriber_id) -> str:
+    """In the fragment (D-26), so the token cannot reach a request log."""
+    return f"{settings.public_base_url.rstrip('/')}/unsubscribe#t={unsubscribe_token(subscriber_id, settings.secret_key)}"
+
+
+def unsubscribe_line(settings: Settings, subscriber_id) -> str:
+    """The way out, on every message that follows the confirmation.
+
+    Every one of them, not just the alerts: somebody who wants to stop reaches for whichever
+    message is in front of them, and a settings link that offers no exit is a message that says
+    "you can change this" while hiding the one change they came for.
+
+    Not on the confirmation itself - there is nothing to leave yet, and an unconfirmed signup
+    deletes itself - and not on the deletion receipt, which is the last thing the channel ever
+    gets. ntfy's own clients linkify a bare URL, so this is tappable in the app without being an
+    action button; a destructive one of those, on a notification that arrives often, is one
+    mis-tap from an account nobody meant to delete.
+    """
+    return f"Abmelden: {unsubscribe_url(settings, subscriber_id)}"
+
+
 def settings_action(settings: Settings, token: str) -> MessageAction:
     """The "Einstellungen" button that rides on every push we send.
 
@@ -90,7 +111,9 @@ def settings_action(settings: Settings, token: str) -> MessageAction:
     )
 
 
-def settings_anchor_message(settings: Settings, to: str, token: str) -> OutboundMessage:
+def settings_anchor_message(
+    settings: Settings, to: str, token: str, subscriber_id
+) -> OutboundMessage:
     """Sent once, right after confirmation: the message the reader is asked to keep.
 
     A rain alert carries the same button, but a rain alert is transient - it is swiped away the
@@ -112,6 +135,8 @@ Der Link kommt dann als neue Nachricht hier an und gilt {settings.manage_link_tt
 Falls dein Client keine Knoepfe anzeigt, geht es auch hierueber:
 {fallback}
 
+{unsubscribe_line(settings, subscriber_id)}
+
 --
 {ATTRIBUTION}
 """
@@ -124,7 +149,7 @@ Falls dein Client keine Knoepfe anzeigt, geht es auch hierueber:
     )
 
 
-def manage_link_message(settings: Settings, to: str, token: str) -> OutboundMessage:
+def manage_link_message(settings: Settings, to: str, token: str, subscriber_id) -> OutboundMessage:
     """The magic link to the settings page.
 
     The token rides in the URL **fragment**, not the query string, and that is the whole point of
@@ -141,6 +166,8 @@ Der Link gilt {minutes} Minuten und kann nur einmal benutzt werden.
 
 Wenn du das nicht warst, ignoriere diese Nachricht - solange der Link nicht geoeffnet wird,
 aendert sich nichts.
+
+{unsubscribe_line(settings, subscriber_id)}
 
 --
 {ATTRIBUTION}
@@ -201,10 +228,7 @@ def alert_message(
     lead = payload.get("lead_minutes") or 0
     peak = float(payload.get("peak_mm_5min") or 0.0)
 
-    base = settings.public_base_url.rstrip("/")
-    token = unsubscribe_token(subscriber.id, settings.secret_key)
-    # In the fragment (D-26), so the token cannot reach a request log.
-    unsubscribe_url = f"{base}/unsubscribe#t={token}"
+    unsubscribe = unsubscribe_url(settings, subscriber.id)
 
     text = f"""Es faengt bald an zu regnen.
 
@@ -213,7 +237,7 @@ Voraussichtlich ab {start:%H:%M} Uhr (in etwa {lead} Minuten), {_intensity(peak)
 Grundlage: Radarvorhersage des DWD, Radarbild von {observed:%H:%M} Uhr.
 Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
 
-Abmelden: {unsubscribe_url}
+{unsubscribe_line(settings, subscriber.id)}
 
 --
 {ATTRIBUTION}
@@ -227,7 +251,7 @@ Abmelden: {unsubscribe_url}
         # and the handler would have to read it from there - which it does not, so the promise
         # was answered 400 for as long as it was made (D-33). Without the POST header the URI is
         # opened rather than posted, so it can be the same fragment link a person clicks.
-        "List-Unsubscribe": f"<{unsubscribe_url}>",
+        "List-Unsubscribe": f"<{unsubscribe}>",
     }
     if settings.mail_reply_to:
         headers["Reply-To"] = settings.mail_reply_to
