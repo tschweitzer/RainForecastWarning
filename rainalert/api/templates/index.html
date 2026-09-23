@@ -25,10 +25,17 @@
                        border-radius:6px; }
   .ntfy-steps .topic-row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
   .ntfy-steps .topic { flex:1; min-width:12rem; }
-  .ntfy-steps .alt { font-size:.85rem; color:var(--muted); }
+  /* Not scoped to .ntfy-steps: the restart line belongs to the whole result, including the
+     email branch, and scoping it there left it rendering as loudly as the instructions. */
+  .alt { font-size:.85rem; color:var(--muted); }
   .ntfy-steps details { margin:.6rem 0; font-size:.85rem; color:var(--muted); }
   .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px;
                     display:block; margin-top:.5rem; }
+  .ntfy-steps .done { font-weight:600; }
+  /* The one action on the page now, so it looks like one rather than like running text. */
+  .ntfy-steps .primary-link { display:inline-block; padding:.7rem 1.1rem; border-radius:8px;
+                              background:var(--accent); color:#fff; font-weight:600;
+                              text-decoration:none; }
   .already { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line);
              font-size:.9rem; color:var(--muted); }
 </style>
@@ -128,6 +135,63 @@ und ab wann gewarnt wird.</p>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
+/* Which of the three ways in this visitor actually has.
+ *
+ * Read in the browser and never sent anywhere: the server has no idea what platform anyone is
+ * on, nothing about it is stored, and nothing about it reaches a log. That is the whole reason
+ * this is done here rather than from the User-Agent header on the request.
+ */
+var RainPlatform = (function () {
+  var PLAY = 'https://play.google.com/store/apps/details?id=io.heckel.ntfy';
+  var FDROID = 'https://f-droid.org/en/packages/io.heckel.ntfy/';
+  var APPSTORE = 'https://apps.apple.com/app/ntfy/id1625396347';
+
+  function name() {
+    var ua = navigator.userAgent || '';
+    if (/android/i.test(ua)) { return 'android'; }
+    // An iPad on iPadOS 13+ says "Macintosh"; the touch points are what give it away, and
+    // getting this wrong would offer a Mac user an App Store link for a phone app.
+    if (/iphone|ipad|ipod/i.test(ua)
+        || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) { return 'ios'; }
+    return 'desktop';
+  }
+
+  return {
+    name: name,
+    FDROID: FDROID,
+    store: function (p) { return p === 'ios' ? APPSTORE : PLAY; },
+    storeName: function (p) { return p === 'ios' ? 'im App Store laden' : 'bei Google Play laden'; }
+  };
+})();
+
+/* A signup that has gone through is not a form any more.
+ *
+ * Left as it was, the button stayed live directly above the result - and pressing it again
+ * mints a second subscription with a second topic, silently replacing the one on screen. On a
+ * desktop that was the likely next move rather than an unlucky one: the result began at y=868
+ * of a 900-pixel viewport and the page did not scroll, so one press looked like nothing had
+ * happened.
+ */
+function settled() {
+  document.getElementById('signup').hidden = true;
+  // Says what will happen when you sign up; you have, and the steps above now say it better.
+  var standing = document.getElementById('what-happens');
+  if (standing) { standing.hidden = true; }
+
+  var again = document.createElement('p');
+  again.className = 'alt';
+  var restart = document.createElement('a');
+  restart.href = '/';
+  restart.textContent = 'Von vorn anfangen';
+  again.appendChild(document.createTextNode('Etwas falsch gemacht? '));
+  again.appendChild(restart);
+  again.appendChild(document.createTextNode(' – diese Anmeldung verfällt von selbst, wenn du '
+    + 'sie nicht bestätigst.'));
+  document.getElementById('result').appendChild(again);
+
+  document.getElementById('result').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
 var pick = null, map = null;
 
 function setPlace(lat, lon, fromMap) {
@@ -291,6 +355,7 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   }
   if (channel === 'email') {
     out.textContent = 'Fast fertig – schau in dein Postfach und bestätige die Anmeldung.';
+    settled();
     return;
   }
 
@@ -310,94 +375,113 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   var steps = document.createElement('div');
   steps.className = 'ntfy-steps';
 
-  var heading = document.createElement('p');
-  heading.innerHTML = '<strong>Noch zwei Schritte.</strong>';
-  steps.appendChild(heading);
+  function el(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) { node.className = cls; }
+    if (text) { node.textContent = text; }
+    return node;
+  }
 
-  var one = document.createElement('p');
-  one.textContent = '1. Dieses Thema in der ntfy-App abonnieren:';
-  steps.appendChild(one);
+  function link(href, text, cls) {
+    var a = document.createElement('a');
+    a.href = href;
+    a.rel = 'noopener';
+    a.textContent = text;
+    if (cls) { a.className = cls; }
+    return a;
+  }
 
-  var row = document.createElement('div');
-  row.className = 'topic-row';
+  // The topic, for typing into the app's own "subscribe to topic" field. Behind a disclosure on
+  // every platform: it is the thing that always works and the thing nobody should have to use,
+  // and as the loudest element on the page it made a generated 22-character string look like
+  // the point of the exercise.
+  function manualEntry() {
+    var box = document.createElement('details');
+    box.appendChild(el('summary', null, 'Thema von Hand eintragen'));
+    var row = el('div', 'topic-row');
+    var topic = el('code', 'topic', data.topic);
+    row.appendChild(topic);
 
-  var topic = document.createElement('code');
-  topic.className = 'topic';
-  topic.textContent = data.topic;
-  row.appendChild(topic);
+    var copy = el('button', 'secondary', 'Kopieren');
+    copy.type = 'button';
+    copy.addEventListener('click', async function () {
+      try {
+        await navigator.clipboard.writeText(data.topic);
+        copy.textContent = 'Kopiert';
+      } catch (err) {
+        // Clipboard access needs a secure context and permission, and neither is guaranteed.
+        // Selecting the text is a worse experience but it is never nothing.
+        var range = document.createRange();
+        range.selectNodeContents(topic);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        copy.textContent = 'Markiert – jetzt kopieren';
+      }
+    });
+    row.appendChild(copy);
+    box.appendChild(row);
+    return box;
+  }
 
-  var copy = document.createElement('button');
-  copy.type = 'button';
-  copy.className = 'secondary';
-  copy.textContent = 'Kopieren';
-  copy.addEventListener('click', async function () {
-    try {
-      await navigator.clipboard.writeText(data.topic);
-      copy.textContent = 'Kopiert';
-    } catch (err) {
-      // Clipboard access needs a secure context and permission, and neither is guaranteed.
-      // Selecting the text is a worse experience but it is never nothing.
-      var range = document.createRange();
-      range.selectNodeContents(topic);
-      window.getSelection().removeAllRanges();
-      window.getSelection().addRange(range);
-      copy.textContent = 'Markiert – jetzt kopieren';
+  function qrCode() {
+    // Inline, from the response body. This used to be an <img> pointing at a /qr endpoint with
+    // the subscribe URL in its query string, which put the topic in the access log - and a topic
+    // is the credential, not a hint. Parsed rather than assigned to innerHTML: the markup is our
+    // own server's, but this way that does not have to be taken on trust by whoever reads it.
+    var svg = new DOMParser().parseFromString(data.qr_svg, 'image/svg+xml').documentElement;
+    svg.setAttribute('class', 'qr');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', 'QR-Code zum Abonnieren');
+    return document.importNode(svg, true);
+  }
+
+  steps.appendChild(el('p', 'done', 'Fast geschafft – noch zwei Schritte.'));
+
+  var here = RainPlatform.name();
+  if (here === 'desktop') {
+    // No `ntfy://` here at all. A desktop browser has nothing registered for it, so offering it
+    // first - which is what every platform used to get - put a link that does nothing above the
+    // one thing that works. The QR is open rather than folded away for the same reason: this is
+    // the page where it is the answer, not the afterthought.
+    steps.appendChild(el('p', null, '1. Scanne den Code mit dem Handy, das gewarnt werden soll:'));
+    steps.appendChild(qrCode());
+    var web = el('p', 'alt');
+    web.appendChild(document.createTextNode('Kein Handy zur Hand? Du kannst das Thema auch '));
+    web.appendChild(link(data.subscribe_url, 'im Browser abonnieren'));
+    web.appendChild(document.createTextNode(' – dann kommen die Warnungen in diesem Fenster an.'));
+    steps.appendChild(web);
+    steps.appendChild(manualEntry());
+    steps.appendChild(el('p', null, '2. Auf dem Handy kommt sofort eine Testnachricht – tippe '
+      + 'sie dort an, dann bist du angemeldet. Kommt nichts an, erreichen dich die Warnungen '
+      + 'auch nicht.'));
+  } else {
+    // The app link does the subscribing: ntfy's docs say `ntfy://<host>/<topic>` "subscribes to
+    // the topic if not already subscribed", while an https topic URL is explicitly not an app
+    // link - "Android deep linking of http/https links is very brittle and limited".
+    steps.appendChild(el('p', null, '1. Thema in der ntfy-App abonnieren:'));
+    var open = el('p');
+    open.appendChild(link(data.app_url, 'In der ntfy-App öffnen und abonnieren', 'primary-link'));
+    steps.appendChild(open);
+
+    // A custom scheme does nothing at all without the app, and the honest answer to that is the
+    // store - not ntfy's web page, which is where this used to send people. Web push on a phone
+    // is exactly what they came here to avoid.
+    var install = el('p', 'alt');
+    install.appendChild(document.createTextNode('App noch nicht installiert? '));
+    install.appendChild(link(RainPlatform.store(here), RainPlatform.storeName(here)));
+    if (here === 'android') {
+      install.appendChild(document.createTextNode(' oder '));
+      install.appendChild(link(RainPlatform.FDROID, 'F-Droid'));
     }
-  });
-  row.appendChild(copy);
-  steps.appendChild(row);
-
-  // The app link first, because it is the one that actually does the subscribing: ntfy's docs
-  // say `ntfy://<host>/<topic>` "subscribes to the topic if not already subscribed", while an
-  // https topic URL is explicitly not an app link - "Android deep linking of http/https links
-  // is very brittle and limited". A custom scheme does nothing at all without the app though,
-  // so the web page stays as the second line rather than replacing it.
-  var open = document.createElement('p');
-  open.className = 'alt';
-  var appLink = document.createElement('a');
-  appLink.href = data.app_url;
-  appLink.rel = 'noopener';
-  appLink.textContent = 'In der ntfy-App öffnen und abonnieren';
-  open.appendChild(appLink);
-  steps.appendChild(open);
-
-  var web = document.createElement('p');
-  web.className = 'alt';
-  web.appendChild(document.createTextNode('Passiert nichts? Dann ist die App nicht installiert – '));
-  var webLink = document.createElement('a');
-  webLink.href = data.subscribe_url;
-  webLink.rel = 'noopener';
-  webLink.textContent = 'im Browser öffnen';
-  web.appendChild(webLink);
-  web.appendChild(document.createTextNode('.'));
-  steps.appendChild(web);
-
-  var other = document.createElement('details');
-  var summary = document.createElement('summary');
-  summary.textContent = 'Auf einem anderen Gerät abonnieren';
-  other.appendChild(summary);
-  // Inline, from the response body. This used to be an <img> pointing at a /qr endpoint with
-  // the subscribe URL in its query string, which put the topic in the access log - and a topic
-  // is the credential, not a hint. Parsed rather than assigned to innerHTML: the markup is our
-  // own server's, but this way that does not have to be taken on trust by whoever reads it.
-  var svg = new DOMParser().parseFromString(data.qr_svg, 'image/svg+xml').documentElement;
-  svg.setAttribute('class', 'qr');
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', 'QR-Code zum Abonnieren');
-  other.appendChild(document.importNode(svg, true));
-  steps.appendChild(other);
-
-  var two = document.createElement('p');
-  two.textContent = '2. Wir schicken sofort eine Testnachricht – tippe sie an, dann bist du '
-    + 'angemeldet. Kommt nichts an, erreichen dich die Warnungen auch nicht.';
-  steps.appendChild(two);
+    install.appendChild(document.createTextNode(' – danach hier noch einmal antippen.'));
+    steps.appendChild(install);
+    steps.appendChild(manualEntry());
+    steps.appendChild(el('p', null, '2. Wir schicken sofort eine Testnachricht – tippe sie an, '
+      + 'dann bist du angemeldet. Kommt nichts an, erreichen dich die Warnungen auch nicht.'));
+  }
 
   out.appendChild(steps);
-  // The standing note says what will happen when you sign up. Once you have, step 2 says the
-  // same thing in the past tense a few lines above it, so leaving it there reads as a second,
-  // conflicting instruction.
-  var standing = document.getElementById('what-happens');
-  if (standing) { standing.hidden = true; }
+  settled();
 });
 </script>
 {% endblock %}

@@ -269,15 +269,19 @@ def test_the_topic_never_travels_in_a_url(client, db):
 def test_the_phone_can_subscribe_without_scanning_its_own_screen(client):
     """Signing up on the phone you want warned is the normal case, and the QR is useless there.
 
-    Copying the topic is the path that works on every platform regardless of what the app
-    registered as a link handler, so it leads; the QR is folded away for the desktop case.
+    It used to be folded away behind a disclosure on every platform, which was the compromise
+    available while all three got the same markup. Now the phone branch does not render one at
+    all, and the desktop branch shows it open - so this holds more strongly than it did.
     """
     body = client.get("/").text
+    mobile = body.split("if (here === 'desktop')")[1].split("} else {")[1]
+    assert "qrCode()" not in mobile
+
+    # Typing the topic in by hand is still there for whatever the app did not register as a
+    # link handler - behind a disclosure, because it is the path nobody should need.
     assert "navigator.clipboard.writeText" in body
     assert "Kopieren" in body
-    # the QR is behind a disclosure rather than in the way
-    assert "createElement('details')" in body
-    assert "Auf einem anderen Gerät abonnieren" in body
+    assert "Thema von Hand eintragen" in body
 
 
 def test_copying_still_offers_something_without_clipboard_permission(client):

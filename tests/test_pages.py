@@ -532,12 +532,14 @@ def test_the_deep_link_refuses_a_server_it_cannot_parse():
         deep_link("", "topic")
 
 
-def test_the_page_offers_the_app_link_before_the_web_one(client):
-    """The web link is the fallback for a missing app, so it must read as one."""
+def test_the_app_link_leads_on_a_phone(client):
+    """Replaces a test that pinned one ordering for everyone. The app link still comes first
+    where it works - it is the only thing that subscribes in one tap - but the fallback under
+    it is the store now, not ntfy's web page, and the desktop branch has neither."""
     page = client.get("/").text
-    assert page.index("data.app_url") < page.index("data.subscribe_url")
+    mobile = page.split("} else {")[-1].split("out.appendChild(steps)")[0]
+    assert mobile.index("data.app_url") < mobile.index("RainPlatform.store(here)")
     assert "In der ntfy-App öffnen und abonnieren" in page
-    assert "Passiert nichts? Dann ist die App nicht installiert" in page
 
 
 def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings, db):
@@ -739,3 +741,56 @@ def test_a_place_outside_germany_is_refused_next_to_the_map(client):
 
     assert f"lat < {LAT_RANGE[0]:.0f} || lat > {LAT_RANGE[1]:.0f}" in body
     assert f"lon < {LON_RANGE[0]:.0f} || lon > {LON_RANGE[1]:.0f}" in body
+
+
+# --- the signup result is different on each platform ---------------------------------------
+
+
+def test_the_platform_is_decided_in_the_browser_and_never_sent(client):
+    """Read from `navigator.userAgent`, not the request header, so the server never learns the
+    platform: nothing to store, nothing to log, nothing to leak."""
+    body = client.get("/").text
+    assert "navigator.userAgent" in body
+    # An iPad on iPadOS 13+ reports as a Macintosh; without the touch check a Mac user would be
+    # offered a phone app in the App Store.
+    assert "navigator.maxTouchPoints" in body
+
+
+def test_the_store_links_are_the_ones_ntfy_publishes(client):
+    """A custom scheme does nothing without the app, and the honest answer is the store - not
+    ntfy's web page, which is web push on a phone, the thing a native app was chosen to avoid."""
+    body = client.get("/").text
+    assert "play.google.com/store/apps/details?id=io.heckel.ntfy" in body
+    assert "f-droid.org/en/packages/io.heckel.ntfy/" in body
+    assert "apps.apple.com/app/ntfy/id1625396347" in body
+
+
+def test_the_desktop_branch_offers_the_qr_and_not_the_app_scheme(client):
+    """A desktop browser has nothing registered for `ntfy://`, so offering it first - which is
+    what every platform used to get - put a dead link above the only thing that works."""
+    body = client.get("/").text
+    desktop = body.split("if (here === 'desktop')")[1].split("} else {")[0]
+    assert "qrCode()" in desktop
+    assert "data.app_url" not in desktop, "the app scheme does nothing on a desktop"
+    assert "data.subscribe_url" in desktop  # ntfy's web app does work here
+
+    # The branch after the desktop one, not the first `} else {` in the file - there are
+    # earlier ones, and splitting on them silently slices the wrong code.
+    mobile = body.split("if (here === 'desktop')")[1].split("} else {")[1]
+    assert "data.app_url" in mobile
+    assert "qrCode()" not in mobile, "the QR is useless on the phone you are holding"
+
+
+def test_a_finished_signup_stops_being_a_form(client):
+    """The button stayed live directly above the result, and pressing it again mints a second
+    subscription with a second topic, silently replacing the one on screen. On a desktop that
+    was the likely next move: the result began at y=868 of a 900-pixel viewport and the page did
+    not scroll, so one press looked like nothing had happened."""
+    body = client.get("/").text
+    assert "function settled()" in body
+    assert "document.getElementById('signup').hidden = true;" in body
+    assert "scrollIntoView" in body
+    # Both channels finish, not just push.
+    assert body.count("settled();") >= 2
+    # And there is a way back, because hiding the form removes the only one.
+    assert "Von vorn anfangen" in body
