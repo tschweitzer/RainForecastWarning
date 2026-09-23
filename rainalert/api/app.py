@@ -407,6 +407,7 @@ def create_app(
 
         if payload.channel == "ntfy":
             subscribe_url = f"{settings.ntfy_server.rstrip('/')}/{result.address}"
+            app_url = ntfy_deep_link(settings.ntfy_server, result.address)
             # The topic has to come back: the subscriber cannot receive anything until their app
             # is subscribed to it, and they have no other way to learn what it is. Nothing is
             # disclosed by returning it - it was created for this request, a moment ago.
@@ -418,9 +419,15 @@ def create_app(
                     "server": settings.ntfy_server,
                     # Two links, because neither covers everyone. The app link subscribes in
                     # one tap but does nothing without the app; the web one always resolves.
-                    "app_url": ntfy_deep_link(settings.ntfy_server, result.address),
+                    "app_url": app_url,
                     "subscribe_url": subscribe_url,
-                    "qr_svg": qr_svg(subscribe_url),
+                    # The QR encodes the *app* link, not the web one. It is scanned by the phone
+                    # that wants the warnings, and ntfy's web page would subscribe that phone to
+                    # web push instead - which on iOS needs 16.4 and the page added to the home
+                    # screen, and is the thing a native app was chosen to avoid. The page says
+                    # plainly that the app has to be installed first, because a custom scheme
+                    # does nothing without it and a camera cannot say so.
+                    "qr_svg": qr_svg(app_url),
                 },
                 status_code=status.HTTP_202_ACCEPTED,
             )

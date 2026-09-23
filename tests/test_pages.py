@@ -537,14 +537,22 @@ def test_the_app_link_leads_on_a_phone(client):
     where it works - it is the only thing that subscribes in one tap - but the fallback under
     it is the store now, not ntfy's web page, and the desktop branch has neither."""
     page = client.get("/").text
-    mobile = page.split("} else {")[-1].split("out.appendChild(steps)")[0]
-    assert mobile.index("data.app_url") < mobile.index("RainPlatform.store(here)")
+    steps = page.split("function phoneSteps(scan)")[1].split("function browserSteps()")[0]
+    # Install first, because neither the link nor the code does anything without the app.
+    assert steps.index("installRow(") < steps.index("data.app_url")
     assert "In der ntfy-App öffnen und abonnieren" in page
+    # On the phone only that phone's store; on a desktop both, because the page cannot know
+    # what is in the reader's pocket.
+    assert "installRow(scan ? null : RainPlatform.name())" in steps
 
 
-def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings, db):
-    """A phone camera will not open a custom scheme, and the QR exists for the desktop case -
-    sign up on a laptop, scan with a phone. The web page has a subscribe button on it.
+def test_the_qr_encodes_the_app_link_not_the_web_one(client, settings, db):
+    """Reversed on purpose, and this test with it.
+
+    It is scanned by the phone that wants the warnings, and ntfy's own web page would subscribe
+    *that phone* to web push - which its docs say needs iOS 16.4 and the page on the home
+    screen, and which is the thing a native app was chosen to avoid. A custom scheme does
+    nothing without the app, so the page says so in the step above the code.
 
     Checked by re-encoding both candidates and seeing which one matches, because an SVG that is
     merely well formed would pass whatever URL went into it.
@@ -564,8 +572,8 @@ def test_the_qr_still_encodes_the_web_link_not_the_app_one(client, settings, db)
         "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
     ).json()
 
-    assert body["qr_svg"] == encoded(body["subscribe_url"])
-    assert body["qr_svg"] != encoded(body["app_url"])
+    assert body["qr_svg"] == encoded(body["app_url"])
+    assert body["qr_svg"] != encoded(body["subscribe_url"])
 
 
 # --- the settings button on a notification -----------------------------------------------------
@@ -770,15 +778,22 @@ def test_the_desktop_branch_offers_the_qr_and_not_the_app_scheme(client):
     what every platform used to get - put a dead link above the only thing that works."""
     body = client.get("/").text
     desktop = body.split("if (here === 'desktop')")[1].split("} else {")[0]
-    assert "qrCode()" in desktop
-    assert "data.app_url" not in desktop, "the app scheme does nothing on a desktop"
-    assert "data.subscribe_url" in desktop  # ntfy's web app does work here
+    # Two routes, both closed, each naming the device it is about - the page cannot know where
+    # the reader wants to be warned, so it asks instead of guessing and putting one first.
+    assert desktop.count("'route'") == 2
+    assert "phoneSteps(true)" in desktop  # true: hand off by QR
+    assert "browserSteps()" in desktop
 
     # The branch after the desktop one, not the first `} else {` in the file - there are
     # earlier ones, and splitting on them silently slices the wrong code.
     mobile = body.split("if (here === 'desktop')")[1].split("} else {")[1]
-    assert "data.app_url" in mobile
-    assert "qrCode()" not in mobile, "the QR is useless on the phone you are holding"
+    assert "phoneSteps(false)" in mobile  # false: tap the link, no QR to scan
+    assert "browserSteps()" not in mobile, "web push on the phone is the weaker version"
+
+    # And the switch means what it says: the QR is only built for the scanning case.
+    steps = body.split("function phoneSteps(scan)")[1].split("function browserSteps()")[0]
+    assert "if (scan) {" in steps
+    assert steps.index("qrCode()") < steps.index("data.app_url")
 
 
 def test_a_finished_signup_stops_being_a_form(client):
@@ -794,3 +809,26 @@ def test_a_finished_signup_stops_being_a_form(client):
     assert body.count("settled();") >= 2
     # And there is a way back, because hiding the form removes the only one.
     assert "Von vorn anfangen" in body
+
+
+def test_the_store_marks_need_no_third_party_request(client):
+    """The official badges are images on Apple's and Google's servers. `img-src` does not allow
+    them and should not: a request for a badge tells the store the visitor's IP on every signup.
+    Drawn inline instead - simplified marks for recognising the app, not the badge artwork."""
+    body = client.get("/").text
+    assert "play.google.com/store/apps/details" in body  # the link, which is fine
+    # but nothing is fetched from them to draw it
+    for host in ("play.google.com/intl", "apple.com/app-store", "developer.apple.com"):
+        assert host not in body
+    assert "createElementNS('http://www.w3.org/2000/svg'" in body
+
+
+def test_the_desktop_reader_is_asked_where_not_told(client):
+    """Where the warnings should land is the reader's choice, not a platform we can sniff: the
+    browser they are signing up in and the phone in their pocket are different devices."""
+    body = client.get("/").text
+    assert "wo willst du gewarnt werden?" in body
+    # Each route says in its own summary which device it is about, while still closed.
+    assert "Auf dem Handy" in body and "In diesem Browser" in body
+    # The honest cost of the browser route, said where it is chosen rather than discovered.
+    assert "Schläft der Rechner" in body
