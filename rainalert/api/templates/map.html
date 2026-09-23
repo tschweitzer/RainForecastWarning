@@ -4,6 +4,10 @@
 <h1>Regenradar</h1>
 
 <div id="banner" class="note" hidden></div>
+{# Only ever shown when a warning's link has outlived its hour. #}
+<p class="hint" id="stale-link" hidden>Dieser Link ist älter als
+  {{ settings.locate_link_ttl_minutes }} Minuten – die Karte zeigt deshalb nicht mehr deinen
+  Ort. Über <a href="/manage">Einstellungen</a> siehst du ihn jederzeit.</p>
 {# Nothing between the heading and the map, and the map sized so the slider is on screen
    without scrolling - it is the control people come here for. #}
 <div id="map"></div>
@@ -148,6 +152,40 @@
   });
 
   map.addControl(new LocateControl());
+
+  /* Tapped a warning? Centre on the place it was about.
+     The link carries a signed reference, not the coordinates - a warning stays in a
+     notification list for good, and a screenshot of one should not be somebody's address. The
+     reference stops resolving after an hour, and then this is simply the ordinary map, which is
+     the whole point: last week's warning tells a reader nothing about where its owner lives. */
+  (function () {
+    var hash = window.location.hash || '';
+    if (hash.indexOf('#l=') !== 0) { return; }
+    var token = decodeURIComponent(hash.slice(3));
+    // Erased before anything else can read it, and replaceState so Back does not return to a
+    // URL still carrying it.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+
+    fetch('/api/v1/locate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: token })
+    }).then(function (r) {
+      return r.ok ? r.json() : { located: false };
+    }).then(function (place) {
+      if (!place.located) {
+        // Said rather than silently ignored: a map that opens on the whole country when you
+        // expected your own street reads as broken unless it says why.
+        var stale = document.getElementById('stale-link');
+        stale.hidden = false;
+        return;
+      }
+      RainRadar.mark(map, place.lat, place.lon, place.radius_m);
+      // 11 is what the settings map opens on - about 40 km across, enough to see which town you
+      // are in and to judge a shower's distance against it.
+      map.setView([place.lat, place.lon], 11);
+    }).catch(function () { /* the map is still a map */ });
+  })();
 
   RainRadar.timeline(map, {
     // Already resolved and clamped by the server, which also rendered the heading and the range

@@ -12,7 +12,7 @@ from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
 from rainalert.db.models import Channel
 from rainalert.notify import MessageAction, OutboundMessage
-from rainalert.tokens import manage_request_token, unsubscribe_token
+from rainalert.tokens import locate_token, manage_request_token, unsubscribe_token
 
 
 def confirmation_message(
@@ -283,8 +283,21 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
         subject=f"Regen in etwa {lead} Minuten",
         text=text,
         # On push this is where the reader lands when they tap the warning. The map, so the
-        # first thing they see is the rain that is coming rather than a sign-up form.
-        click_url=f"{settings.public_base_url.rstrip('/')}/map",
+        # first thing they see is the rain that is coming rather than a sign-up form - centred
+        # on the place the warning was about, which it has to be told, because the country view
+        # does not answer "is that shower coming to me".
+        #
+        # A signed reference rather than the coordinates themselves: this link sits in a
+        # notification list for good, and a screenshot of one should not be a home address. It
+        # stops resolving after `locate_link_ttl_minutes` (tokens.py), and the map then opens
+        # where it always did.
+        #
+        # Push only. Email ignores `click_url`, and a mail body is forwarded far more often than
+        # a notification is - there is no reason to put this where it travels furthest.
+        click_url=(
+            f"{settings.public_base_url.rstrip('/')}/map"
+            f"#l={locate_token(subscriber.id, settings.secret_key, settings.locate_link_ttl_minutes)}"
+        ),
         actions=actions,
         headers=headers,
     )

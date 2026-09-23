@@ -33,6 +33,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from sqlalchemy import select
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -61,6 +62,7 @@ from rainalert.tokens import (
     manage_request_token,
     session_token,
     verify_csrf_token,
+    verify_locate_token,
     verify_manage_request_token,
     verify_session_token,
     verify_unsubscribe_token,
@@ -172,6 +174,14 @@ class RuleRequest(BaseModel):
     threshold_mm_5min: float | None = Field(default=None, gt=0, le=1000)
     lead_time_minutes: int | None = Field(default=None, ge=0, le=1000)
     radius_m: int | None = Field(default=None, ge=0, le=100_000)
+
+
+class LocateRequest(BaseModel):
+    """The signed reference a warning's link carries, handed back to be resolved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(default="", max_length=512)
 
 
 class ManageRequestByToken(BaseModel):
@@ -704,6 +714,42 @@ def create_app(
             token = svc.issue_manage_token(session, settings, subscriber)
             deliver(manage_link_message(settings, subscriber.address, token, subscriber.id))
         return {"status": "check your messages"}
+
+    @app.post("/api/v1/locate")
+    def locate(
+        payload: LocateRequest, request: Request, session: Session = Depends(get_session)
+    ) -> dict:
+        """Resolve a warning's link to the place that warning was about.
+
+        This exists so the coordinates do not have to be in the link. A warning stays in a
+        notification list for good; a screenshot of one carrying a home address would be a worse
+        leak than anything else on this service, and the message itself names a time and an
+        intensity but never a place.
+
+        The token stops verifying after `locate_link_ttl_minutes`, and an expired one is answered
+        exactly like a forged one - `located: false`, nothing else. Distinguishing them would
+        tell a holder that the subscription behind an old link still exists.
+        """
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        if not hit_and_check(
+            session, f"locate:ip:{ip}", settings.settings_limit_per_hour, timedelta(hours=1)
+        ):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
+
+        claims = verify_locate_token(payload.token, settings.secret_key)
+        if claims is None:
+            return {"located": False}
+        subscription = session.execute(
+            select(Subscription).where(Subscription.subscriber_id == claims.subscriber_id)
+        ).scalar_one_or_none()
+        if subscription is None:
+            return {"located": False}
+        return {
+            "located": True,
+            "lat": float(subscription.lat),
+            "lon": float(subscription.lon),
+            "radius_m": int(subscription.radius_m),
+        }
 
     @app.post("/api/v1/manage/request", status_code=status.HTTP_202_ACCEPTED)
     def request_manage_link_by_token(

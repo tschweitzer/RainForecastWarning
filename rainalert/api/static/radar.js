@@ -105,6 +105,18 @@
     };
   }
 
+  /* A place the reader is being shown, rather than one they are choosing.
+     Same pin and same circle as the settings map, deliberately: the two pages should not
+     disagree about what a pin means. Nothing here is draggable and nothing binds a map click -
+     this marks a spot, it does not pick one. */
+  function mark(map, lat, lon, radius) {
+    L.circle([lat, lon], {
+      radius: Math.max(radius || 0, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.08,
+      interactive: false
+    }).addTo(map);
+    L.marker([lat, lon], { icon: pinIcon(), interactive: false, keyboard: false }).addTo(map);
+  }
+
   /* The radar loop. Every element is optional except the map, so a page can take the overlay
      and the stamp without the slider and the play button. */
   function timeline(map, opts) {
@@ -288,5 +300,7 @@
     return { stop: stop, show: show };
   }
 
-  global.RainRadar = { basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon };
+  global.RainRadar = {
+    basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon, mark: mark
+  };
 })(window);

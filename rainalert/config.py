@@ -218,6 +218,10 @@ class Settings(BaseSettings):
     #: one the reader is asked to keep; harmless, because the button only asks for a link that
     #: is itself short-lived and goes to the subscriber's own channel (tokens.py).
     manage_request_ttl_days: int = 365
+    #: How long a warning's link keeps showing the place the warning was about. A warning is
+    #: about the next two hours at most, so an hour covers looking at it while it matters and
+    #: little else; after that the map opens on the country like any other visit.
+    locate_link_ttl_minutes: int = 60
 
     #: Bearer token guarding /metrics. Unset means the endpoint does not exist at all - "internal
     #: only" is not expressible on Cloud Run, where every route is reachable from the internet

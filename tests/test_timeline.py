@@ -555,3 +555,97 @@ def test_the_page_does_not_explain_the_slider(client):
     """Dropped: a slider does not need to be told to be a slider, and the line cost a row of
     vertical space on the screen where space was the problem."""
     assert "Ziehen oder abspielen" not in client.get("/map").text
+
+
+# --- a warning's link centres the map on the place it warned about --------------------------
+
+
+def _subscriber(db, settings, lat=48.1533, lon=11.5574):
+    """A confirmed subscription, returned as its id."""
+    from rainalert import subscriptions as svc
+    from rainalert.db.models import Channel
+
+    with db() as session:
+        result = svc.subscribe(session, settings, lat=lat, lon=lon, channel=Channel.NTFY)
+        subscriber = svc.confirm(session, settings, token=result.confirm_token)
+    return subscriber.subscriber_id
+
+
+def test_the_warning_carries_a_reference_and_never_the_coordinates(db, settings):
+    """The link sits in a notification list for good. A screenshot of one should not be a home
+    address - and the message names a time and an intensity but never a place, so putting the
+    coordinates in the link would say more than the warning itself does."""
+    from types import SimpleNamespace
+
+    from rainalert.api.mail import alert_message
+    from rainalert.db.models import Channel
+
+    who = _subscriber(db, settings)
+    subscriber = SimpleNamespace(id=who, address="rainalert-abc", channel=Channel.NTFY)
+    subscription = SimpleNamespace(timezone="Europe/Berlin")
+    message = alert_message(
+        None,
+        settings,
+        subscriber,
+        subscription,
+        {
+            "predicted_start_at": "2026-09-23T14:30:00+00:00",
+            "cycle_time": "2026-09-23T14:00:00+00:00",
+            "lead_minutes": 30,
+            "peak_mm_5min": 0.4,
+        },
+    )
+    assert "/map#l=" in message.click_url
+    for leaked in ("48.15", "11.55", "lat", "lon"):
+        assert leaked not in message.click_url, f"{leaked} is in the link"
+        assert leaked not in message.text, f"{leaked} is in the body"
+
+
+def test_a_fresh_reference_resolves_and_a_stale_one_is_refused_the_same_as_a_forged_one(
+    client, db, settings
+):
+    """Telling the two apart would say whether the subscription behind an old link still exists."""
+    from rainalert.tokens import locate_token
+
+    who = _subscriber(db, settings)
+    fresh = locate_token(who, settings.secret_key, settings.locate_link_ttl_minutes)
+    stale = locate_token(who, settings.secret_key, -1)
+
+    ok = client.post("/api/v1/locate", json={"token": fresh}).json()
+    assert ok == {"located": True, "lat": 48.1533, "lon": 11.5574, "radius_m": 2000}
+
+    for refused in (stale, "locate.nonsense", ""):
+        assert client.post("/api/v1/locate", json={"token": refused}).json() == {"located": False}
+
+
+def test_a_token_minted_for_something_else_does_not_locate_anyone(client, db, settings):
+    """Purpose is inside the MAC, so the settings session cannot be spent here and this cannot
+    be spent there."""
+    from rainalert.tokens import (
+        locate_token,
+        session_token,
+        unsubscribe_token,
+        verify_session_token,
+    )
+
+    who = _subscriber(db, settings)
+    for wrong in (
+        session_token(who, settings.secret_key, 30),
+        unsubscribe_token(who, settings.secret_key),
+    ):
+        assert client.post("/api/v1/locate", json={"token": wrong}).json() == {"located": False}
+
+    # And the other way round: a locate token opens no session.
+    mine = locate_token(who, settings.secret_key, 60)
+    assert verify_session_token(mine, settings.secret_key) is None
+
+
+def test_the_map_reads_the_reference_from_the_fragment_and_erases_it(client):
+    """A fragment never reaches the server, so the reference cannot land in a request log
+    (D-26) - and it is cleared from the address bar once spent."""
+    body = client.get("/map").text
+    assert "hash.indexOf('#l=') !== 0" in body
+    assert "history.replaceState" in body
+    assert "'/api/v1/locate'" in body
+    # An expired link says so rather than silently opening somewhere else.
+    assert 'id="stale-link"' in body

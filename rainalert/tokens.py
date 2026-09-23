@@ -198,6 +198,29 @@ def verify_csrf_token(token: str, secret: str, now=None) -> SignedToken | None:
     return _verify("csrf", token, secret, now)
 
 
+def locate_token(
+    subscriber_id: uuid.UUID, secret: str, ttl_minutes: int, now: datetime | None = None
+) -> str:
+    """Lets the map show the place a warning was about, for as long as the warning is about it.
+
+    The obvious shape - putting the coordinates in the link - was rejected: the warning sits in
+    a notification list for good, and a screenshot of one would then be somebody's home address
+    in plain text. It is also a step backwards from what the message says today, which names a
+    time and an intensity but never a place.
+
+    So the link carries a signed reference instead, and the coordinates are fetched. Once it
+    expires the map opens where it always did, which is the point: a tap on last week's warning
+    should tell a reader nothing about where its owner lives.
+    """
+    at = now or datetime.now(UTC)
+    expires = int((at + timedelta(minutes=ttl_minutes)).timestamp())
+    return _sign("locate", subscriber_id, expires, expires, secret)
+
+
+def verify_locate_token(token: str, secret: str, now=None) -> SignedToken | None:
+    return _verify("locate", token, secret, now)
+
+
 def manage_request_token(
     subscriber_id: uuid.UUID, secret: str, ttl_days: int, now: datetime | None = None
 ) -> str:
