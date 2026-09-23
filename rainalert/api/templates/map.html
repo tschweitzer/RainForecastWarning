@@ -65,8 +65,10 @@
   #map { height:55vh; height:52svh; min-height:220px;
          border-radius:10px; border:1px solid var(--line); }
   /* With no tile provider the container shows Leaflet's default light grey, which is a bright
-     slab on a dark page. The page's own surface keeps it part of the design in both themes. */
-  .leaflet-container { background: var(--bg); }
+     slab on a dark page. The page's own surface keeps it part of the design in both themes.
+     By id rather than `.leaflet-container`, so it does not depend on which stylesheet the
+     browser saw last. */
+  #map { background: var(--bg); }
   .window { margin:.9rem 0 0; }
   .range { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline;
            margin-top:.35rem; font-size:.85rem; color:var(--muted); }
@@ -80,6 +82,7 @@
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // maxZoom on the map as well as on the tile layer: with no basemap configured there is no
@@ -88,56 +91,15 @@
 
   var map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 6);
 
-  var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
-  if (TILE_URL) {
-    L.tileLayer(TILE_URL, {
-      // 18, not the 12 the radar's own resolution would suggest: the basemap is what you
-      // orient by, and street names are the difference between "somewhere in Neuhausen" and
-      // "my street". The radar overlay just scales up past ~12 and goes blocky, which is
-      // honest - it is 1 km data and looks like 1 km data.
-      maxZoom: 18,
-      attribution: {{ (settings.map_tile_attribution or '')|tojson }},
-      // This page sends `Referrer-Policy: no-referrer`, which strips the Referer from tile
-      // requests too - so every tile arrives at the provider unidentified. Tile services read
-      // that header: OpenStreetMap's policy requires a Referer or a User-Agent naming the
-      // application, and a browser's User-Agent names only the browser; key-restricted
-      // providers match their allow-list against it. The element attribute overrides the
-      // document policy for these requests only, and strict-origin-when-cross-origin sends the
-      // origin alone - never a path or a query, so no token can ride along.
-      referrerPolicy: 'strict-origin-when-cross-origin'
-    }).addTo(map);
-  } else {
-    // No provider configured. Rather than borrow someone's tiles, give the radar enough
-    // reference to be readable on its own: a degree graticule and a handful of cities.
-    graticule();
-    cities();
-  }
+  RainRadar.basemap(map, {
+    tileUrl: {{ (settings.map_tile_url or '')|tojson }},
+    tileAttribution: {{ (settings.map_tile_attribution or '')|tojson }},
+    // The graticule is this page's own: it is the one that gets zoomed and panned across the
+    // whole country, where degree lines are the only scale reference without a basemap.
+    graticule: true
+  });
 
-  function graticule() {
-    var style = { color: '#8aa', weight: 0.5, opacity: 0.5, interactive: false };
-    for (var lat = 46; lat <= 56; lat++) {
-      L.polyline([[lat, 3], [lat, 18]], style).addTo(map);
-    }
-    for (var lon = 4; lon <= 18; lon++) {
-      L.polyline([[46, lon], [56, lon]], style).addTo(map);
-    }
-  }
-
-  function cities() {
-    // Enough spread to locate yourself anywhere in the DE1200 grid.
-    var places = [
-      ['Hamburg', 53.551, 9.994], ['Berlin', 52.520, 13.405], ['Hannover', 52.376, 9.732],
-      ['Dortmund', 51.514, 7.466], ['Leipzig', 51.340, 12.375], ['Koeln', 50.938, 6.960],
-      ['Dresden', 51.051, 13.739], ['Frankfurt', 50.110, 8.682], ['Nuernberg', 49.452, 11.077],
-      ['Stuttgart', 48.776, 9.183], ['Muenchen', 48.135, 11.582], ['Bremen', 53.079, 8.802],
-      ['Rostock', 54.093, 12.131], ['Freiburg', 47.999, 7.842]
-    ];
-    places.forEach(function (p) {
-      L.circleMarker([p[1], p[2]], {
-        radius: 2.5, color: '#456', weight: 1, fillOpacity: 1, interactive: false
-      }).addTo(map).bindTooltip(p[0], { permanent: true, direction: 'right', className: 'place' });
-    });
-  }
+  var banner = document.getElementById('banner');
 
   // ---- "where am I" -----------------------------------------------------------------------
   // A marker plus an accuracy circle, because a radar map at 1 km is exactly the scale at which
@@ -187,164 +149,19 @@
     }
   });
 
-  var layer = null, frames = [], gaps = [], bounds = null, timer = null;
-  var cache = new Map();            // url -> Image, LRU-evicted
-  var MAX_CACHED = 40;              // 168 frames is far more than a phone should hold
-  var WINDOW = 6;                   // how far either side of the cursor to prefetch
-
-  var slider = document.getElementById('slider');
-  var stamp = document.getElementById('stamp');
-  var banner = document.getElementById('banner');
-  var play = document.getElementById('play');
-
   map.addControl(new LocateControl());
 
-  function preload(url) {
-    if (cache.has(url)) { return cache.get(url); }
-    var img = new Image();
-    img.src = url;
-    cache.set(url, img);
-    while (cache.size > MAX_CACHED) { cache.delete(cache.keys().next().value); }
-    return img;
-  }
-
-  function gapAt(offset) {
-    return gaps.some(function (g) {
-      return offset >= g.from_offset_minutes && offset <= g.to_offset_minutes;
-    });
-  }
-
-  // Minutes up to an hour and a half, hours beyond it. The slider reaches twelve hours back,
-  // where "-720 min" is a number you have to divide before it means anything.
-  function relative(minutes) {
-    if (minutes === 0) { return 'jetzt'; }
-    var sign = minutes < 0 ? '-' : '+';
-    var abs = Math.abs(minutes);
-    if (abs <= 90) { return sign + abs + ' min'; }
-    return sign + Math.floor(abs / 60) + ':' + String(abs % 60).padStart(2, '0') + ' h';
-  }
-
-  function label(frame) {
-    var when = new Date(frame.valid_time);
-    var time = when.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
-    // The date is always shown, not only when the window crosses midnight. A label that gains a
-    // date only sometimes is one you have to read twice to be sure it has not - and the weekday
-    // is what makes "yesterday evening" obvious without doing arithmetic on the day number.
-    var day = when.toLocaleDateString('de-DE', {
-      weekday: 'short', day: '2-digit', month: '2-digit'
-    });
-    var kind = frame.kind === 'forecast'
-      ? '<span class="future">Vorhersage</span>'
-      : '<span class="kind">gemessen</span>';
-    return '<span class="day">' + day + '</span> ' + time + ' Uhr · '
-      + relative(frame.offset_minutes) + ' · ' + kind;
-  }
-
-  function show(index) {
-    var frame = frames[index];
-    if (!frame) { return; }
-    stamp.innerHTML = label(frame);
-
-    if (gapAt(frame.offset_minutes)) {
-      // Deliberately blank rather than holding the previous image: pretending the radar saw
-      // something it did not is exactly the failure this service must not have.
-      if (layer) { map.removeLayer(layer); layer = null; }
-      stamp.innerHTML += ' · <span class="kind">keine Daten</span>';
-      return;
-    }
-    var img = preload(frame.url);
-    if (layer) { layer.setUrl(frame.url); } else {
-      // The alpha is baked into the PNG (radar/overlay.py INTENSITY_BANDS), so this is 1.0
-      // and the palette is the single place that decides how strong rain looks.
-      layer = L.imageOverlay(frame.url, bounds, { opacity: LAYER_OPACITY }).addTo(map);
-    }
-    if (!layer._map) { layer.addTo(map); }
-    for (var d = -WINDOW; d <= WINDOW; d++) {
-      var neighbour = frames[index + d];
-      if (neighbour && !gapAt(neighbour.offset_minutes)) { preload(neighbour.url); }
-    }
-    void img;
-  }
-
-  // Playback speed. The loop runs the last hour of radar plus the two-hour forecast, about 37
-  // frames, and at the 125 ms this used to use the whole thing was over in under five seconds -
-  // fast enough to look like flicker rather than weather.
-  //
-  // 500 ms is the middle of the range that works: below roughly 300 ms the eye has no time to
-  // fixate on where a shower is relative to a town, and above about 700 ms the frames stop
-  // reading as one moving thing and become a slideshow. Radar loops generally sit here.
-  var STEP_MS = 500;
-  // Two places deserve longer than a step. The end, so the last forecast frame - the answer to
-  // "will it reach me" - is still on screen when you look back at it rather than snapping away.
-  // And t+0, which is where measurement stops and prediction starts; it is the most important
-  // boundary on the timeline and nothing else marks it.
-  var HOLD_LAST_MS = 1800;
-  var HOLD_NOW_MS = 1000;
-
-  function stop() { if (timer) { clearTimeout(timer); timer = null; play.textContent = '▶'; } }
-
-  play.addEventListener('click', function () {
-    if (timer) { stop(); return; }
-    play.textContent = '❚❚';
-    var start = frames.findIndex(function (f) { return f.offset_minutes >= -60; });
-    if (+slider.value >= frames.length - 1) { slider.value = Math.max(0, start); }
-
-    // A self-scheduling timeout rather than setInterval, so a frame can be held longer than a
-    // step. setInterval cannot vary its period, and it also stacks callbacks if a frame is slow
-    // to paint, which on a phone turns a pause into a stutter and then a jump.
-    function hold(index) {
-      if (index >= frames.length - 1) { return HOLD_LAST_MS; }
-      if (frames[index] && frames[index].offset_minutes === 0) { return HOLD_NOW_MS; }
-      return STEP_MS;
-    }
-
-    function tick() {
-      var next = +slider.value + 1;
-      if (next >= frames.length) { next = Math.max(0, start); }
-      slider.value = next;
-      show(next);
-      timer = setTimeout(tick, hold(next));
-    }
-
-    timer = setTimeout(tick, STEP_MS);
-  });
-  slider.addEventListener('input', function () { stop(); show(+slider.value); });
-
-  // Already resolved and clamped by the server, which also rendered the heading and the range
-  // picker from it - one source for the window rather than three that can disagree.
-  var url = '/api/v1/overlays/timeline?past_hours={{ window_hours }}';
-
-  fetch(url).then(function (r) { return r.json(); }).then(function (data) {
-    frames = data.frames;
-    gaps = data.gaps || [];
-    bounds = data.bounds;
-
-    if (!frames.length) {
-      banner.hidden = false;
-      banner.textContent = 'Noch keine Radardaten vorhanden.';
-      return;
-    }
-    if (data.stale) {
-      banner.hidden = false;
-      banner.textContent = 'Die Radardaten sind ' + Math.round(data.age_minutes) +
-        ' Minuten alt – das Bild zeigt nicht die aktuelle Lage.';
-    }
-
-    slider.max = frames.length - 1;
-    var nowIndex = frames.findIndex(function (f) { return f.offset_minutes === 0; });
-    slider.value = nowIndex < 0 ? 0 : nowIndex;
-    show(+slider.value);
-
-    // The band names go in the title rather than inline: seven of them spelled out wraps to
-    // four lines on a phone and competes with the map for the screen. The settings page spells
-    // them out, because there the name is what you are choosing.
-    document.getElementById('legend').innerHTML = (data.colorscale || []).map(function (s) {
-      var c = s.rgba;
-      var name = s.label ? s.label + ' – ab ' + s.from_mm_5min + ' mm/5 min (~'
-        + s.approx_mm_per_hour + ' mm/h)' : '';
-      return '<span title="' + name + '"><i style="background:rgba(' + c[0] + ',' + c[1] + ',' +
-        c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></i>' + s.from_mm_5min.toFixed(2) + '</span>';
-    }).join('') + '<span>mm / 5 min</span>';
+  RainRadar.timeline(map, {
+    // Already resolved and clamped by the server, which also rendered the heading and the range
+    // picker from it - one source for the window rather than three that can disagree.
+    pastHours: {{ window_hours }},
+    layerOpacity: LAYER_OPACITY,
+    slider: document.getElementById('slider'),
+    play: document.getElementById('play'),
+    stamp: document.getElementById('stamp'),
+    legend: document.getElementById('legend'),
+    banner: banner,
+    onEmpty: function () { document.getElementById('stamp').textContent = ''; }
   });
 })();
 </script>

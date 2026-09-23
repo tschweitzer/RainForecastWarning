@@ -235,10 +235,14 @@ def test_there_is_only_one_opacity(client):
     from rainalert.radar.overlay import LAYER_OPACITY
 
     assert LAYER_OPACITY == 1.0
-    for path in ("/map", "/manage"):
+    # The overlay is created in one place now, so that is where the single opacity has to be.
+    module = client.get("/static/radar.js").text
+    assert "opacity: opts.layerOpacity" in module
+    assert "opacity: 0.75" not in module
+    # And every page must hand it the real value rather than typing one of its own.
+    for path in ("/", "/map", "/manage"):
         page = client.get(path).text
-        assert "opacity: LAYER_OPACITY" in page or "opacity: LAYER_OPACITY}" in page
-        # No second opacity typed into the template to multiply it back down.
+        assert "layerOpacity" in page
         assert "opacity: 0.75" not in page
         assert "opacity: 0.6}" not in page
 
@@ -339,11 +343,14 @@ def test_the_marker_icon_is_inline_and_needs_no_network(client):
     placeholder with its alt text. Confirmed in Chromium: "Refused to load the image ...
     because it violates the following Content Security Policy directive".
     """
-    page = client.get("/manage").text
-    assert "L.divIcon" in page
-    assert "<svg viewBox=" in page
+    # The pin moved into the shared module when the picker did; both pages that show one get
+    # it from there, so there is one place for this to be true.
+    module = client.get("/static/radar.js").text
+    assert "L.divIcon" in module
+    assert "<svg viewBox=" in module
     # The failure mode, spelled out: no raster icon from anywhere.
-    assert "marker-icon" not in page
+    assert "marker-icon" not in module
+    page = module
     # The anchor must be the bottom centre of whatever size the pin is, or the point of the
     # pin stops marking the coordinate it is there to mark.
     size = re.search(r"iconSize: \[(\d+), (\d+)\]", page)
@@ -652,3 +659,54 @@ def test_the_anchor_message_carries_the_button_and_a_fallback_in_the_fragment():
     # cannot reach a server log or a Referer header (F-4/F-8).
     assert f"/manage#r={token}" in message.text
     assert "?token=" not in message.text
+
+
+# --- the map is how a place is chosen ----------------------------------------------------
+
+
+def test_both_picker_pages_offer_a_map_and_no_coordinate_fields(client):
+    """Decimal degrees are not something anyone knows about where they live. The fields survive
+    only as the fallback for a failed Leaflet load, which is why they are marked hidden."""
+    for path in ("/", "/manage"):
+        body = client.get(path).text
+        assert 'id="map"' in body
+        assert 'id="coord-fallback" hidden' in body
+        # Not `required`: a required field that is hidden refuses the submit with a browser
+        # message pointing at something invisible, which reads as the form being broken.
+        fallback = body.split('id="coord-fallback"')[1].split("</div>")[0]
+        assert "required" not in fallback
+
+
+def test_hidden_survives_the_row_layout(client):
+    """`hidden` is only `display:none` in the UA stylesheet, so `.row { display:flex }` beat it
+    and the coordinate fallback was on screen while marked hidden. Found in Chromium."""
+    assert "[hidden] { display: none !important; }" in client.get("/").text
+
+
+def test_the_picker_map_does_not_depend_on_the_radar(client):
+    """`has_map` says whether there is imagery to lay over the map. Picking a place needs the
+    basemap, not the radar - gating the whole map on it left the signup page with no way to
+    choose a location at all on a fresh install."""
+    body = client.get("/").text
+    assert "L.map(" in body and "RainRadar.picker(" in body
+
+    # The precise invariant: whatever decides to hide the map must not consult the radar flag.
+    # Asserting only that both strings exist passes with the flag moved back into that branch,
+    # which is exactly the bug - so read the branch's own condition.
+    head = body[: body.index("document.getElementById('map').hidden = true;")]
+    condition = head[head.rindex("if (") :]
+    assert "hasOverlay" not in condition, (
+        "the map is hidden when no radar is configured; the basemap is what you aim with"
+    )
+
+
+def test_lead_and_radius_are_sliders_with_a_readable_value(client):
+    """Both have a step and a range the number field never expressed, and both are judgements
+    rather than figures anyone knows - a slider shows the whole scale you are choosing on."""
+    body = client.get("/manage").text
+    for field in ("lead", "radius"):
+        row = body.split(f'id="{field}"')[0].rsplit("<input", 1)[-1] + f'id="{field}"'
+        assert 'type="range"' in row, f"{field} is not a slider"
+        assert f'id="{field}-value"' in body, f"{field} has no readout"
+    # Metres below a kilometre, kilometres above: "7500 m" is a number you have to divide.
+    assert "toLocaleString('de-DE'" in body

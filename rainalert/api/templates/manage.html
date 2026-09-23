@@ -27,19 +27,27 @@
   <div id="panel-banner" class="note" hidden></div>
 
   <div id="map" style="height:46vh;min-height:280px;border-radius:10px;border:1px solid var(--line)"></div>
+  <div class="controls" id="radar-controls" hidden>
+    <button type="button" id="play" aria-label="Abspielen">▶</button>
+    <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
+           disabled>
+  </div>
+  <p class="stamp" id="frame-stamp"></p>
   <p class="hint" id="map-hint">Tippe oder klicke in die Karte, um den Ort zu setzen. Der Kreis
     zeigt den Umkreis, der ausgewertet wird.</p>
-  <p class="stamp" id="frame-stamp"></p>
 
   <form id="settings-form">
-    <div class="row">
+    {# Only shown when Leaflet fails to load. The map is the way to set a place - a pair of
+       decimal degrees is not something anyone knows about where they live - but "the map is
+       gone" must not also mean "your location is frozen", and the CDN is a third party. #}
+    <div class="row" id="coord-fallback" hidden>
       <div>
         <label for="lat">Breite</label>
-        <input type="number" id="lat" step="any" min="47" max="56" required>
+        <input type="number" id="lat" step="any" min="47" max="56">
       </div>
       <div>
         <label for="lon">Länge</label>
-        <input type="number" id="lon" step="any" min="5" max="16" required>
+        <input type="number" id="lon" step="any" min="5" max="16">
       </div>
     </div>
     <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
@@ -61,14 +69,14 @@
     </div>
     <p class="hint">Die Farben sind dieselben wie auf der <a href="/map">Radarkarte</a>.</p>
 
-    <label for="lead">Wie weit voraus schauen? (Minuten)</label>
-    <input type="number" id="lead" step="{{ bounds.lead_step }}"
-           min="{{ bounds.lead_min }}" max="{{ bounds.lead_max }}" required>
+    <label for="lead">Wie weit voraus schauen? <output id="lead-value"></output></label>
+    <input type="range" id="lead" step="{{ bounds.lead_step }}"
+           min="{{ bounds.lead_min }}" max="{{ bounds.lead_max }}">
     <p class="hint">Je weiter voraus, desto mehr Vorwarnzeit – und desto mehr Fehlalarme. Die
       Vorhersage reicht {{ bounds.lead_max }} Minuten.</p>
 
-    <label for="radius">Umkreis (Meter)</label>
-    <input type="number" id="radius" step="100" min="0" max="{{ bounds.radius_max }}" required>
+    <label for="radius">Umkreis <output id="radius-value"></output></label>
+    <input type="range" id="radius" step="250" min="0" max="{{ bounds.radius_max }}">
     <p class="hint">Das Radar hat 1 km Auflösung, unter etwa 500 m ist es immer dieselbe Zelle.</p>
 
     <button type="submit">Speichern</button>
@@ -112,10 +120,21 @@
   .pin svg { display:block; filter:drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
   /* The countdown and the sign-off were one paragraph, so they ran together as one sentence
      across the line break. Two paragraphs, and the second quieter than the first. */
+  .controls { display:flex; gap:.75rem; align-items:center; margin-top:.6rem; }
+  .controls button { margin:0; width:3rem; }
+  .controls input[type=range] { flex:1; }
+  .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; font-size:.85rem; }
+  .stamp .kind, .stamp .day { color:var(--muted); }
+  .stamp .future { color:var(--accent); font-weight:600; }
+  /* The live value belongs with the thing it labels, not in a second column. */
+  output { font-weight:400; color:var(--muted); }
+  input[type=range] { width:100%; accent-color:var(--accent); }
   .session-end-note { margin:.45rem 0 0; font-size:.85rem; color:var(--muted); }
   /* With no tile provider the container shows Leaflet's default light grey, which is a bright
-     slab on a dark page. The page's own surface keeps it part of the design in both themes. */
-  .leaflet-container { background: var(--bg); }
+     slab on a dark page. The page's own surface keeps it part of the design in both themes.
+     By id rather than `.leaflet-container`, so it does not depend on which stylesheet the
+     browser saw last. */
+  #map { background: var(--bg); }
   /* A generated topic has no spaces in it, so it broke mid-token and left "· aktiv" stranded
      on the next line. */
   #who { overflow-wrap:anywhere; }
@@ -126,12 +145,15 @@
   .linklike { background:none; border:0; padding:0; margin:0; font:inherit; color:var(--accent);
               text-decoration:underline; cursor:pointer; }
   .ok { color:var(--accent); font-weight:600; }
+  /* Themed, for the same reason as on the radar page: these labels only appear when no tile
+     provider is configured, so the surface behind them is the page's own. */
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
-           color:#456; font-size:.68rem; font-weight:600; }
+           color:var(--fg); opacity:.75; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // Picking a spot needs a map; showing rain on it needs a configured overlay store.
@@ -144,7 +166,7 @@
   var sessionMinutes = 30;
   var ticker = null;
   var current = null;            // the last state the server confirmed
-  var map = null, marker = null, ring = null, overlay = null;
+  var map = null;
 
   var gate = document.getElementById('gate');
   var panel = document.getElementById('panel');
@@ -299,12 +321,31 @@
     paintSwatch();
   }
 
+  function showLead() {
+    var minutes = +document.getElementById('lead').value;
+    // The label already says "voraus schauen"; repeating it here made it wrap.
+    document.getElementById('lead-value').textContent = minutes + ' Minuten';
+  }
+
+  function showRadius() {
+    // Metres below a kilometre, kilometres above it: "7500 m" is a number you have to divide.
+    var m = +document.getElementById('radius').value;
+    document.getElementById('radius-value').textContent = m < 1000
+      ? m + ' m'
+      : (m / 1000).toLocaleString('de-DE', { maximumFractionDigits: 2 }) + ' km';
+  }
+
+  document.getElementById('lead').addEventListener('input', showLead);
+  document.getElementById('radius').addEventListener('input', showRadius);
+
   function fill() {
     document.getElementById('lat').value = current.lat;
     document.getElementById('lon').value = current.lon;
     selectThreshold(current.threshold_mm_5min);
     document.getElementById('lead').value = current.lead_time_minutes;
     document.getElementById('radius').value = current.radius_m;
+    showLead();
+    showRadius();
 
     var where = current.channel === 'email' ? current.address : 'Push-Thema ' + current.address;
     var state = {
@@ -329,127 +370,58 @@
   }
 
   // ---- the map ----------------------------------------------------------------------------
-  function drawAt(lat, lon) {
-    if (!map) { return; }
-    marker.setLatLng([lat, lon]);
-    ring.setLatLng([lat, lon]);
-  }
-
-  function setRadius() {
-    if (ring) { ring.setRadius(Math.max(+document.getElementById('radius').value || 0, 50)); }
-  }
+  var pick = null;
 
   function moveTo(lat, lon) {
-    // Rounded to the four decimals the server keeps, so the field shows what will be stored
+    // Rounded to the four decimals the server keeps, so what is shown is what will be stored
     // rather than a number that changes on save.
     document.getElementById('lat').value = lat.toFixed(4);
     document.getElementById('lon').value = lon.toFixed(4);
-    drawAt(lat, lon);
+    if (pick) { pick.set(lat, lon, true); }
   }
 
   function buildMap() {
-    if (typeof L === 'undefined') {
+    if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
       // Leaflet comes from a CDN, so this is a blocked or failed load rather than a setting.
-      // The number fields are still there and still work; say so instead of showing a hole.
+      // Fall back to the coordinate fields, which are otherwise not shown at all.
       document.getElementById('map').hidden = true;
+      document.getElementById('coord-fallback').hidden = false;
       document.getElementById('map-hint').textContent =
         'Die Karte konnte nicht geladen werden – Koordinaten bitte eintippen.';
       return;
     }
-    var TILE_URL = {{ (settings.map_tile_url or '')|tojson }};
     // Opens at 11 - about 40 km across, enough to see which town you are in and to judge a
-    // radius of a few kilometres. Zooming in to street level from there is up to you.
-    map = L.map('map', {maxZoom: 18}).setView([current.lat, current.lon], 11);
-    if (TILE_URL) {
-      L.tileLayer(TILE_URL, {
-        // 18, not the 12 the radar's own resolution would suggest: the basemap is what you
-        // orient by, and street names are the difference between "somewhere in Neuhausen" and
-        // "my street". The radar overlay just scales up past ~12 and goes blocky, which is
-        // honest - it is 1 km data and looks like 1 km data.
-        maxZoom: 18,
-        attribution: {{ (settings.map_tile_attribution or '')|tojson }},
-        referrerPolicy: 'strict-origin-when-cross-origin'
-      }).addTo(map);
-    } else {
-      cities();
-    }
-
-    ring = L.circle([current.lat, current.lon], {
-      radius: Math.max(current.radius_m, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.08,
-      interactive: false
-    }).addTo(map);
-    // Leaflet's default marker is a PNG it fetches from wherever the library came from -
-    // unpkg, here. `img-src` does not allow unpkg and should not: it is a third party, and a
-    // request for the icon tells it the visitor's IP on every map view. So the browser refused
-    // it and drew the broken-image placeholder with its alt text instead.
-    //
-    // Drawn inline rather than allow-listed. No request, no CSP change, and one less thing that
-    // breaks when the library is finally vendored.
-    marker = L.marker([current.lat, current.lon], {
-      draggable: true,
-      keyboard: true,
-      icon: L.divIcon({
-        className: 'pin',           // replaces leaflet-div-icon, which is a white box
-        // 20x29 is 26x38 at ~75%. The viewBox stays 0 0 26 38, so the path is untouched and
-        // the browser scales it - the only numbers that move are the rendered size and the
-        // anchor, which must stay at the bottom centre.
-        html: '<svg viewBox="0 0 26 38" width="20" height="29" role="img"'
-          + ' aria-label="Dein Standort">'
-          + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
-          + 'C14.7 35.6 26 22.1 26 13 26 5.8 20.2 0 13 0z" fill="#1f6fb2" stroke="#fff"'
-          + ' stroke-width="2"/>'
-          + '<circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>',
-        iconSize: [20, 29],
-        iconAnchor: [10, 29]        // the tip, not the middle, sits on the coordinate
-      })
-    }).addTo(map);
-    marker.on('dragend', function () {
-      var at = marker.getLatLng();
-      moveTo(at.lat, at.lng);
+    // two-kilometre radius against it.
+    map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([current.lat, current.lon], 11);
+    RainRadar.basemap(map, {
+      tileUrl: {{ (settings.map_tile_url or '')|tojson }},
+      tileAttribution: {{ (settings.map_tile_attribution or '')|tojson }}
     });
-    map.on('click', function (event) { moveTo(event.latlng.lat, event.latlng.lng); });
-    document.getElementById('radius').addEventListener('input', setRadius);
-    if (HAS_OVERLAY) { rainOverlay(); }
-  }
 
-  function cities() {
-    // Without a tile provider there is no basemap at all, so the radar and the marker would sit
-    // on an empty rectangle. A handful of places is the minimum needed to aim.
-    var places = [
-      ['Hamburg', 53.551, 9.994], ['Berlin', 52.520, 13.405], ['Hannover', 52.376, 9.732],
-      ['Dortmund', 51.514, 7.466], ['Leipzig', 51.340, 12.375], ['Koeln', 50.938, 6.960],
-      ['Dresden', 51.051, 13.739], ['Frankfurt', 50.110, 8.682], ['Nuernberg', 49.452, 11.077],
-      ['Stuttgart', 48.776, 9.183], ['Muenchen', 48.135, 11.582], ['Bremen', 53.079, 8.802],
-      ['Rostock', 54.093, 12.131], ['Freiburg', 47.999, 7.842]
-    ];
-    places.forEach(function (p) {
-      L.circleMarker([p[1], p[2]], {
-        radius: 2.5, color: '#456', weight: 1, fillOpacity: 1, interactive: false
-      }).addTo(map).bindTooltip(p[0], {permanent: true, direction: 'right', className: 'place'});
+    pick = RainRadar.picker(map, {
+      radius: current.radius_m,
+      onChange: function (lat, lon) { moveTo(lat, lon); }
     });
-  }
+    pick.set(current.lat, current.lon, true);
 
-  async function rainOverlay() {
-    // The current frame only - this page is for choosing a spot, not for watching the weather,
-    // and /map is one link away for that.
-    try {
-      var response = await fetch('/api/v1/overlays/timeline?past_hours=1');
-      if (!response.ok) { return; }
-      var data = await response.json();
-      var frames = data.frames || [];
-      var now = frames.filter(function (f) { return f.offset_minutes === 0; })[0];
-      if (!now || !data.bounds) { return; }
-      overlay = L.imageOverlay(now.url, data.bounds, {opacity: LAYER_OPACITY}).addTo(map);
-      // Under the marker, or the radar hides the thing being positioned.
-      overlay.bringToBack();
-      var when = new Date(now.valid_time);
-      document.getElementById('frame-stamp').textContent = 'Radar: '
-        + when.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'}) + ' Uhr'
-        + (data.stale ? ' (veraltet)' : '');
-    } catch (err) {
-      // No radar yet is a perfectly normal state for a fresh install, and it must not stop
-      // someone from changing their settings.
-      void err;
+    document.getElementById('radius').addEventListener('input', function () {
+      pick.setRadius(+document.getElementById('radius').value || 0);
+    });
+
+    if (HAS_OVERLAY) {
+      // The same twelve-hour window the radar page opens on, and deliberately without the range
+      // picker: this page is for choosing a spot, and the loop is here to show what the rain
+      // has been doing around it - not to be tuned.
+      document.getElementById('radar-controls').hidden = false;
+      RainRadar.timeline(map, {
+        pastHours: 12,
+        layerOpacity: LAYER_OPACITY,
+        slider: document.getElementById('slider'),
+        play: document.getElementById('play'),
+        stamp: document.getElementById('frame-stamp'),
+        behindMarkers: true,
+        onEmpty: function () { document.getElementById('radar-controls').hidden = true; }
+      });
     }
   }
 
@@ -524,8 +496,10 @@
 
     await load();
     fill();
-    setRadius();
-    drawAt(current.lat, current.lon);
+    if (pick) {
+      pick.setRadius(current.radius_m);
+      pick.set(current.lat, current.lon, true);
+    }
     panelResult.innerHTML = moved
       ? '<span class="ok">Gespeichert.</span> Der Ort hat sich geändert, deshalb beginnt die '
         + 'Bewertung neu – die nächste Warnung kommt erst, wenn es bei dir gerade trocken ist '

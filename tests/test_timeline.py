@@ -301,17 +301,28 @@ def test_metrics_report_no_cycles_distinctly(db, settings):
     assert "rainalert_cycle_age_seconds -1" in text
 
 
+def map_js(client) -> str:
+    """The behaviour the three map-bearing pages share.
+
+    It used to be inline in `/map`, and was duplicated in `/manage`; putting the picker and the
+    timeline on the signup page too would have made three copies, so it moved to one module.
+    These tests follow it rather than asserting against whichever page happened to hold it.
+    """
+    return client.get("/static/radar.js").text
+
+
 def test_the_map_borrows_no_tiles_by_default(client):
     """tile.openstreetmap.org is volunteer-run and its policy excludes applications.
 
     It blocks them, too - which is how this was found. Shipping a default that leans on it is
     taking something that was not offered, so there is no default provider at all.
     """
-    body = client.get("/map").text
+    assert "openstreetmap.org" not in client.get("/map").text
+    body = map_js(client)
     assert "openstreetmap.org" not in body
     assert "L.tileLayer" in body  # still there, for whoever configures one
     # and the map is still readable: orientation without a basemap
-    assert "graticule()" in body
+    assert "graticule" in body
     assert "Muenchen" in body
 
 
@@ -353,7 +364,7 @@ def test_tiles_identify_the_page_to_the_provider(client, monkeypatch):
     monkeypatch.setenv("MAP_TILE_URL", "https://tiles.example.com/{z}/{x}/{y}.png")
     monkeypatch.setenv("DATABASE_URL", Settings().database_url)
 
-    body = client.get("/map").text
+    body = map_js(client)
     assert "referrerPolicy: 'strict-origin-when-cross-origin'" in body
     # The origin alone, never a path or query: no token can ride out on a tile request.
     assert "'unsafe-url'" not in body
@@ -374,7 +385,7 @@ def test_playback_is_slow_enough_to_read(client):
     """
     import re
 
-    body = client.get("/map").text
+    body = map_js(client)
     step = int(re.search(r"var STEP_MS = (\d+)", body).group(1))
     assert 300 <= step <= 700, f"{step} ms per frame is outside the legible range"
 
@@ -387,7 +398,7 @@ def test_playback_is_slow_enough_to_read(client):
 
 def test_playback_cannot_stack_frames(client):
     """setInterval queues another callback when a frame paints slowly; setTimeout cannot."""
-    body = client.get("/map").text
+    body = map_js(client)
     assert "setInterval(" not in body  # the call, not the word - the comment explains why
     assert "clearTimeout(" in body  # and stop() clears the right kind of timer
 
@@ -398,14 +409,14 @@ def test_every_frame_is_labelled_with_its_date(client):
     Shown on every frame rather than only when the day changes: a label that gains a date only
     sometimes is one you have to read twice to be sure it has not.
     """
-    body = client.get("/map").text
+    body = map_js(client)
     assert "toLocaleDateString('de-DE'" in body
     assert "weekday: 'short'" in body  # 'Do.' says yesterday faster than '17.' does
 
 
 def test_long_offsets_are_shown_as_hours(client):
     """-720 min is a number you have to divide before it means anything."""
-    body = client.get("/map").text
+    body = map_js(client)
     assert "function relative(" in body
     assert "' h'" in body
     # the old unconditional minutes formatting is gone
@@ -476,8 +487,19 @@ def test_the_window_defaults_to_twelve_hours_not_the_maximum(client):
     assert s.timeline_default_hours == 12
     assert s.timeline_past_hours == 48  # still the ceiling
 
-    body = client.get("/map").text
-    assert "past_hours=12" in body
+    # The page hands the window to the shared timeline; the module builds the query from it.
+    assert "pastHours: 12" in client.get("/map").text
+    assert "past_hours=" in map_js(client)
+
+
+def test_the_picker_pages_show_the_same_window_without_offering_to_change_it(client):
+    """The signup and settings maps carry the loop so you can see what the weather is doing
+    where you are about to put the pin - not so it can be tuned. That is what /map is for."""
+    for path in ("/", "/manage"):
+        body = client.get(path).text
+        assert "pastHours: 12" in body
+        # No range picker: the choice belongs on the page built around it.
+        assert "/map?hours=" not in body
 
 
 def test_a_rubbish_hours_parameter_still_gives_you_a_map(client):

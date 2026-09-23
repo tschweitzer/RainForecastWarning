@@ -827,7 +827,13 @@ def create_app(
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index(request: Request) -> HTMLResponse:
         return TEMPLATES.TemplateResponse(
-            request, "index.html", {"settings": settings, "has_map": overlay_store is not None}
+            request,
+            "index.html",
+            {
+                "settings": settings,
+                "has_map": overlay_store is not None,
+                "layer_opacity": LAYER_OPACITY,
+            },
         )
 
     #: What the range picker at the foot of the map offers. Every one of them is inside what

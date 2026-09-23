@@ -1,6 +1,21 @@
 {% extends "base.html" %}
 {% block body %}
 <style>
+  #map { height:38vh; min-height:240px; border-radius:10px; border:1px solid var(--line); }
+  /* By id: Leaflet's stylesheet is linked further down the page, so it would win
+     against `.leaflet-container` here. */
+  #map { background: var(--bg); }
+  .controls { display:flex; gap:.75rem; align-items:center; margin-top:.6rem; }
+  .controls button { margin:0; width:3rem; }
+  .controls input[type=range] { flex:1; }
+  .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; font-size:.85rem; }
+  .stamp .kind, .stamp .day { color:var(--muted); }
+  .stamp .future { color:var(--accent); font-weight:600; }
+  /* Only ever drawn when no tile provider is configured, so the surface behind them is the
+     page's own - a fixed slate all but disappears in dark mode. */
+  .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
+           color:var(--fg); opacity:.75; font-size:.68rem; font-weight:600; }
+  .place::before { display:none; }
   .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
   .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
   .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
@@ -36,18 +51,30 @@ Vorhersage bis zwei Stunden voraus.</p>
            placeholder="du@example.org">
   </div>
 
-  <div class="row">
+  <label id="where-label">Wo soll gewarnt werden?</label>
+  <div id="map"></div>
+  <div class="controls" id="radar-controls" hidden>
+    <button type="button" id="play" aria-label="Abspielen">▶</button>
+    <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
+           disabled>
+  </div>
+  <p class="stamp" id="frame-stamp"></p>
+  <p class="hint" id="map-hint">Tippe oder klicke in die Karte, um deinen Ort zu setzen.</p>
+
+  {# Only shown when Leaflet fails to load. Asking for decimal degrees is not something to do to
+     anyone who has a map, but a blocked CDN must not mean the form cannot be filled in at all. #}
+  <div class="row" id="coord-fallback" hidden>
     <div>
       <label for="lat">Breite</label>
       {# step="any": a coordinate pasted from a mapping site has six or seven decimals, and
          step="0.0001" made the browser reject it as invalid. Precision is reduced on the server,
          where it is also enforced - it is not the visitor's job to round. #}
-      <input type="number" id="lat" name="lat" step="any" min="47" max="56" required
+      <input type="number" id="lat" name="lat" step="any" min="47" max="56"
              placeholder="50.1109">
     </div>
     <div>
       <label for="lon">Länge</label>
-      <input type="number" id="lon" name="lon" step="any" min="5" max="16" required
+      <input type="number" id="lon" name="lon" step="any" min="5" max="16"
              placeholder="8.6821">
     </div>
   </div>
@@ -98,8 +125,71 @@ zwei Stunden voraus)</p>
 <p class="already">Schon angemeldet? <a href="/manage">Einstellungen ändern</a> – Ort, Umkreis
 und ab wann gewarnt wird.</p>
 
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
+var pick = null, map = null;
+
+function setPlace(lat, lon, fromMap) {
+  // The hidden fields stay the one place the coordinates live, so the submit handler does not
+  // have to know whether they came from the map, the locate button or the fallback inputs.
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lon').value = lon.toFixed(4);
+  if (pick && !fromMap) { pick.set(lat, lon, true); }
+  var hint = document.getElementById('map-hint');
+  hint.textContent = 'Ort gesetzt. Zum Verschieben antippen oder den Pin ziehen.';
+  // Clears the error styling a failed submit may have left on it, or "Ort gesetzt" arrives in
+  // red and reads as another complaint.
+  hint.className = 'hint';
+}
+
+(function () {
+  // `has_map` says whether there is radar imagery to lay over the map. Picking a place does
+  // not need any: the basemap - tiles, or the graticule and city dots - is what you aim with.
+  // Only the loop below is conditional.
+  var hasOverlay = {{ (has_map | default(false)) | tojson }};
+  if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
+    // No Leaflet: the map area would be an empty box, so take it away and offer the fields.
+    document.getElementById('map').hidden = true;
+    document.getElementById('map-hint').hidden = true;
+    document.getElementById('where-label').textContent = 'Wo soll gewarnt werden? (Koordinaten)';
+    document.getElementById('coord-fallback').hidden = false;
+    return;
+  }
+
+  // Opens on the whole country: a new visitor has not told us anything yet, so any closer view
+  // would be a guess, and a guess here is a wrong location nobody notices.
+  map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 5);
+  RainRadar.basemap(map, {
+    tileUrl: {{ (settings.map_tile_url or '')|tojson }},
+    tileAttribution: {{ (settings.map_tile_attribution or '')|tojson }},
+    graticule: true
+  });
+
+  pick = RainRadar.picker(map, {
+    radius: {{ settings.default_radius_m | default(2000) }},
+    onChange: function (lat, lon) { setPlace(lat, lon, true); }
+  });
+
+  if (!hasOverlay) { return; }
+
+  // The same twelve-hour window the radar page opens on, and deliberately without the range
+  // picker: the loop is here to show what the weather has been doing where you are about to
+  // put the pin, not to be tuned.
+  document.getElementById('radar-controls').hidden = false;
+  RainRadar.timeline(map, {
+    pastHours: 12,
+    layerOpacity: {{ layer_opacity | default(1.0) | tojson }},
+    slider: document.getElementById('slider'),
+    play: document.getElementById('play'),
+    stamp: document.getElementById('frame-stamp'),
+    behindMarkers: true,
+    onEmpty: function () { document.getElementById('radar-controls').hidden = true; }
+  });
+})();
+
 (function () {
   var button = document.getElementById('locate');
   var status = document.getElementById('locate-status');
@@ -113,8 +203,10 @@ und ab wann gewarnt wird.</p>
       onFound: function (lat, lon) {
         // Four decimals because that is what the server keeps; showing seven would change
         // under them on submit.
-        document.getElementById('lat').value = lat.toFixed(4);
-        document.getElementById('lon').value = lon.toFixed(4);
+        setPlace(lat, lon, false);
+        // 12 rather than the opening 5: having just asked to be found, you want to see the
+        // street, and 12 is as far as 1 km radar lets the tile layer go.
+        if (map) { map.setView([lat, lon], 12); }
       }
     });
   });
@@ -150,13 +242,23 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   event.preventDefault();
   var out = document.getElementById('result');
   var channel = chosenChannel();
+
+  // The coordinate fields are no longer visible, so `required` on them would refuse the submit
+  // with a browser message pointing at a hidden field - which reads as the form being broken.
+  // Say what is missing, next to the map where it is fixed.
+  var lat = parseFloat(document.getElementById('lat').value);
+  var lon = parseFloat(document.getElementById('lon').value);
+  if (isNaN(lat) || isNaN(lon)) {
+    var hint = document.getElementById('map-hint');
+    hint.textContent = 'Bitte setze zuerst deinen Ort – tippe dazu in die Karte.';
+    hint.className = 'hint error';
+    hint.hidden = false;
+    hint.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    return;
+  }
   out.textContent = 'Wird gesendet …';
 
-  var body = {
-    channel: channel,
-    lat: parseFloat(document.getElementById('lat').value),
-    lon: parseFloat(document.getElementById('lon').value)
-  };
+  var body = { channel: channel, lat: lat, lon: lon };
   if (channel === 'email') { body.email = document.getElementById('email').value; }
 
   var response = await fetch('/api/v1/subscriptions', {

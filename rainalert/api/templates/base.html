@@ -12,6 +12,10 @@
             --warn:#ff8d82; }
   }
   * { box-sizing: border-box; }
+  /* `hidden` is only `display:none` in the user agent stylesheet, so any author rule that sets
+     a display - `.row { display:flex }` right below - beats it and the element stays on screen.
+     Caught with the coordinate fallback, which is a `.row` and was visible while marked hidden. */
+  [hidden] { display: none !important; }
   /* Without this every link fell back to the user agent's #0000EE, which is 1.93:1 against the
      dark background - WCAG wants 4.5:1 for body text - and off the palette in light mode too.
      `--accent` measures 8.5:1 dark and 5.5:1 light. Visited is set to the same colour on
