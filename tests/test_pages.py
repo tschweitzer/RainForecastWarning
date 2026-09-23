@@ -897,3 +897,61 @@ def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
             continue
         assert "/unsubscribe#t=" in message.text, name
         assert "/unsubscribe?token=" not in message.text, name
+
+
+# --- navigation -----------------------------------------------------------------------------
+
+#: Every page a reader can land on. Listed here rather than discovered, so adding a route means
+#: deciding whether it belongs in the navigation instead of finding out later that it does not
+#: have any - which is how /confirm, /unsubscribe and /privacy became dead ends.
+EVERY_PAGE = ("/", "/map", "/manage", "/confirm", "/unsubscribe", "/privacy")
+
+
+def test_every_page_carries_the_same_navigation(client, db):
+    for path in EVERY_PAGE:
+        body = client.get(path).text
+        nav = body.split('<nav class="site"')[1].split("</nav>")[0]
+        for label in ("Start", "Regenradar", "Einstellungen"):
+            assert label in nav, f"{path} is missing {label}"
+
+
+def test_the_navigation_sits_between_the_content_and_the_footer(client, db):
+    """Always in the same place, so it is found by habit rather than by looking."""
+    for path in EVERY_PAGE:
+        body = client.get(path).text
+        assert body.index('<nav class="site"') < body.index("<footer>"), path
+
+
+def test_the_page_you_are_on_is_marked_and_is_not_a_link(client, db):
+    """The set keeps its shape as you move around - the current entry is marked, not dropped."""
+    import re
+
+    for path, label in (("/", "Start"), ("/map", "Regenradar"), ("/manage", "Einstellungen")):
+        nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
+        # Whitespace-insensitive: the assertion is about which element wraps the label, not
+        # about how Jinja happened to indent it.
+        current = re.search(r'<strong aria-current="page">\s*([^<\s]+)', nav)
+        assert current and current.group(1) == label, (
+            f"{path}: marked {current and current.group(1)}"
+        )
+        assert f'href="{path}"' not in nav, f"{path} links to itself"
+
+
+def test_the_radar_is_listed_even_with_no_overlay_store(client, db):
+    """`has_map` says whether there is imagery to lay over the map, not whether the page exists:
+    it renders its graticule and its "no radar data yet" banner perfectly well without one.
+    Gating the link on it left the map missing from the navigation while standing on it."""
+    # This client has no overlay store configured, which is the case under test.
+    assert "Noch keine Radardaten" in client.get("/static/radar.js").text
+    for path in EVERY_PAGE:
+        nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
+        assert "Regenradar" in nav, path
+
+
+def test_the_old_one_off_wayfinding_links_are_gone(client, db):
+    """The front page used to be reached as "Zur Anmeldung" from the map, "Zur Startseite" from
+    the settings and nothing at all from three other pages. One name, one place."""
+    for path in EVERY_PAGE:
+        body = client.get(path).text
+        for stale in ("Zur Anmeldung", "Zur Startseite", "Regenradar ansehen"):
+            assert stale not in body, f"{path} still has its own {stale!r}"

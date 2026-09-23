@@ -434,6 +434,18 @@ def create_app(
         # Identical response either way: no account enumeration.
         return JSONResponse({"status": "check your email"}, status_code=status.HTTP_202_ACCEPTED)
 
+    def page(request: Request, template: str, extra: dict | None = None, **kwargs):
+        """Render a page with the context every page needs.
+
+        `has_map` is site-wide because the navigation uses it: there is no radar page to link to
+        when no overlay store is configured. Injected here rather than per route, so a page added
+        later cannot quietly ship without it - which is exactly how `/confirm`, `/unsubscribe`
+        and `/privacy` came to have no way out of them at all.
+        """
+        context = {"settings": settings, "has_map": overlay_store is not None}
+        context.update(extra or {})
+        return TEMPLATES.TemplateResponse(request, template, context, **kwargs)
+
     # ---- confirm --------------------------------------------------------------------------
     @app.get("/confirm", response_class=HTMLResponse, include_in_schema=False)
     def confirm_page(request: Request) -> HTMLResponse:
@@ -443,7 +455,7 @@ def create_app(
         the query string as well would leave the shape D-26 exists to remove still working, and
         still logged, for anyone who sent such a URL.
         """
-        return TEMPLATES.TemplateResponse(request, "confirm.html", {"settings": settings})
+        return page(request, "confirm.html")
 
     @app.post("/confirm", response_class=HTMLResponse, include_in_schema=False)
     def confirm_submit(
@@ -455,14 +467,13 @@ def create_app(
             # The service's own messages are English, which is right for the API and wrong on a
             # German page. Saying the same thing for expired and already-used is deliberate:
             # both are fixed by asking for a new one, and neither needs confirming to a stranger.
-            return TEMPLATES.TemplateResponse(
+            return page(
                 request,
                 "error.html",
                 {
                     "message": "Dieser Bestätigungslink gilt nicht mehr. Er läuft nach "
                     f"{settings.confirm_token_ttl_hours} Stunden ab und kann nur einmal benutzt "
                     "werden – melde dich einfach noch einmal an.",
-                    "settings": settings,
                 },
                 status_code=400,
             )
@@ -481,14 +492,13 @@ def create_app(
                 )
             )
 
-        response = TEMPLATES.TemplateResponse(
+        response = page(
             request,
             "confirmed.html",
             {
                 "api_token": result.api_token,
                 "unsubscribe_token": result.unsubscribe_token,
                 "channel": subscriber.channel.value if subscriber else Channel.EMAIL.value,
-                "settings": settings,
             },
         )
         # Confirming *is* the proof the settings page asks for. Reaching this line means a token
@@ -797,7 +807,7 @@ def create_app(
 
         No `token` parameter here either, for the reason on `confirm_page`.
         """
-        return TEMPLATES.TemplateResponse(request, "unsubscribe.html", {"settings": settings})
+        return page(request, "unsubscribe.html")
 
     @app.post("/unsubscribe", response_class=HTMLResponse, include_in_schema=False)
     def unsubscribe_submit(
@@ -806,16 +816,16 @@ def create_app(
         subscriber_id = verify_unsubscribe_token(token, settings.secret_key)
         subscriber = session.get(Subscriber, subscriber_id) if subscriber_id else None
         if subscriber is None:
-            return TEMPLATES.TemplateResponse(
+            return page(
                 request,
                 "error.html",
-                {"message": "Dieser Abmeldelink ist nicht gültig.", "settings": settings},
+                {"message": "Dieser Abmeldelink ist nicht gültig."},
                 status_code=400,
             )
         address, channel = subscriber.address, subscriber.channel.value
         svc.delete_subscriber(session, subscriber)
         deliver(deletion_receipt(settings, address, channel=channel))
-        return TEMPLATES.TemplateResponse(request, "unsubscribed.html", {"settings": settings})
+        return page(request, "unsubscribed.html")
 
     # ---- map timeline ---------------------------------------------------------------------
     @app.get("/api/v1/overlays/timeline")
@@ -834,15 +844,7 @@ def create_app(
     # ---- pages ----------------------------------------------------------------------------
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     def index(request: Request) -> HTMLResponse:
-        return TEMPLATES.TemplateResponse(
-            request,
-            "index.html",
-            {
-                "settings": settings,
-                "has_map": overlay_store is not None,
-                "layer_opacity": LAYER_OPACITY,
-            },
-        )
+        return page(request, "index.html", {"layer_opacity": LAYER_OPACITY})
 
     #: What the range picker at the foot of the map offers. Every one of them is inside what
     #: DWD retains; the page drops any that exceed the configured maximum rather than showing a
@@ -857,15 +859,8 @@ def create_app(
         the URL *fragment*, which the browser never sends, so the server cannot know at render
         time whether this request carries one. The page asks.
         """
-        return TEMPLATES.TemplateResponse(
-            request,
-            "manage.html",
-            {
-                "settings": settings,
-                "has_map": overlay_store is not None,
-                "bounds": rule_bounds(),
-                "layer_opacity": LAYER_OPACITY,
-            },
+        return page(
+            request, "manage.html", {"bounds": rule_bounds(), "layer_opacity": LAYER_OPACITY}
         )
 
     @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
@@ -884,11 +879,10 @@ def create_app(
             except ValueError:
                 window = settings.timeline_default_hours
         window = min(max(window, 1), settings.timeline_past_hours)
-        return TEMPLATES.TemplateResponse(
+        return page(
             request,
             "map.html",
             {
-                "settings": settings,
                 "window_hours": window,
                 "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
                 "layer_opacity": LAYER_OPACITY,
@@ -901,7 +895,7 @@ def create_app(
     #: only thing it can ever encode is a topic on the server we publish to.
     @app.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
     def privacy(request: Request) -> HTMLResponse:
-        return TEMPLATES.TemplateResponse(request, "privacy.html", {"settings": settings})
+        return page(request, "privacy.html")
 
     # The pages' own scripts. Served from 'self', which the CSP already allows, so the shared
     # geolocation helper does not have to be inlined into three templates and drift between them.

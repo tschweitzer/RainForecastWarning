@@ -43,8 +43,12 @@
   .consent input { margin-top:.25rem; }
   code { background:rgba(127,127,127,.14); padding:.15rem .35rem; border-radius:4px;
          word-break:break-all; font-size:.92rem; }
-  footer { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--line);
-           font-size:.82rem; color:var(--muted); }
+  /* The navigation carries the rule that used to separate the footer, so the two do not stack
+     into a pair of lines a few pixels apart. */
+  nav.site { display:flex; flex-wrap:wrap; gap:1.25rem; margin-top:2.5rem; padding-top:1rem;
+             border-top:1px solid var(--line); font-size:.95rem; }
+  nav.site strong { color:var(--muted); font-weight:600; }
+  footer { margin-top:1.1rem; font-size:.82rem; color:var(--muted); }
   .note { border-left:3px solid var(--accent); padding:.6rem .9rem; margin:1.25rem 0;
           background:rgba(127,127,127,.07); font-size:.94rem; }
   /* Used by every page that has a geolocation button, so it lives here rather than in
@@ -55,6 +59,31 @@
 </head>
 <body><main>
 {% block body %}{% endblock %}
+
+{# The same three destinations on every page, in the same place, under the same rule.
+   Before this each page invented its own: the front page was reached as "Zur Anmeldung" from
+   the map, "Zur Startseite" from the settings and "Neu anmelden" after unsubscribing, while
+   /confirm, /unsubscribe and /privacy offered nothing at all - a link that had expired left the
+   reader on a page with no way off it.
+
+   The current page stays in the list rather than being dropped, so the set never changes shape
+   as you move around; it is marked instead. Datenschutz is not here: it belongs with the
+   imprint-ish material in the footer, not among the places you go to do something.
+
+   The radar page is listed unconditionally. `has_map` says whether there is imagery to lay over
+   the map, not whether the page exists - it renders its graticule and its "no radar data yet"
+   banner perfectly well without an overlay store. Gating the link on it left the map missing
+   from the navigation while you were standing on it. #}
+<nav class="site" aria-label="Seiten">
+  {% for href, label in [('/', 'Start'), ('/map', 'Regenradar'), ('/manage', 'Einstellungen')] %}
+    {% if request.url.path == href %}
+      <strong aria-current="page">{{ label }}</strong>
+    {% else %}
+      <a href="{{ href }}">{{ label }}</a>
+    {% endif %}
+  {% endfor %}
+</nav>
+
 <footer>
   {# A Jinja global, so the credit cannot drift between the footer, the messages and the map's
      own legend. CC BY wants the modification indicated and this service reprojects, coarsens

@@ -130,17 +130,6 @@ Vorhersage bis zwei Stunden voraus.</p>
   weiteren Mails.</span>
 </div>
 
-{% if has_map %}
-<p style="margin-top:1.25rem"><a href="/map">Regenradar ansehen →</a> (12 Stunden zurück,
-zwei Stunden voraus)</p>
-{% endif %}
-
-{# For someone who is already subscribed and landed here looking for their settings. Phrased as
-   a question rather than "Einstellungen", so it cannot be mistaken for part of the signup form
-   above it - this page's job is still the form. #}
-<p class="already">Schon angemeldet? <a href="/manage">Einstellungen ändern</a> – Ort, Umkreis
-und ab wann gewarnt wird.</p>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
