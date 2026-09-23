@@ -16,10 +16,21 @@ noch einmal direkt aus der Nachricht.</p>
   // so the old shape is gone rather than deprecated.
   var field = document.getElementById('token');
   var hash = window.location.hash || '';
-  if (hash.indexOf('#t=') === 0) {
+  // `#a=` arrives from a push notification and confirms on open; `#t=` arrives by mail and waits
+  // for the click. Which one is sent is decided in the message, where the channel is known.
+  var auto = hash.indexOf('#a=') === 0;
+  if (auto || hash.indexOf('#t=') === 0) {
     field.value = decodeURIComponent(hash.slice(3));
     // Erased, and replaceState so Back does not return to a URL still carrying the token.
     history.replaceState(null, '', window.location.pathname);
+  }
+  if (field.value && auto) {
+    // The form is left on screen rather than hidden: if this submit does not fire for any
+    // reason, the button behind it is still the working way through.
+    document.getElementById('lede').textContent =
+      'Einen Moment – wir bestätigen deine Anmeldung …';
+    document.getElementById('form').submit();
+    return;
   }
   if (!field.value) {
     document.getElementById('form').hidden = true;

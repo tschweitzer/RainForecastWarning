@@ -26,7 +26,16 @@ def confirmation_message(
     it, and it reached their phone - so the message says what the tap is for rather than warning
     about a stranger.
     """
-    link = f"{settings.public_base_url.rstrip('/')}/confirm#t={token}"
+    # `#a=` means "confirm on open", `#t=` means "and wait for a click". The marker is chosen
+    # here because this is the only place that knows the channel: the token is opaque, and the
+    # server never sees the fragment, so the page cannot look the channel up for itself.
+    #
+    # Push gets `#a=`. SECURITY_REVIEW.md F-4 is what the extra click defends against, and every
+    # actor it names is a *mail* scanner - SafeLinks, Proofpoint, Gmail's link handling. None of
+    # them sits between this service and a notification on someone's phone, so on push the click
+    # protects nothing and costs a step. Mail keeps it.
+    marker = "t" if channel == "email" else "a"
+    link = f"{settings.public_base_url.rstrip('/')}/confirm#{marker}={token}"
     if channel == "email":
         text = f"""Hallo,
 

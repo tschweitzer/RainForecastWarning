@@ -48,7 +48,8 @@ def subscribe(client, email="friend@example.com", lat=FRANKFURT[0], lon=FRANKFUR
 
 def confirm_token_from(notifier) -> str:
     body = notifier.sent[-1].text
-    return body.split("/confirm#t=")[1].split()[0]
+    # `#a=` on push, `#t=` in mail (D-36) - this helper serves both.
+    return body.split("/confirm#")[1].split("=", 1)[1].split()[0]
 
 
 # --- double opt-in ---------------------------------------------------------------------------
@@ -363,7 +364,7 @@ def test_the_confirmation_link_is_tappable_and_carries_the_token_in_the_fragment
 ):
     subscribe(client)
     message = notifier.sent[-1]
-    assert "/confirm#t=" in message.text
+    assert "/confirm#" in message.text
     # Push has nowhere to put a link except the Click header, so it has to carry the same shape.
     assert (message.click_url or "").startswith("http")
     assert "#t=" in (message.click_url or "")
@@ -388,3 +389,53 @@ def test_the_pages_say_so_when_a_link_arrives_without_its_token(client, db):
         # The fragment is read by script, so the page needs the nonce to be allowed to run.
         assert "csp_nonce" not in page.text  # rendered, not left as a literal
         assert "<script nonce=" in page.text
+
+
+def test_the_push_link_confirms_on_open_and_the_mail_link_does_not(client, notifier, db):
+    """The second click exists for one reason: SECURITY_REVIEW.md F-4, whose every named actor
+    is a mail scanner - SafeLinks, Proofpoint, Gmail's link handling. None of them sits between
+    this service and a notification on a phone, so on push the click protects nothing.
+
+    The marker is chosen in the message because nothing downstream can work it out: the token is
+    opaque, and the server never receives the fragment to look the channel up.
+    """
+    client.post("/api/v1/subscriptions", json={"channel": "ntfy", "lat": 48.15, "lon": 11.55})
+    assert "/confirm#a=" in notifier.sent[-1].text
+
+    client.post(
+        "/api/v1/subscriptions", json={"email": "b@example.com", "lat": 48.15, "lon": 11.55}
+    )
+    assert "/confirm#" in notifier.sent[-1].text
+
+
+def test_a_scanner_cannot_spend_the_push_token_by_fetching_the_link(client, notifier, db):
+    """The thing that makes confirming-on-open safe is not the marker, it is the fragment.
+
+    A scanner fetches the URL; the fragment is never sent, so the server gets a bare `GET
+    /confirm` with nothing to act on, and the page it gets back needs script *and* the fragment
+    before anything happens. Asserted on the database, not on the response.
+    """
+    client.post("/api/v1/subscriptions", json={"channel": "ntfy", "lat": 48.15, "lon": 11.55})
+    token = notifier.sent[-1].text.split("/confirm#a=")[1].split()[0]
+
+    # Everything a fetch of that URL actually puts on the wire.
+    assert client.get("/confirm").status_code == 200
+    with db() as session:
+        assert session.query(Subscriber).one().confirmed_at is None, "a bare GET confirmed"
+
+    # And the token still works for the person who was sent it.
+    assert client.post("/confirm", data={"token": token}).status_code == 200
+    with db() as session:
+        assert session.query(Subscriber).one().confirmed_at is not None
+
+
+def test_the_page_confirms_on_open_only_for_the_push_marker(client, db):
+    """`#a=` submits as soon as the page has the token; `#t=` waits. Both read the same field,
+    so the branch is the only thing keeping mail behind a click."""
+    body = client.get("/confirm").text
+    assert "hash.indexOf('#a=') === 0" in body
+    assert "hash.indexOf('#t=') === 0" in body
+    auto = body.split("if (field.value && auto)")[1].split("}")[0]
+    assert ".submit()" in auto
+    # The form stays on screen: if the submit does not fire, the button behind it still works.
+    assert "hidden = true" not in auto

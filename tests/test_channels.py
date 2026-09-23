@@ -151,7 +151,7 @@ def test_the_confirmation_carries_a_tappable_link(db):
         _env_file=None,
     )
     message = confirmation_message(settings, "rainalert-abc", "tok123", channel="ntfy")
-    assert message.click_url == "https://rain.example/confirm#t=tok123"
+    assert message.click_url == "https://rain.example/confirm#a=tok123"  # push: D-36
     assert "tok123" in message.text  # and in the body, for anyone reading it as text
 
 
@@ -235,7 +235,7 @@ def test_the_whole_push_flow_end_to_end(db, settings):
 
     # tapping it means opening the Click URL, which is a GET; confirming is the POST behind it
     link = rec.requests[0].headers["Click"]
-    token = link.split("/confirm#t=")[1]
+    token = link.split("/confirm#a=")[1]
     assert client.get("/confirm").status_code == 200  # the page, changes nothing
     assert client.post("/confirm", data={"token": token}).status_code == 200
 
