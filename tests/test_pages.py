@@ -710,3 +710,32 @@ def test_lead_and_radius_are_sliders_with_a_readable_value(client):
         assert f'id="{field}-value"' in body, f"{field} has no readout"
     # Metres below a kilometre, kilometres above: "7500 m" is a number you have to divide.
     assert "toLocaleString('de-DE'" in body
+
+
+def test_the_hidden_coordinate_fields_carry_no_validation_constraints(client):
+    """A constraint on a hidden field is a form that refuses to submit and cannot say why.
+
+    The browser will not submit an out-of-range `min`/`max` input, and reports it by focusing
+    the field - which is invisible, so nothing is shown and nothing is sent. Measured: a pin
+    dropped outside Germany produced no request at all and an empty result area. `required`
+    was already gone for this reason; the range attributes were the same trap.
+    """
+    for path in ("/", "/manage"):
+        body = client.get(path).text
+        # Bounded by the locate button that follows it in both templates, so the slice cannot
+        # run past the block and pick up attributes belonging to other fields.
+        fallback = body.split('id="coord-fallback"')[1].split("<button")[0]
+        for attribute in ("required", 'min="', 'max="'):
+            assert attribute not in fallback, f"{path}: {attribute} on a hidden field"
+
+
+def test_a_place_outside_germany_is_refused_next_to_the_map(client):
+    """The map lets you drop a pin anywhere; the radar covers Germany. "Prüfe die Eingaben"
+    under the button does not tell anyone the problem is *where* they pointed."""
+    body = client.get("/").text
+    assert "außerhalb Deutschlands" in body
+    # The same bounds the server enforces, so the page cannot drift from it.
+    from rainalert.subscriptions import LAT_RANGE, LON_RANGE
+
+    assert f"lat < {LAT_RANGE[0]:.0f} || lat > {LAT_RANGE[1]:.0f}" in body
+    assert f"lon < {LON_RANGE[0]:.0f} || lon > {LON_RANGE[1]:.0f}" in body

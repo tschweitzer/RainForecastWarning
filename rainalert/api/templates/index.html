@@ -69,13 +69,11 @@ Vorhersage bis zwei Stunden voraus.</p>
       {# step="any": a coordinate pasted from a mapping site has six or seven decimals, and
          step="0.0001" made the browser reject it as invalid. Precision is reduced on the server,
          where it is also enforced - it is not the visitor's job to round. #}
-      <input type="number" id="lat" name="lat" step="any" min="47" max="56"
-             placeholder="50.1109">
+      <input type="number" id="lat" name="lat" step="any" placeholder="50.1109">
     </div>
     <div>
       <label for="lon">Länge</label>
-      <input type="number" id="lon" name="lon" step="any" min="5" max="16"
-             placeholder="8.6821">
+      <input type="number" id="lon" name="lon" step="any" placeholder="8.6821">
     </div>
   </div>
   <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
@@ -248,12 +246,22 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   // Say what is missing, next to the map where it is fixed.
   var lat = parseFloat(document.getElementById('lat').value);
   var lon = parseFloat(document.getElementById('lon').value);
-  if (isNaN(lat) || isNaN(lon)) {
+  function refuse(message) {
     var hint = document.getElementById('map-hint');
-    hint.textContent = 'Bitte setze zuerst deinen Ort – tippe dazu in die Karte.';
+    hint.textContent = message;
     hint.className = 'hint error';
     hint.hidden = false;
     hint.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  if (isNaN(lat) || isNaN(lon)) {
+    refuse('Bitte setze zuerst deinen Ort – tippe dazu in die Karte.');
+    return;
+  }
+  // The map lets you drop a pin anywhere, and the radar only covers Germany. Said here, next to
+  // the pin, rather than left to the server: "Das hat nicht geklappt, prüfe die Eingaben" under
+  // the button does not tell anyone that the problem is *where* they pointed.
+  if (lat < 47 || lat > 56 || lon < 5 || lon > 16) {
+    refuse('Dieser Ort liegt außerhalb Deutschlands – nur dort reicht das Radar des DWD.');
     return;
   }
   out.textContent = 'Wird gesendet …';
