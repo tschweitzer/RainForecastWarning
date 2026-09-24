@@ -10,6 +10,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from html.parser import HTMLParser
 
 import httpx
 import pytest
@@ -68,38 +69,95 @@ def test_the_form_pages_have_somewhere_to_show_a_failure(client, path):
     assert 'id="locate-status"' in client.get(path).text
 
 
-def test_both_maps_have_an_on_map_locate_control(client, db):
+def test_every_map_has_an_on_map_locate_control(client, db):
     """A map control belongs on the map, in the corner a map keeps its controls.
 
-    The radar page had one and the signup page had a button underneath instead; now both use
+    The radar page had one and the other two had a button underneath instead; now all three use
     the same one from the shared module, which is where the markup lives - so this follows it
     there rather than looking for it in whichever page happened to hold a copy.
     """
     module = client.get("/static/radar.js").text
     assert "locate-control" in module
     assert "Zu meinem Standort" in module
-    # Leaflet's own prescription for a custom control. It matters most on the signup map, where
+    # Leaflet's own prescription for a custom control. It matters most on the picker maps, where
     # a click that reached the map would move the subscriber's pin to wherever the button is.
     assert "L.DomEvent.disableClickPropagation" in module
 
-    for path in ("/map", "/"):
+    for path in ("/map", "/", "/manage"):
         assert "RainRadar.locateControl(" in client.get(path).text, path
 
 
-def test_the_signup_page_keeps_a_plain_locate_button_only_without_a_map(client, db):
+def enclosing_ids(markup: str, element_id: str) -> list[str]:
+    """The ids of the elements enclosing the one with this id, outermost first.
+
+    Comparing offsets in the source would not answer the question: an element written just
+    *after* a block sits at a later offset than the block's own tag, exactly like one written
+    inside it. Only the tag stack tells them apart.
+    """
+    void = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "source",
+        "track",
+        "wbr",
+    }
+
+    class Walker(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.stack: list[str | None] = []
+            self.found: list[str] | None = None
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            found_id = dict(attrs).get("id")
+            if found_id == element_id and self.found is None:
+                self.found = [i for i in self.stack if i is not None]
+            if tag not in void:
+                self.stack.append(found_id)
+
+        def handle_startendtag(self, tag, attrs) -> None:
+            self.handle_starttag(tag, attrs)
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag not in void and self.stack:
+                self.stack.pop()
+
+    walker = Walker()
+    walker.feed(markup)
+    assert walker.found is not None, f"no element with id={element_id!r}"
+    return walker.found
+
+
+@pytest.mark.parametrize("path", ["/", "/manage"])
+def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db, path):
     """With a map there is a control on it. Without one - a blocked CDN - the coordinate fields
     are all that is left, and typing decimal degrees should not be the only way through."""
-    body = client.get("/").text
+    body = client.get(path).text
     assert 'id="locate"' in body
-    # Inside the block that stays hidden until Leaflet fails, rather than beside the map: the
-    # last thing opened before the button is the fallback, not the map.
-    before = body.split('id="locate"')[0]
-    assert before.rindex('id="coord-fallback"') > before.rindex('id="map"')
+    # Inside the block that stays hidden until Leaflet fails, not merely somewhere after it:
+    # a button beside the map would show up permanently, which is what this replaced.
+    assert "coord-fallback" in enclosing_ids(body, "locate"), path
+    assert "coord-fallback" in enclosing_ids(body, "locate-status"), path
 
 
-def test_the_map_hint_does_not_tell_a_desktop_reader_to_tap(client, db):
-    body = client.get("/").text
-    assert "Klicke in die Karte, um deinen Ort zu setzen." in body
+@pytest.mark.parametrize(
+    ("path", "hint"),
+    [
+        ("/", "Klicke in die Karte, um deinen Ort zu setzen."),
+        ("/manage", "Klicke in die Karte, um den Ort zu setzen."),
+    ],
+)
+def test_the_map_hint_does_not_tell_a_desktop_reader_to_tap(client, db, path, hint):
+    body = client.get(path).text
+    assert hint in body
     assert "Tippe oder klicke" not in body
 
 

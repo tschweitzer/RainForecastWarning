@@ -33,8 +33,8 @@
            disabled>
   </div>
   <p class="stamp" id="frame-stamp"></p>
-  <p class="hint" id="map-hint">Tippe oder klicke in die Karte, um den Ort zu setzen. Der Kreis
-    zeigt den Umkreis, der ausgewertet wird.</p>
+  <p class="hint" id="map-hint">Klicke in die Karte, um den Ort zu setzen. Der Kreis zeigt den
+    Umkreis, der ausgewertet wird.</p>
 
   <form id="settings-form">
     {# Only shown when Leaflet fails to load. The map is the way to set a place - a pair of
@@ -49,9 +49,11 @@
         <label for="lon">Länge</label>
         <input type="number" id="lon" step="any">
       </div>
+      {# The map carries a locate button of its own, in the corner where a map's controls live.
+         This one only appears when there is no map to put it on. #}
+      <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+      <p id="locate-status" class="hint" role="status"></p>
     </div>
-    <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
-    <p id="locate-status" class="hint" role="status"></p>
 
     <label for="threshold">Ab wie viel Regen warnen?</label>
     {# The options are the map's own colour bands, rendered from the server so the dropdown and
@@ -406,6 +408,24 @@
       pick.setRadius(+document.getElementById('radius').value || 0);
     });
 
+    // On the map rather than under it: this is a map control, it belongs where a map keeps them,
+    // and here it sets the pin rather than merely showing where the device is.
+    map.addControl(RainRadar.locateControl({
+      onStatus: function (text, kind) {
+        if (kind === 'error' && text) {
+          var hint = document.getElementById('map-hint');
+          hint.textContent = text;
+          hint.className = 'hint error';
+        }
+      },
+      onFound: function (lat, lon) {
+        moveTo(lat, lon);
+        // 12 rather than the opening 11: having just asked to be found, you want to see the
+        // street, and 12 is as far as 1 km radar lets the tile layer go.
+        map.setView([lat, lon], 12);
+      }
+    }));
+
     if (HAS_OVERLAY) {
       // The same twelve-hour window the radar page opens on, and deliberately without the range
       // picker: this page is for choosing a spot, and the loop is here to show what the rain
@@ -423,6 +443,9 @@
     }
   }
 
+  // The button beside the coordinate fields, which are only on screen when Leaflet failed to
+  // load. With a map there is a control on it; without one, this is the only way to avoid typing
+  // decimal degrees, so it does not disappear with the map - it appears with the fields.
   var locateButton = document.getElementById('locate');
   locateButton.addEventListener('click', function () {
     RainGeo.locate({
@@ -432,12 +455,7 @@
         status.textContent = text;
         status.className = kind === 'error' ? 'hint error' : 'hint';
       },
-      onFound: function (lat, lon) {
-        moveTo(lat, lon);
-        // 12 rather than 11: having just asked to be found, you want to see the house, and 12
-        // is as far as 1 km radar lets the tile layer go.
-        if (map) { map.setView([lat, lon], 12); }
-      }
+      onFound: function (lat, lon) { moveTo(lat, lon); }
     });
   });
 
