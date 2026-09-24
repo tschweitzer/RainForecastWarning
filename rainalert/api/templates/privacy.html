@@ -17,6 +17,15 @@
 <p>Ausschließlich, um dir Regenwarnungen zu schicken. Keine Werbung, keine Weitergabe,
 kein Tracking.</p>
 
+{# The one place a stored location becomes visible again from outside the settings page, so it
+   belongs here rather than only in the design notes (DESIGN.md D-38). #}
+<h2>Der Link in einer Warnung</h2>
+<p>Tippst du eine Warnung an, öffnet sich die Karte an dem Ort, um den es ging. Der Link enthält
+deinen Standort nicht – er enthält einen signierten Verweis, den wir auflösen. Nach
+{{ settings.locate_link_ttl_minutes }} Minuten gilt er nicht mehr und dieselbe Warnung öffnet
+nur noch die normale Karte. Eine alte Benachrichtigung verrät also auch dann nichts über deinen
+Ort, wenn jemand anders sie zu sehen bekommt.</p>
+
 <h2>Wie lange</h2>
 <p>Bis du dich abmeldest. Nicht bestätigte Anmeldungen werden nach
 {{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>

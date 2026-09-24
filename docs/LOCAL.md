@@ -295,19 +295,27 @@ PUBLIC_BASE_URL=http://203.0.113.10:8000    # the VM's external IP, the port you
 Restart the server and every message carries that address:
 
 ```
-confirmation   http://203.0.113.10:8000/confirm#t=...
+confirmation   http://203.0.113.10:8000/confirm#a=...   (#t= in mail - D-36)
 settings link  http://203.0.113.10:8000/manage#t=...
 unsubscribe    http://203.0.113.10:8000/unsubscribe#t=...
-warning taps   http://203.0.113.10:8000/map
+warning taps   http://203.0.113.10:8000/map#l=...
 ```
+
+The tap target on a warning carries a **locate reference**, not coordinates: it opens the map on
+the place that warning was about and stops doing so after `LOCATE_LINK_TTL_MINUTES` (60), after
+which the same link opens the ordinary country view. That is deliberate - a warning sits in a
+notification list for good, and last week's should not still point at where its owner lives
+(DESIGN.md D-38).
 
 **This is a development setting and it is tracked as Q-10 in DESIGN.md §19.** Over plain http,
 three things are true and all of them stop being acceptable the moment anyone else subscribes:
 
-- The `confirm` and `unsubscribe` tokens travel in a **query string in clear**. Anyone on the
-  path can read them and spend them - confirm somebody else's signup, or unsubscribe them. The
-  settings link is better by luck of its shape: its token is in the fragment, which is never
-  sent over the wire at all.
+- **Every token is submitted in clear.** All four links now carry their token in the fragment
+  (D-26), which is never put on the wire at all - so the URLs themselves are safe even here.
+  What is not safe is what follows: the page reads the fragment and `POST`s the token, and over
+  plain http that body is readable by anyone on the path, who can then spend it - confirm
+  somebody else's signup, unsubscribe them, or open their settings. The fragment fixed the
+  *logging* problem (D-26, D-31); only TLS fixes this one.
 - **The session cookie drops its `Secure` flag**, deliberately - a `Secure` cookie over http is
   discarded by the browser and the login would look broken. So the session travels in clear too.
 - **The locate button cannot work**, because browsers refuse geolocation outside a secure

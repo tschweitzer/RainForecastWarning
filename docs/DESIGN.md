@@ -705,13 +705,17 @@ All endpoints return RFC 7807 problem details on error.
 | `PUT` | `/subscriptions/me/location` | api | `{lat, lon}` → `204`. The endpoint the future mobile app calls. Applies D-17. Rate limited to 1 per 60 s. |
 | `PATCH` | `/subscriptions/me` | api or session | Update `radius_m`, `threshold_mm_5min`, `lead_time_minutes`. Absent fields are left alone. Bounds in §11.2. `min_gap_minutes`, quiet hours and `timezone` are still columns only. |
 | `POST` | `/manage/link` | none | Ask for a settings link on a confirmed channel. Always `202`, known address or not. Rate limited to 5/hour. |
+| `POST` | `/manage/request` | request token | The "Einstellungen" button on a notification: hands back the durable token and we send the ordinary settings link to that channel. Always `202`, valid token or not. Capped per subscriber as well as per IP (D-32's neighbours) |
+| `POST` | `/locate` | locate token | Resolves the reference a warning's tap target carries → `{located, lat, lon, radius_m}`, so the map can open on the place that warning was about. Stops verifying after `LOCATE_LINK_TTL_MINUTES` (60); an expired reference is answered exactly like a forged one, `{"located": false}` (D-38) |
 | `POST` | `/manage/session` | manage token | Spend the one-use link, set the session cookie, return the CSRF value. |
 | `GET` | `/manage/csrf` | session | A fresh CSRF value for a session already held, so a page reload does not cost an email. |
+| `POST` | `/manage/extend` | session + CSRF | Renews the session to its full length, never past the wall the first link set (D-25). `409` once that wall is reached, which is the point of having one |
 | `POST` | `/manage/logout` | none | Clears the cookie on this device. |
 | `POST` | `/subscriptions/me/pause` / `/resume` | api | Temporarily stop alerts without deleting data. |
 | `DELETE` | `/subscriptions/me` | api | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
 | `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
 | `GET` | `/overlays/timeline?past_hours=` | none | The full slider manifest, default `TIMELINE_DEFAULT_HOURS` (12), capped at `TIMELINE_PAST_HOURS` (48), floored at 1: `{now, latest_cycle, bounds:[[s,w],[n,e]], width, height, colorscale:[…], attribution, gaps:[…], frames:[{offset_minutes, valid_time, kind:"observed"｜"forecast", source_cycle, url}]}`. `offset_minutes` is negative for the past, ordered ascending. Cache-Control 60 s. |
+| `GET` | `/map#l=…` | none (the reference is resolved by `POST /locate`) | The radar. With a warning's reference in the fragment it opens pinned on the warned location at zoom 11; without one, or once it has expired, on the country view (D-38) |
 | `GET` | `/unsubscribe#t=…` | unsubscribe token | Renders a button and changes nothing; the `POST` behind it deletes. The `List-Unsubscribe` header carries this same link (D-33). |
 | `GET` | `/healthz`, `/readyz` | none | Liveness / readiness. **Readiness = database reachable *and* its schema at the migration this code expects**, because new code on an old schema connects fine and then 500s on the first request touching what the migration added. `503` names the revision it found, the one it wanted, and the command. On Cloud Run that also means a revision deployed without its migration never takes traffic. |
 | `GET` | `/metrics` | internal | Prometheus-format metrics (§15). |
@@ -1080,6 +1084,13 @@ Alert mail:
 - Headers: `List-Unsubscribe` (the same fragment link as in the body) and
   `Auto-Submitted: auto-generated`. **Not** `List-Unsubscribe-Post`: see D-33 for why one-click
   was removed rather than fixed, and Q-13 for what bringing it back would take.
+- Tap target (push only, `click_url`): `/map#l=<locate token>` — the radar, opened on the place
+  the warning was about (D-38). The coordinates are **not** in the link: a warning stays in a
+  notification list for good, and a screenshot of one carrying decimal degrees would say more
+  than the message does, which names a time and an intensity but never a place. The reference
+  stops resolving after `LOCATE_LINK_TTL_MINUTES` and the map then opens on the country view.
+  Not put in the mail body: email ignores `click_url`, and a body is forwarded far more often
+  than a notification is.
 - Deliverability: SPF + DKIM + DMARC on the sending domain are a **hard prerequisite** for M6; without
   them these mails land in spam and the whole service is pointless.
 

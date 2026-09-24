@@ -955,3 +955,33 @@ def test_the_old_one_off_wayfinding_links_are_gone(client, db):
         body = client.get(path).text
         for stale in ("Zur Anmeldung", "Zur Startseite", "Regenradar ansehen"):
             assert stale not in body, f"{path} still has its own {stale!r}"
+
+
+def test_the_warning_link_is_explained_where_people_look_for_privacy(client, db):
+    """A stored location becoming visible again from outside the settings page is a user-facing
+    fact, not only a design note: it belongs on the page that says what happens to the data."""
+    body = client.get("/privacy").text
+    assert "Der Link in einer Warnung" in body
+    # The two things that make it acceptable, both stated rather than implied. Matched on the
+    # ASCII part: Jinja escapes the umlaut, so the literal German would never be found.
+    assert "deinen Standort nicht" in body
+    assert "60 Minuten" in body
+
+
+def test_the_api_table_lists_the_endpoints_that_exist(client, db):
+    """The table is the map of the service. Two endpoints had been added without it - which is
+    how a reader ends up believing the surface is smaller than it is."""
+    import pathlib
+    import re
+
+    design = pathlib.Path("docs/DESIGN.md").read_text()
+    table = design[design.index("| Method | Path | Auth | Purpose |") :]
+    table = table[: table.index("\n\n")]
+    routes = {
+        r.path
+        for r in client.app.routes
+        if getattr(r, "path", "").startswith("/api/v1/") and "{" not in getattr(r, "path", "")
+    }
+    for path in routes:
+        short = path.replace("/api/v1", "")
+        assert re.search(rf"`{re.escape(short)}[`#?/]", table), f"{path} is not in the API table"
