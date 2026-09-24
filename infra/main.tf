@@ -1,8 +1,17 @@
 # ---------------------------------------------------------------------------------------------
 # APIs
 # ---------------------------------------------------------------------------------------------
+# This resource cannot bootstrap itself: enabling an API is a call *to* the Service Usage API,
+# and reading which are enabled is a call to Cloud Resource Manager. On a project where those two
+# have never been used, the first apply fails with SERVICE_DISABLED on every entry here, having
+# already created the service accounts and buckets. They are listed anyway - so that `terraform
+# destroy` does not turn them off, and so the dependency is written down rather than learned from
+# a failed apply - but they must already be on. See the runbook's step 1.
 resource "google_project_service" "enabled" {
   for_each = toset([
+    "serviceusage.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "cloudbuild.googleapis.com",
     "run.googleapis.com",
     "sqladmin.googleapis.com",
     "secretmanager.googleapis.com",

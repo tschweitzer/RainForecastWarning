@@ -38,25 +38,40 @@ git clone https://github.com/tschweitzer/RainForecastWarning.git
 cd RainForecastWarning
 gcloud config set project rainchecker-195519
 
-# 1. Artifact Registry, once
+# 1. Turn the APIs on. Terraform does this itself for everything except the first two, which
+#    it cannot: enabling an API is a call to the Service Usage API, and reading which are
+#    enabled is a call to Cloud Resource Manager, so on a project that has never used them the
+#    first apply fails with SERVICE_DISABLED on every API at once. Doing the whole list here
+#    also avoids the propagation wait - a freshly enabled API can 403 for a minute or two.
+gcloud services enable \
+  serviceusage.googleapis.com cloudresourcemanager.googleapis.com \
+  cloudbuild.googleapis.com run.googleapis.com sqladmin.googleapis.com \
+  secretmanager.googleapis.com cloudscheduler.googleapis.com \
+  artifactregistry.googleapis.com monitoring.googleapis.com logging.googleapis.com
+
+# 2. Artifact Registry, once
 gcloud artifacts repositories create rainalert \
   --repository-format=docker --location=europe-west3 --project=rainchecker-195519
 
-# 2. Pin the base image by digest before the first build (SECURITY_REVIEW.md F-18). This
+# 3. Pin the base image by digest before the first build (SECURITY_REVIEW.md F-18). This
 #    prints the FROM line to paste into the Dockerfile; a tag is mutable, a digest is not.
 make pin-base
 
-# 3. Build and push. This prints the digest - deploy by digest, never by tag
+# 4. Build and push. This prints the digest - deploy by digest, never by tag
 make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 
-# 4. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
+# 5. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
 #    out: that is what makes it push-only.
 cd infra && terraform init && terraform apply
 
-# 5. Read the api_url output, set public_base_url to it, and apply again. Until this is done
-#    every link in every notification points at a placeholder.
+# 6. Read the api_url output, set public_base_url to it, and apply again. Until this is done
+#    every link in every notification points at a placeholder - and the overlays bucket's CORS
+#    rule names that placeholder as its allowed origin, so the map shows no rain either.
 terraform output api_url
 ```
+
+An apply that fails part-way is safe to re-run: Terraform is idempotent, and what it already
+created (service accounts, buckets, IAM bindings) is simply adopted on the next pass.
 
 Migrations run by hand, deliberately — an automatic migration on container start means a rollback
 can find a schema from the future:
