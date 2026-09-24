@@ -126,6 +126,36 @@ def test_every_runtime_import_is_a_declared_dependency():
     assert missing == [], f"imported but not declared in pyproject: {missing}"
 
 
+def test_the_image_installs_the_extras_its_lazy_imports_need():
+    """The exemption above is only safe if the production image installs that extra.
+
+    It did not. `pip install .` takes the dependency list and none of the extras, so the image
+    built cleanly, started cleanly, and died the moment OVERLAY_BUCKET was set - `create_app`
+    constructs GCSOverlayStore, whose lazy `from google.cloud import storage` then raises. Cloud
+    Run reports that as "the container failed the configured startup probe checks", which names
+    neither the import nor the package.
+    """
+    import tomllib
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    extras = tomllib.loads((root / "pyproject.toml").read_text())["project"].get(
+        "optional-dependencies", {}
+    )
+    assert "gcs" in extras, "the gcs extra moved; this guard needs updating with it"
+
+    install = [
+        line
+        for line in (root / "Dockerfile").read_text().splitlines()
+        if "pip install" in line and not line.lstrip().startswith("#")
+    ]
+    assert install, "no pip install in the Dockerfile"
+    # Every extra the runtime reaches for lazily has to be in the image, or it is only a crash
+    # deferred to whichever environment sets the variable that takes that code path.
+    assert any("[gcs]" in line for line in install), (
+        f"the image does not install the gcs extra: {install}"
+    )
+
+
 # --- local reset -----------------------------------------------------------------------------
 
 

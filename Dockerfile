@@ -18,8 +18,14 @@ RUN apt-get update \
 WORKDIR /app
 
 # Dependencies first, so a code change does not re-resolve the whole tree.
+#
+# With the `gcs` extra: this image is the production one, and production stores overlays and
+# archives in GCS. The adapters import google-cloud-storage lazily, so a plain `pip install .`
+# builds and starts fine right up until OVERLAY_BUCKET is set - at which point `create_app`
+# constructs GCSOverlayStore, the lazy import raises, and Cloud Run reports only that the
+# container failed its startup probe.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir '.[gcs]'
 
 COPY rainalert ./rainalert
 COPY migrations ./migrations

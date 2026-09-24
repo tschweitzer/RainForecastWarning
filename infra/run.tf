@@ -116,7 +116,18 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
-  depends_on = [google_project_service.enabled]
+  # The *versions*, not just the secrets. A container mounts `versions/latest`, which does not
+  # exist until the version resource is created - and nothing in the configuration links the two,
+  # because the env block references the secret's id. Terraform therefore created these in
+  # parallel with the versions and Cloud Run refused them: "Secret .../versions/latest was not
+  # found". An explicit edge is the fix; there is no attribute to reference instead.
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_version.api_database_url,
+    google_secret_manager_secret_version.ingest_database_url,
+    google_secret_manager_secret_version.secret_key,
+    google_secret_manager_secret_version.metrics_token,
+  ]
 }
 
 # The web UI is for anyone with the link; the API authenticates per request.
@@ -209,7 +220,18 @@ resource "google_cloud_run_v2_job" "ingest" {
     }
   }
 
-  depends_on = [google_project_service.enabled]
+  # The *versions*, not just the secrets. A container mounts `versions/latest`, which does not
+  # exist until the version resource is created - and nothing in the configuration links the two,
+  # because the env block references the secret's id. Terraform therefore created these in
+  # parallel with the versions and Cloud Run refused them: "Secret .../versions/latest was not
+  # found". An explicit edge is the fix; there is no attribute to reference instead.
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_version.api_database_url,
+    google_secret_manager_secret_version.ingest_database_url,
+    google_secret_manager_secret_version.secret_key,
+    google_secret_manager_secret_version.metrics_token,
+  ]
 }
 
 # Migrations run as their own job, invoked by hand. Running them on container start means a
@@ -253,7 +275,18 @@ resource "google_cloud_run_v2_job" "migrate" {
     }
   }
 
-  depends_on = [google_project_service.enabled]
+  # The *versions*, not just the secrets. A container mounts `versions/latest`, which does not
+  # exist until the version resource is created - and nothing in the configuration links the two,
+  # because the env block references the secret's id. Terraform therefore created these in
+  # parallel with the versions and Cloud Run refused them: "Secret .../versions/latest was not
+  # found". An explicit edge is the fix; there is no attribute to reference instead.
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_version.api_database_url,
+    google_secret_manager_secret_version.ingest_database_url,
+    google_secret_manager_secret_version.secret_key,
+    google_secret_manager_secret_version.metrics_token,
+  ]
 }
 
 resource "google_cloud_run_v2_job_iam_member" "scheduler_runs_it" {
