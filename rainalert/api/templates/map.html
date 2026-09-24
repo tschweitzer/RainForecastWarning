@@ -75,12 +75,6 @@
   .range { display:flex; flex-wrap:wrap; gap:.6rem; align-items:baseline;
            margin-top:.35rem; font-size:.85rem; color:var(--muted); }
   .range strong { color:var(--accent); }
-  /* Sits under the zoom control and borrows its look, because that is where a locate button
-     belongs on a map and Leaflet already styles .leaflet-bar to match. */
-  .locate-control a { font-size:1.1rem; line-height:30px; text-align:center; cursor:pointer;
-                      display:block; width:30px; height:30px; }
-  .locate-control a.busy { opacity:.45; cursor:progress; }
-  .locate-control a.on { color:#1f6fb2; }
 </style>
 <script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
@@ -108,50 +102,29 @@
   // "somewhere within 2 km" and "here" look the same, and only one of them is true.
   var here = null, halo = null;
 
-  var LocateControl = L.Control.extend({
-    options: {position: 'topleft'},
-    onAdd: function () {
-      var bar = L.DomUtil.create('div', 'leaflet-bar locate-control');
-      var link = L.DomUtil.create('a', '', bar);
-      link.href = '#';
-      link.title = 'Zu meinem Standort';
-      link.setAttribute('role', 'button');
-      link.setAttribute('aria-label', 'Zu meinem Standort');
-      link.innerHTML = '&#9678;';           // ◎ - a target, legible at 30 px in both themes
-      L.DomEvent.on(link, 'click', function (event) {
-        L.DomEvent.stop(event);             // or the map pans and the page jumps to the anchor
-        RainGeo.locate({
-          onBusy: function (busy) {
-            link.className = busy ? 'busy' : '';
-          },
-          onStatus: function (text, kind) {
-            // Reuses the page's existing banner rather than adding a second place to look.
-            if (kind === 'error' && text) {
-              banner.hidden = false;
-              banner.textContent = text;
-            }
-          },
-          onFound: function (lat, lon, accuracy) {
-            link.className = 'on';
-            banner.hidden = true;
-            if (here) { map.removeLayer(here); }
-            if (halo) { map.removeLayer(halo); }
-            halo = L.circle([lat, lon], {
-              radius: Math.max(accuracy || 0, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.1,
-              interactive: false
-            }).addTo(map);
-            here = L.circleMarker([lat, lon], {
-              radius: 5, color: '#fff', weight: 2, fillColor: '#1f6fb2', fillOpacity: 1
-            }).addTo(map).bindTooltip('Dein Standort');
-            map.setView([lat, lon], Math.max(map.getZoom(), 10));
-          }
-        });
-      });
-      return bar;
+  map.addControl(RainRadar.locateControl({
+    onStatus: function (text, kind) {
+      // Reuses the page's existing banner rather than adding a second place to look.
+      if (kind === 'error' && text) {
+        banner.hidden = false;
+        banner.textContent = text;
+      }
+    },
+    onFound: function (lat, lon, accuracy) {
+      banner.hidden = true;
+      if (here) { map.removeLayer(here); }
+      if (halo) { map.removeLayer(halo); }
+      halo = L.circle([lat, lon], {
+        radius: Math.max(accuracy || 0, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.1,
+        interactive: false
+      }).addTo(map);
+      here = L.circleMarker([lat, lon], {
+        radius: 5, color: '#fff', weight: 2, fillColor: '#1f6fb2', fillOpacity: 1
+      }).addTo(map).bindTooltip('Dein Standort');
+      map.setView([lat, lon], Math.max(map.getZoom(), 10));
     }
-  });
+  }));
 
-  map.addControl(new LocateControl());
 
   /* Tapped a warning? Centre on the place it was about.
      The link carries a signed reference, not the coordinates - a warning stays in a

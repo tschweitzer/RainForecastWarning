@@ -55,6 +55,12 @@
      three page styles that would drift. */
   .hint { font-size:.85rem; color:var(--muted); margin:.3rem 0 0; }
   .hint.error { color:var(--warn); }
+  /* The on-map "where am I" button, for the same reason as .hint above: both the radar and the
+     signup map draw one, and Leaflet already styles .leaflet-bar to match its own controls. */
+  .locate-control a { font-size:1.1rem; line-height:30px; text-align:center; cursor:pointer;
+                      display:block; width:30px; height:30px; }
+  .locate-control a.busy { opacity:.45; cursor:progress; }
+  .locate-control a.on { color:var(--accent); }
 </style>
 </head>
 <body><main>

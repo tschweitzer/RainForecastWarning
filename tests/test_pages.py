@@ -68,10 +68,39 @@ def test_the_form_pages_have_somewhere_to_show_a_failure(client, path):
     assert 'id="locate-status"' in client.get(path).text
 
 
-def test_the_map_page_has_an_on_map_control(client):
-    page = client.get("/map").text
-    assert "locate-control" in page
-    assert "Zu meinem Standort" in page
+def test_both_maps_have_an_on_map_locate_control(client, db):
+    """A map control belongs on the map, in the corner a map keeps its controls.
+
+    The radar page had one and the signup page had a button underneath instead; now both use
+    the same one from the shared module, which is where the markup lives - so this follows it
+    there rather than looking for it in whichever page happened to hold a copy.
+    """
+    module = client.get("/static/radar.js").text
+    assert "locate-control" in module
+    assert "Zu meinem Standort" in module
+    # Leaflet's own prescription for a custom control. It matters most on the signup map, where
+    # a click that reached the map would move the subscriber's pin to wherever the button is.
+    assert "L.DomEvent.disableClickPropagation" in module
+
+    for path in ("/map", "/"):
+        assert "RainRadar.locateControl(" in client.get(path).text, path
+
+
+def test_the_signup_page_keeps_a_plain_locate_button_only_without_a_map(client, db):
+    """With a map there is a control on it. Without one - a blocked CDN - the coordinate fields
+    are all that is left, and typing decimal degrees should not be the only way through."""
+    body = client.get("/").text
+    assert 'id="locate"' in body
+    # Inside the block that stays hidden until Leaflet fails, rather than beside the map: the
+    # last thing opened before the button is the fallback, not the map.
+    before = body.split('id="locate"')[0]
+    assert before.rindex('id="coord-fallback"') > before.rindex('id="map"')
+
+
+def test_the_map_hint_does_not_tell_a_desktop_reader_to_tap(client, db):
+    body = client.get("/").text
+    assert "Klicke in die Karte, um deinen Ort zu setzen." in body
+    assert "Tippe oder klicke" not in body
 
 
 @pytest.mark.parametrize(

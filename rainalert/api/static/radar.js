@@ -105,6 +105,45 @@
     };
   }
 
+  /* The "where am I" button, in the corner of the map where a map's own controls live.
+     What it does when it finds you is the caller's business: the radar page shows the spot,
+     the signup page moves the pin to it. Everything else - the chrome, the busy and found
+     states, stopping the click from panning the map and jumping the page to the anchor - is
+     the same on both, and was written twice before this. */
+  function locateControl(opts) {
+    var Ctrl = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd: function (map) {
+        var bar = L.DomUtil.create('div', 'leaflet-bar locate-control');
+        // What Leaflet's own docs prescribe for a custom control, and it matters more here than
+        // on the radar page: the signup map turns a click into the subscriber's location, so a
+        // click that reached it from this button would move the pin to wherever the button is.
+        L.DomEvent.disableClickPropagation(bar);
+        var link = L.DomUtil.create('a', '', bar);
+        link.href = '#';
+        link.title = 'Zu meinem Standort';
+        link.setAttribute('role', 'button');
+        link.setAttribute('aria-label', 'Zu meinem Standort');
+        link.innerHTML = '&#9678;';        // ◎ - a target, legible at 30 px in both themes
+        L.DomEvent.on(link, 'click', function (event) {
+          L.DomEvent.stop(event);          // or the map pans and the page jumps to the anchor
+          RainGeo.locate({
+            onBusy: function (busy) { link.className = busy ? 'busy' : ''; },
+            onStatus: function (text, kind) {
+              if (opts.onStatus) { opts.onStatus(text, kind); }
+            },
+            onFound: function (lat, lon, accuracy) {
+              link.className = 'on';
+              opts.onFound(lat, lon, accuracy, map);
+            }
+          });
+        });
+        return bar;
+      }
+    });
+    return new Ctrl();
+  }
+
   /* A place the reader is being shown, rather than one they are choosing.
      Same pin and same circle as the settings map, deliberately: the two pages should not
      disagree about what a pin means. Nothing here is draggable and nothing binds a map click -
@@ -301,6 +340,7 @@
   }
 
   global.RainRadar = {
-    basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon, mark: mark
+    basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon, mark: mark,
+    locateControl: locateControl
   };
 })(window);

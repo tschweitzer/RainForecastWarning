@@ -77,7 +77,7 @@ Vorhersage bis zwei Stunden voraus.</p>
            disabled>
   </div>
   <p class="stamp" id="frame-stamp"></p>
-  <p class="hint" id="map-hint">Tippe oder klicke in die Karte, um deinen Ort zu setzen.</p>
+  <p class="hint" id="map-hint">Klicke in die Karte, um deinen Ort zu setzen.</p>
 
   {# Only shown when Leaflet fails to load. Asking for decimal degrees is not something to do to
      anyone who has a map, but a blocked CDN must not mean the form cannot be filled in at all. #}
@@ -93,9 +93,11 @@ Vorhersage bis zwei Stunden voraus.</p>
       <label for="lon">Länge</label>
       <input type="number" id="lon" name="lon" step="any" placeholder="8.6821">
     </div>
+    {# The map carries a locate button of its own, in the corner where a map's controls live.
+       This one only appears when there is no map to put it on. #}
+    <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+    <p id="locate-status" class="hint" role="status"></p>
   </div>
-  <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
-  <p id="locate-status" class="hint" role="status"></p>
 
   {# Both wordings are rendered and one is hidden, rather than written by script: the consent
      text is the thing being agreed to, so it belongs where it can be read in the template and
@@ -235,6 +237,24 @@ function setPlace(lat, lon, fromMap) {
     onChange: function (lat, lon) { setPlace(lat, lon, true); }
   });
 
+  // On the map rather than under it: this is a map control, it belongs where a map keeps them,
+  // and here it sets the pin rather than merely showing where the device is.
+  map.addControl(RainRadar.locateControl({
+    onStatus: function (text, kind) {
+      if (kind === 'error' && text) {
+        var hint = document.getElementById('map-hint');
+        hint.textContent = text;
+        hint.className = 'hint error';
+      }
+    },
+    onFound: function (lat, lon) {
+      setPlace(lat, lon, false);
+      // 12 rather than the opening 5: having just asked to be found, you want to see the
+      // street, and 12 is as far as 1 km radar lets the tile layer go.
+      map.setView([lat, lon], 12);
+    }
+  }));
+
   if (!hasOverlay) { return; }
 
   // The same twelve-hour window the radar page opens on, and deliberately without the range
@@ -252,6 +272,9 @@ function setPlace(lat, lon, fromMap) {
   });
 })();
 
+// The button beside the coordinate fields, which are only on screen when Leaflet failed to
+// load. With a map there is a control on it; without one, this is the only way to avoid typing
+// decimal degrees, so it does not disappear with the map - it appears with the fields.
 (function () {
   var button = document.getElementById('locate');
   var status = document.getElementById('locate-status');
@@ -266,9 +289,6 @@ function setPlace(lat, lon, fromMap) {
         // Four decimals because that is what the server keeps; showing seven would change
         // under them on submit.
         setPlace(lat, lon, false);
-        // 12 rather than the opening 5: having just asked to be found, you want to see the
-        // street, and 12 is as far as 1 km radar lets the tile layer go.
-        if (map) { map.setView([lat, lon], 12); }
       }
     });
   });
