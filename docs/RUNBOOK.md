@@ -235,3 +235,8 @@ support mail.
   fragment, which a browser never sends (D-26) — but the paths themselves still say who asked
   for what, and the logs carry client IPs.
 - **Nothing here has spoken to the real DWD server.** Every test uses fixtures or a local replay.
+- **The database has a public endpoint.** Nothing may connect to it — `authorized_networks` is
+  empty and `ssl_mode` is `ENCRYPTED_ONLY`, so the only way in is the Cloud SQL Auth proxy
+  authenticating as a service account with `roles/cloudsql.client`. Real network isolation means
+  private IP, which needs a VPC, a private services access range and Direct VPC egress on all
+  three workloads. Worth doing before this holds anyone's data but the author's.

@@ -137,9 +137,25 @@ resource "google_sql_database_instance" "main" {
     }
 
     ip_configuration {
-      ipv4_enabled = false
-      # Cloud Run reaches this over the Cloud SQL connector, not the public internet.
-      private_network = null
+      # The instance needs *some* endpoint - an instance with neither a public IP nor a private
+      # network is refused outright ("At least one of Public IP or Private IP or PSC connectivity
+      # must be enabled").
+      #
+      # The earlier comment here claimed Cloud Run reaches the database "not over the public
+      # internet", and that was wrong: the /cloudsql socket mounted into the containers is the
+      # Cloud SQL Auth proxy, and for an instance without private IP the proxy connects to the
+      # public endpoint. Private IP instead would mean a VPC, a private services access range and
+      # Direct VPC egress on all three workloads - real isolation, and a lot more moving parts
+      # than this is worth today.
+      #
+      # So: a public endpoint that nothing may connect to. `authorized_networks` is deliberately
+      # absent, which means no address is allowed to open a connection directly; the proxy is
+      # allowed because it authenticates as a service account holding roles/cloudsql.client, not
+      # because of where it comes from. Passwords are 32 random characters that only Secret
+      # Manager ever holds.
+      ipv4_enabled = true
+      # And nothing unencrypted, so a misconfigured client fails rather than falling back.
+      ssl_mode = "ENCRYPTED_ONLY"
     }
   }
 
