@@ -10,33 +10,37 @@ organised around that.
 
 ## 1. First deploy
 
-Prerequisites, in the order they block things:
+The first deploy does not need a domain, a certificate or a mail provider. Cloud Run serves
+`https://rainalert-<hash>-ey.a.run.app` with a managed certificate, and push works without any
+of the mail machinery — so the push-only path below is the short one, and email is a later,
+separate step.
+
+That https matters beyond tidiness: the session cookie's `Secure` flag is set from
+`PUBLIC_BASE_URL` (`app.py`), and browsers refuse geolocation outside a secure context, so the
+locate control on both maps cannot work over plain http at all.
+
+### Push only — no domain, no mail provider
 
 | # | What | Why it blocks |
 |---|---|---|
 | 1 | GCP project `rainchecker-195519`, billing enabled | nothing runs without it |
-| 2 | A domain, or the Cloud Run URL as a stand-in | every emailed link is built from `PUBLIC_BASE_URL` |
-| 3 | A mail provider account (SMTP host, user, password) | no confirmations, no warnings |
-| 4 | **SPF, DKIM and DMARC on the sending domain** | without them the warnings land in spam and the service is pointless |
-| 5 | The provider's DPA accepted, and Google's CDPA | Art. 28 GDPR applies from the first friend's address, not from public launch |
-
-Then:
+| 2 | Google's CDPA accepted | Art. 28 GDPR applies from the first subscriber, not from public launch |
 
 ```sh
 # 1. Artifact Registry, once
 gcloud artifacts repositories create rainalert \
   --repository-format=docker --location=europe-west3 --project=rainchecker-195519
 
-# 2. Build and push, and note the digest - deploy by digest, never by tag
-make image-push
+# 2. Build and push. This prints the digest - deploy by digest, never by tag
+make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 
-# 3. Fill in infra/terraform.tfvars from the example, including that digest
+# 3. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
+#    out: that is what makes it push-only.
 cd infra && terraform init && terraform apply
 
-# 4. The SMTP password is the one secret Terraform does not generate
-echo -n 'the-password' | gcloud secrets versions add rainalert-smtp-password --data-file=-
-
-# 5. Point PUBLIC_BASE_URL at the api_url output and apply again
+# 4. Read the api_url output, set public_base_url to it, and apply again. Until this is done
+#    every link in every notification points at a placeholder.
+terraform output api_url
 ```
 
 Migrations run by hand, deliberately — an automatic migration on container start means a rollback
@@ -44,6 +48,28 @@ can find a schema from the future:
 
 ```sh
 gcloud run jobs execute rainalert-migrate --region europe-west3 --wait
+```
+
+Then subscribe yourself from a phone and confirm the notification arrives. Nothing is proven
+until it does.
+
+### Adding email later
+
+| # | What | Why it blocks |
+|---|---|---|
+| 1 | A mail provider account (SMTP host, user, password) | no confirmations, no warnings |
+| 2 | **SPF, DKIM and DMARC on the sending domain** | without them the warnings land in spam, which is the same as not sending them |
+| 3 | The provider's DPA accepted | Art. 28 again, for a second processor |
+
+```sh
+# The SMTP password is the one secret Terraform does not generate. The secret already exists
+# and is empty; this gives it a version.
+echo -n 'the-password' | gcloud secrets versions add rainalert-smtp-password --data-file=-
+
+# Set smtp_host (and mail_from, smtp_username) in terraform.tfvars, then apply. That one
+# variable mounts the secret, sets EMAIL_CHANNEL_ENABLED, and puts the choice back on the
+# signup page - they cannot drift apart because they are derived from it.
+cd infra && terraform apply
 ```
 
 ### Watch the first few cycles
@@ -174,7 +200,8 @@ support mail.
   producing cycles), so this is an observability gap rather than a safety one.
 - **Leaflet and OSM tiles are third-party.** Every visitor to `/map` reveals their IP to unpkg and
   to OpenStreetMap. Vendor Leaflet into `static/` and choose a tile provider before any public use.
-- **Cloud Run logs full request URLs**, including `?token=…` on confirm and unsubscribe links, for
-  30 days by default. Shorten the retention or scrub the field before treating §13's "plaintext
-  never stored" as true in production.
+- **Cloud Run logs full request URLs** for 30 days by default. No token is in one any more —
+  confirm, unsubscribe, the magic link and a warning's location reference all ride in the URL
+  fragment, which a browser never sends (D-26) — but the paths themselves still say who asked
+  for what, and the logs carry client IPs.
 - **Nothing here has spoken to the real DWD server.** Every test uses fixtures or a local replay.

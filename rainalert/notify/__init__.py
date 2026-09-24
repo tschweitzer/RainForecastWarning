@@ -19,6 +19,7 @@ from rainalert.notify.base import (
 from rainalert.notify.console import ConsoleNotifier
 from rainalert.notify.file import FileNotifier
 from rainalert.notify.ntfy import NtfyNotifier
+from rainalert.notify.routing import RoutingNotifier
 from rainalert.notify.smtp import SMTPNotifier
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ __all__ = [
     "NtfyNotifier",
     "OutboundMessage",
     "PushNotifier",
+    "RoutingNotifier",
     "SMTPNotifier",
     "build_notifier",
 ]
@@ -61,4 +63,13 @@ def build_notifier(kind: str, settings: "Settings") -> Notifier:
         )
     if kind == "push":
         return PushNotifier()
+    if kind == "auto":
+        # What production wants: both channels live, each on its own transport. The dev kinds
+        # above stay single adapters on purpose - `console` and `file` are sinks, and a local
+        # run must not start publishing to a public ntfy server because a test subscriber
+        # happened to pick push.
+        return RoutingNotifier(
+            email=build_notifier("smtp", settings),
+            ntfy=build_notifier("ntfy", settings),
+        )
     raise ValueError(f"unknown notifier {kind!r}")

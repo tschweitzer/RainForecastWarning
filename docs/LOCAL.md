@@ -230,6 +230,11 @@ NOTIFIER=ntfy
 # NTFY_SERVER=https://ntfy.sh      # the default; see the warning below
 ```
 
+`NOTIFIER=ntfy` is a single transport for everything, so **do not sign up on the email channel
+while it is set**: the address would be published as a topic name on the ntfy server, with the
+confirmation link as its contents. Either stay on push, or use `NOTIFIER=auto`, which routes each
+message by its channel and sends addresses to SMTP instead (D-39).
+
 Install the ntfy app, sign up with "Push aufs Handy" selected, and the page hands you a topic.
 
 **On the phone you want warned** - the normal case - tap **„In der ntfy-App öffnen und

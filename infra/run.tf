@@ -1,12 +1,22 @@
 locals {
+  # A deployment with push working and no mail provider yet. It decides three things together,
+  # so they cannot drift apart: whether the signup page offers email, whether the API accepts it,
+  # and whether the SMTP password secret is mounted at all.
+  email_enabled = var.smtp_host != ""
+
   # Settings both workloads share. Anything secret comes from Secret Manager instead.
   common_env = {
-    PUBLIC_BASE_URL         = var.public_base_url
-    MAIL_FROM               = var.mail_from
-    NOTIFIER                = "smtp"
+    PUBLIC_BASE_URL = var.public_base_url
+    MAIL_FROM       = var.mail_from
+    # `auto` routes each message by its channel: topics to ntfy, addresses to SMTP. Not one
+    # transport for everything - that is how a mailbox ends up published as an ntfy topic
+    # (notify/routing.py).
+    NOTIFIER                = "auto"
+    EMAIL_CHANNEL_ENABLED   = tostring(local.email_enabled)
     SMTP_HOST               = var.smtp_host
     SMTP_PORT               = tostring(var.smtp_port)
     SMTP_USERNAME           = var.smtp_username
+    NTFY_SERVER             = var.ntfy_server
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"
@@ -72,12 +82,18 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
-      env {
-        name = "SMTP_PASSWORD"
-        value_source {
-          secret_key_ref {
-            secret  = google_secret_manager_secret.this["smtp-password"].secret_id
-            version = "latest"
+      # Mounted only when there is a provider. A secret with no version fails the container at
+      # startup, so on a push-only deployment this must not be here at all - the secret itself
+      # stays, empty, so turning email on later is one `gcloud secrets versions add`.
+      dynamic "env" {
+        for_each = local.email_enabled ? [1] : []
+        content {
+          name = "SMTP_PASSWORD"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["smtp-password"].secret_id
+              version = "latest"
+            }
           }
         }
       }
@@ -177,12 +193,15 @@ resource "google_cloud_run_v2_job" "ingest" {
             }
           }
         }
-        env {
-          name = "SMTP_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.this["smtp-password"].secret_id
-              version = "latest"
+        dynamic "env" {
+          for_each = local.email_enabled ? [1] : []
+          content {
+            name = "SMTP_PASSWORD"
+            value_source {
+              secret_key_ref {
+                secret  = google_secret_manager_secret.this["smtp-password"].secret_id
+                version = "latest"
+              }
             }
           }
         }

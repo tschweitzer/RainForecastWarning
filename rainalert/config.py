@@ -143,9 +143,16 @@ class Settings(BaseSettings):
     map_tile_attribution: str = ""
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
-    #: console | file | smtp | push. SMTP reaches every provider worth using, so choosing one is
-    #: a matter of credentials rather than code.
+    #: console | file | smtp | ntfy | push | auto. SMTP reaches every provider worth using, so
+    #: choosing one is a matter of credentials rather than code. `auto` is the production shape:
+    #: each channel on its own transport (notify/routing.py). `console` and `file` stay sinks
+    #: that take everything, so a local run never publishes to a public ntfy server.
     notifier: str = "console"
+    #: Whether the email channel is offered at all. False is for a deployment that has push
+    #: working and no mail provider yet: the signup page then shows push only, and the API
+    #: refuses `channel=email` rather than accepting an address it has no way to write to.
+    #: It gates *signing up*, not delivery - anyone already subscribed by email keeps working.
+    email_channel_enabled: bool = True
     mail_outbox_dir: str | None = None
     smtp_host: str = "localhost"
     smtp_port: int = 587

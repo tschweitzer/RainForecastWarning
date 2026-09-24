@@ -109,10 +109,10 @@ class NtfyNotifier:
         # Unsubscribe is not a mail header here, but the link still belongs in the body so the
         # reader has it without going to the website.
         #
-        # Matched on the label rather than on the header's URL: the header carries the RFC 8058
-        # one-click form, which has the token in the query string, while the body carries the
-        # fragment form a person should click (D-26). Comparing the two URLs would find them
-        # different and append the logged shape to every push.
+        # Matched on the label rather than on the header's URL. The two agree today - D-33
+        # dropped one-click, so `List-Unsubscribe` carries the same fragment link the body does -
+        # but a body that already ends in "Abmelden:" is the thing not to duplicate, whatever
+        # shape the header happens to be in.
         unsubscribe = message.headers.get("List-Unsubscribe", "").strip("<>")
 
         body = message.text

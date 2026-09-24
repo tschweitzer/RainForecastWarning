@@ -377,6 +377,15 @@ def create_app(
         request: Request,
         session: Session = Depends(get_session),
     ) -> JSONResponse:
+        if payload.channel == "email" and not settings.email_channel_enabled:
+            # Refused before the rate limiter, and before anything is stored: the answer does
+            # not depend on who is asking, and an address accepted here would wait forever for
+            # a confirmation nothing can send.
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "E-Mail ist derzeit nicht verfügbar – bitte Push aufs Handy wählen.",
+            )
+
         ip = client_ip(request, settings.trusted_proxy_hops)
         within_ip = hit_and_check(
             session, f"subscribe:ip:{ip}", settings.subscribe_limit_per_hour, timedelta(hours=1)
@@ -712,7 +721,15 @@ def create_app(
         # the person, and a settings link is not the place to take that on trust.
         if subscriber is not None and subscriber.confirmed_at is not None:
             token = svc.issue_manage_token(session, settings, subscriber)
-            deliver(manage_link_message(settings, subscriber.address, token, subscriber.id))
+            deliver(
+                manage_link_message(
+                    settings,
+                    subscriber.address,
+                    token,
+                    subscriber.id,
+                    channel=subscriber.channel.value,
+                )
+            )
         return {"status": "check your messages"}
 
     @app.post("/api/v1/locate")
@@ -789,7 +806,15 @@ def create_app(
         subscriber = session.get(Subscriber, claims.subscriber_id)
         if subscriber is not None and subscriber.confirmed_at is not None:
             link = svc.issue_manage_token(session, settings, subscriber)
-            deliver(manage_link_message(settings, subscriber.address, link, subscriber.id))
+            deliver(
+                manage_link_message(
+                    settings,
+                    subscriber.address,
+                    link,
+                    subscriber.id,
+                    channel=subscriber.channel.value,
+                )
+            )
         return {"status": "check your messages"}
 
     @app.post("/api/v1/manage/session")

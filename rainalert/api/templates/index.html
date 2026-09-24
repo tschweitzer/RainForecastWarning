@@ -55,10 +55,16 @@
 Vorhersage bis zwei Stunden voraus.</p>
 
 <form id="signup">
-  <fieldset class="channel">
+  {# With no mail provider configured the API refuses `channel=email`, so the choice is not a
+     choice. The fieldset is hidden rather than dropped: the push radio stays checked and in the
+     DOM, which is what `chosenChannel()` and `syncChannelFields()` read, and the page does not
+     ask a question whose second answer would be rejected. #}
+  <fieldset class="channel" {% if not settings.email_channel_enabled %}hidden{% endif %}>
     <legend>Wie sollen wir dich warnen?</legend>
     <label><input type="radio" name="channel" value="ntfy" checked> Push aufs Handy (ntfy)</label>
+    {% if settings.email_channel_enabled %}
     <label><input type="radio" name="channel" value="email"> E-Mail</label>
+    {% endif %}
   </fieldset>
 
   {# Hidden for push, and not merely ignored: the request is refused if an address arrives on

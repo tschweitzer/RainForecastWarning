@@ -16,13 +16,15 @@ variable "public_base_url" {
 }
 
 variable "mail_from" {
-  description = "Sender address. Its domain needs SPF, DKIM and DMARC or the warnings land in spam."
+  description = "Sender address. Its domain needs SPF, DKIM and DMARC or the warnings land in spam. Unused while smtp_host is empty."
   type        = string
+  default     = "RainAlert <noreply@invalid>"
 }
 
 variable "smtp_host" {
-  description = "Any provider - they all speak SMTP."
+  description = "Any provider - they all speak SMTP. Leave empty for a push-only deployment: the signup page then offers push alone, the API refuses the email channel, and the SMTP password secret is not mounted. Setting it later turns email on."
   type        = string
+  default     = ""
 }
 
 variable "smtp_port" {
@@ -33,6 +35,12 @@ variable "smtp_port" {
 variable "smtp_username" {
   type    = string
   default = ""
+}
+
+variable "ntfy_server" {
+  description = "Where push notifications are published. The public server sees the topic name and the message text, and a rain warning names a time and an intensity - self-host it for anything past testing (DESIGN.md D-30)."
+  type        = string
+  default     = "https://ntfy.sh"
 }
 
 variable "image" {

@@ -1,18 +1,34 @@
 # Copy to terraform.tfvars and fill in. Do not commit the filled-in copy.
-project_id      = "rainchecker-195519"
-region          = "europe-west3"
+project_id = "rainchecker-195519"
+region     = "europe-west3"
 
-# Until a domain exists: apply once with a placeholder, then set this to the api_url output
-# and apply again. Every emailed link is built from it.
+# Cloud Run serves https on its own generated hostname with a managed certificate, so this needs
+# no domain and no certificate work. Apply once with a placeholder, read the api_url output, set
+# it here and apply again. Every link in every message is built from it - and https is not
+# cosmetic: the session cookie only gets its Secure flag when this starts with https, and
+# browsers refuse geolocation outside a secure context, so the "use my location" control on the
+# maps cannot work until it does.
 public_base_url = "https://rainalert-XXXXXXXX-ey.a.run.app"
 
-# The sending domain needs SPF, DKIM and DMARC before any of this is worth doing.
-mail_from     = "RainAlert <noreply@example.org>"
-smtp_host     = "smtp-relay.brevo.com"
-smtp_port     = 587
-smtp_username = "your-smtp-login"
-
-# By digest, not by tag. `make image-digest` prints it after a build.
+# By digest, not by tag. `make image-push REGION=... PROJECT=...` prints it after the build.
 image = "europe-west3-docker.pkg.dev/rainchecker-195519/rainalert/rainalert@sha256:..."
 
 alert_email = "you@example.org"
+
+# --- Email: leave this out entirely for a push-only deployment -------------------------------
+# With smtp_host empty (the default) the signup page offers push only, the API refuses the email
+# channel rather than accepting an address it cannot write to, and the SMTP password secret is
+# not mounted. Nothing else changes, and turning email on later is this variable plus the
+# secret version.
+#
+# The sending domain needs SPF, DKIM and DMARC before any of this is worth doing - without them
+# the warnings land in spam, which is the same as not sending them.
+# smtp_host     = "smtp-relay.brevo.com"
+# smtp_port     = 587
+# smtp_username = "your-smtp-login"
+# mail_from     = "RainAlert <noreply@example.org>"
+
+# --- Push ------------------------------------------------------------------------------------
+# The public server sees every topic name and every message body. Fine for a first test, worth
+# self-hosting before anyone but you relies on it.
+# ntfy_server = "https://ntfy.sh"

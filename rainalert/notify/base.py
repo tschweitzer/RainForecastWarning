@@ -41,6 +41,12 @@ class OutboundMessage:
     to: str
     subject: str
     text: str
+    #: Which kind of address ``to`` is, matching the subscriber's stored ``Channel``. Not a
+    #: preference and not decoration: it is what lets one process hold both transports without
+    #: an address ever reaching the wrong one. An ntfy topic is a path segment on a public
+    #: server, so a mailbox delivered there would publish the address *as a topic name* and its
+    #: confirmation link as that topic's contents.
+    channel: str = "email"
     html: str | None = None
     #: Extra headers. One-click unsubscribe (RFC 8058) lives here.
     headers: dict[str, str] = field(default_factory=dict)

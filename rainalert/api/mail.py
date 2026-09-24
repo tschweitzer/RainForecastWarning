@@ -66,6 +66,7 @@ nichts gespeichert und es kommt nichts weiter.
 """
     return OutboundMessage(
         to=to,
+        channel=channel,
         subject="Regenwarnung bestaetigen",
         text=text,
         # Push has nowhere to put a link except here. Email ignores it and uses the body.
@@ -151,6 +152,8 @@ Falls dein Client keine Knoepfe anzeigt, geht es auch hierueber:
 """
     return OutboundMessage(
         to=to,
+        # Push only, as the docstring says - the buttons are the whole message.
+        channel="ntfy",
         subject="Regenwarnung ist aktiv",
         text=text,
         actions=(settings_action(settings, token),),
@@ -158,7 +161,9 @@ Falls dein Client keine Knoepfe anzeigt, geht es auch hierueber:
     )
 
 
-def manage_link_message(settings: Settings, to: str, token: str, subscriber_id) -> OutboundMessage:
+def manage_link_message(
+    settings: Settings, to: str, token: str, subscriber_id, *, channel: str = "email"
+) -> OutboundMessage:
     """The magic link to the settings page.
 
     The token rides in the URL **fragment**, not the query string, and that is the whole point of
@@ -183,6 +188,7 @@ aendert sich nichts.
 """
     return OutboundMessage(
         to=to,
+        channel=channel,
         subject="Regenwarnung: Einstellungen aendern",
         text=text,
         click_url=link,
@@ -208,6 +214,7 @@ Du kannst dich jederzeit neu anmelden:
 """
     return OutboundMessage(
         to=to,
+        channel=channel,
         subject="Regenwarnung geloescht",
         text=text,
         headers={"From": settings.mail_from, "Auto-Submitted": "auto-generated"},
@@ -280,6 +287,7 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
 
     return OutboundMessage(
         to=subscriber.address,
+        channel=str(subscriber.channel),
         subject=f"Regen in etwa {lead} Minuten",
         text=text,
         # On push this is where the reader lands when they tap the warning. The map, so the
