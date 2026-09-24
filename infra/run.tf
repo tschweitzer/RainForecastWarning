@@ -31,6 +31,14 @@ resource "google_cloud_run_v2_service" "api" {
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
 
+  # The provider defaults this to true, which blocks Terraform from ever replacing this. That
+  # guard is for resources holding something a re-create would lose; a Cloud Run service or job
+  # holds nothing - the image is in Artifact Registry, the configuration is this file, and the
+  # data is in Cloud SQL and GCS, which keep their own protection. What it does here is strand a
+  # failed deploy: a resource whose creation failed is tainted, the next apply must destroy it to
+  # try again, and deletion_protection refuses.
+  deletion_protection = false
+
   template {
     service_account = google_service_account.api.email
     # See var.api_max_instances - this is a security control.
@@ -142,6 +150,14 @@ resource "google_cloud_run_v2_job" "ingest" {
   name     = "rainalert-ingest"
   location = var.region
 
+  # The provider defaults this to true, which blocks Terraform from ever replacing this. That
+  # guard is for resources holding something a re-create would lose; a Cloud Run service or job
+  # holds nothing - the image is in Artifact Registry, the configuration is this file, and the
+  # data is in Cloud SQL and GCS, which keep their own protection. What it does here is strand a
+  # failed deploy: a resource whose creation failed is tainted, the next apply must destroy it to
+  # try again, and deletion_protection refuses.
+  deletion_protection = false
+
   template {
     # Exactly one task at a time. Combined with the advisory lock and the unique nominal_time,
     # a retried execution cannot double-process a cycle.
@@ -239,6 +255,14 @@ resource "google_cloud_run_v2_job" "ingest" {
 resource "google_cloud_run_v2_job" "migrate" {
   name     = "rainalert-migrate"
   location = var.region
+
+  # The provider defaults this to true, which blocks Terraform from ever replacing this. That
+  # guard is for resources holding something a re-create would lose; a Cloud Run service or job
+  # holds nothing - the image is in Artifact Registry, the configuration is this file, and the
+  # data is in Cloud SQL and GCS, which keep their own protection. What it does here is strand a
+  # failed deploy: a resource whose creation failed is tainted, the next apply must destroy it to
+  # try again, and deletion_protection refuses.
+  deletion_protection = false
 
   template {
     template {
