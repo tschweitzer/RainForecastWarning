@@ -26,19 +26,34 @@ locate control on both maps cannot work over plain http at all.
 | 1 | GCP project `rainchecker-195519`, billing enabled | nothing runs without it |
 | 2 | Google's CDPA accepted | Art. 28 GDPR applies from the first subscriber, not from public launch |
 
+Cloud Shell is enough for all of it — the image is built by Cloud Build, not locally, so nothing
+here needs Docker on your machine.
+
 ```sh
+# 0. Get the code there, and tell gcloud which project it is working on. Both are easy to skip
+#    and both make the next command fail: `make image-push` needs a Makefile to be in, and
+#    `gcloud builds submit` needs a project. Clone it - do not upload a zip - because the image
+#    is tagged with `git rev-parse --short HEAD`.
+git clone https://github.com/tschweitzer/RainForecastWarning.git
+cd RainForecastWarning
+gcloud config set project rainchecker-195519
+
 # 1. Artifact Registry, once
 gcloud artifacts repositories create rainalert \
   --repository-format=docker --location=europe-west3 --project=rainchecker-195519
 
-# 2. Build and push. This prints the digest - deploy by digest, never by tag
+# 2. Pin the base image by digest before the first build (SECURITY_REVIEW.md F-18). This
+#    prints the FROM line to paste into the Dockerfile; a tag is mutable, a digest is not.
+make pin-base
+
+# 3. Build and push. This prints the digest - deploy by digest, never by tag
 make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 
-# 3. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
+# 4. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
 #    out: that is what makes it push-only.
 cd infra && terraform init && terraform apply
 
-# 4. Read the api_url output, set public_base_url to it, and apply again. Until this is done
+# 5. Read the api_url output, set public_base_url to it, and apply again. Until this is done
 #    every link in every notification points at a placeholder.
 terraform output api_url
 ```
