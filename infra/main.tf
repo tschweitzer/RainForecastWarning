@@ -119,6 +119,12 @@ resource "google_sql_database_instance" "main" {
   region           = var.region
 
   settings {
+    # Pinned, not left to the default: Cloud SQL now creates new instances as ENTERPRISE_PLUS,
+    # whose tier list is the db-perf-optimized-N-* machines - none of which is a shared core, and
+    # the cheapest of which costs several times this whole stack. The shared-core tiers only
+    # exist in ENTERPRISE. Changing this later replaces the instance, so it is set explicitly
+    # rather than inherited from whatever the API defaults to next.
+    edition           = "ENTERPRISE"
     tier              = "db-f1-micro"
     availability_type = "ZONAL"
     disk_size         = 10
