@@ -17,6 +17,8 @@ locals {
     SMTP_PORT               = tostring(var.smtp_port)
     SMTP_USERNAME           = var.smtp_username
     NTFY_SERVER             = var.ntfy_server
+    MAP_TILE_URL            = var.map_tile_url
+    MAP_TILE_ATTRIBUTION    = var.map_tile_attribution
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"

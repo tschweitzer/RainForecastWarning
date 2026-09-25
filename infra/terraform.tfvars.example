@@ -36,6 +36,13 @@ alert_email = "you@example.org"
 # smtp_username = "your-smtp-login"
 # mail_from     = "RainAlert <noreply@example.org>"
 
+# --- Basemap ---------------------------------------------------------------------------------
+# With this empty the map draws the radar over a graticule and a few cities. That is the designed
+# no-provider state, not a broken map (DESIGN.md §2). tile.openstreetmap.org is not an option:
+# it is volunteer-run, its usage policy excludes applications, and it blocks them.
+# map_tile_url         = "https://tiles.example.com/{z}/{x}/{y}.png?key=..."
+# map_tile_attribution = "© ... contributors"
+
 # --- Push ------------------------------------------------------------------------------------
 # The public server sees every topic name and every message body. Fine for a first test, worth
 # self-hosting before anyone but you relies on it.

@@ -58,6 +58,18 @@ variable "ntfy_server" {
   default     = "https://ntfy.sh"
 }
 
+variable "map_tile_url" {
+  description = "Basemap tile template, e.g. https://tiles.example.com/{z}/{x}/{y}.png?key=... Empty by default and deliberately so (DESIGN.md §2): the obvious choice, tile.openstreetmap.org, is volunteer-run, its usage policy excludes applications, and it blocks them. With nothing set the map draws the radar over a graticule and a few cities, which is enough to read a rain field and costs nobody anything."
+  type        = string
+  default     = ""
+}
+
+variable "map_tile_attribution" {
+  description = "Required by every provider worth using, and by their licence. Shown in the map's corner."
+  type        = string
+  default     = ""
+}
+
 variable "image" {
   description = "Container image, by digest. A tag is mutable; a digest is what makes a rollback mean something."
   type        = string
