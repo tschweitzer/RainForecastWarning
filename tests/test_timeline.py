@@ -326,7 +326,7 @@ def test_the_map_borrows_no_tiles_by_default(client):
     assert "Muenchen" in body
 
 
-def test_csp_allows_only_the_configured_tile_origin(client):
+def test_csp_allows_only_the_configured_image_origin(client):
     """The policy follows the provider in use, so it can never be wider than the provider."""
     policy = client.get("/map").headers["Content-Security-Policy"]
     img = next(d for d in policy.split(";") if d.strip().startswith("img-src"))
@@ -334,22 +334,55 @@ def test_csp_allows_only_the_configured_tile_origin(client):
     assert "https:" not in img.replace("https://", "")  # no blanket https: source
 
 
-def test_tile_origin_never_widens_past_the_provider():
-    from rainalert.api.app import tile_origin
+def test_the_csp_allows_the_bucket_the_overlays_are_actually_served_from(db):
+    """The one that was missing, and it cost a whole deploy to find.
 
-    assert tile_origin("") == ""
+    In production the overlays are PNGs on a GCS bucket - a different origin from the page. The
+    policy named only the tile provider, so `img-src 'self' data:` blocked every overlay: the
+    map drew an empty frame, then nothing, while the ingest job stored cycles and the timeline
+    served a perfectly good manifest. Local development could never show it, because
+    LocalOverlayStore serves overlays from this app, which *is* 'self'.
+    """
+    from fastapi.testclient import TestClient
+
+    from rainalert.api.app import create_app
+    from rainalert.config import Settings
+    from rainalert.notify import ConsoleNotifier
+
+    bucket = "https://storage.googleapis.com/rainalert-overlays"
+    settings = Settings(
+        database_url="postgresql+psycopg://unused",
+        public_base_url="https://rain.example.invalid",
+        secret_key="test-secret",
+        overlay_public_base_url=bucket,
+        _env_file=None,
+    )
+    client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
+
+    policy = client.get("/map").headers["Content-Security-Policy"]
+    img = next(d for d in policy.split(";") if d.strip().startswith("img-src"))
+    assert "https://storage.googleapis.com" in img, img
+    # Still the origin only - a policy that allowed the whole of storage.googleapis.com's
+    # parent, or a blanket https:, would defeat the point of deriving it.
+    assert "*" not in img
+
+
+def test_image_origin_never_widens_past_the_provider():
+    from rainalert.api.app import image_origin
+
+    assert image_origin("") == ""
     assert (
-        tile_origin("https://tiles.example.com/{z}/{x}/{y}.png?key=k")
+        image_origin("https://tiles.example.com/{z}/{x}/{y}.png?key=k")
         == "https://tiles.example.com"
     )
     assert (
-        tile_origin("https://{s}.tiles.example.com/{z}/{x}/{y}.png")
+        image_origin("https://{s}.tiles.example.com/{z}/{x}/{y}.png")
         == "https://*.tiles.example.com"
     )
     # Nothing that is not an http(s) origin may reach the policy.
-    assert tile_origin("javascript:alert(1)") == ""
-    assert tile_origin("data:image/png;base64,AAAA") == ""
-    assert tile_origin("not a url") == ""
+    assert image_origin("javascript:alert(1)") == ""
+    assert image_origin("data:image/png;base64,AAAA") == ""
+    assert image_origin("not a url") == ""
 
 
 def test_tiles_identify_the_page_to_the_provider(client, monkeypatch):

@@ -213,6 +213,13 @@ than sent** — a late rain warning is worse than none. Look for `expired` in th
 
 ### The map is empty or frozen
 
+An empty frame that disappears on reload, with the timeline serving frames and the ingest job
+storing cycles, is the Content-Security-Policy blocking the overlay PNGs. `img-src` is derived
+from what is configured, and it has to name the overlay bucket as well as the tile provider -
+the browser console says so plainly. Local development cannot reproduce it: `LocalOverlayStore`
+serves overlays from the app itself, which is already `'self'`.
+
+
 The alerting path and the map path are independent: the map can be broken while warnings still go
 out, and that is the better failure of the two. Check that overlays are being written
 (`gsutil ls gs://…-rainalert-overlays/obs/ | tail`) and that the manifest reports a recent

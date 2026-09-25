@@ -91,16 +91,17 @@ MANAGE_COOKIE = "rainalert_manage"
 CSRF_HEADER = "X-Rain-CSRF"
 
 
-def tile_origin(tile_url: str) -> str:
-    """The one origin img-src should allow for basemap tiles, or nothing.
+def image_origin(url: str) -> str:
+    """The one origin img-src should allow for a configured image source, or nothing.
 
-    Derived from the configured template rather than hard-coded, so the policy can never be
-    broader than the provider actually in use - and is empty when there is no provider, which is
-    the default. A tile server sees every pan and zoom, so this is worth keeping narrow.
+    Used for both the basemap tiles and the radar overlays. Derived from the configured URL
+    rather than hard-coded, so the policy can never be broader than what is actually in use -
+    and is empty when nothing is configured, which is the default for tiles. A tile server sees
+    every pan and zoom, so this is worth keeping narrow.
     """
-    if not tile_url:
+    if not url:
         return ""
-    parsed = urlparse(tile_url)
+    parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return ""
     host = parsed.netloc
@@ -293,7 +294,14 @@ def create_app(
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}' {MAP_SCRIPT_SRC}; "
             f"style-src 'self' 'unsafe-inline' {MAP_SCRIPT_SRC}; "
-            f"img-src 'self' data: {tile_origin(settings.map_tile_url)}; "
+            # Both configured image sources, not just the tiles. The overlays are PNGs on
+            # whatever OVERLAY_PUBLIC_BASE_URL names - a GCS bucket in production - and with
+            # only 'self' allowed the browser blocked every one of them: the map drew an empty
+            # frame and then nothing, with the radar working perfectly behind it. Local
+            # development never showed it because LocalOverlayStore serves them from this app,
+            # which *is* 'self'.
+            f"img-src 'self' data: {image_origin(settings.map_tile_url)} "
+            f"{image_origin(settings.overlay_public_base_url or '')}; "
             "connect-src 'self'; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
