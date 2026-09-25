@@ -60,9 +60,12 @@ make pin-base
 # 4. Build and push. This prints the digest - deploy by digest, never by tag
 make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 
-# 5. Fill in infra/terraform.tfvars from the example, including that digest. Leave smtp_host
-#    out: that is what makes it push-only.
-cd infra && terraform init && terraform apply
+# 5. Create infra/terraform.tfvars from the example and fill it in, including that digest.
+#    The file is gitignored and does not exist in a fresh clone - it holds the digest and, once
+#    email is on, the provider's details. Leave smtp_host out: that is what makes it push-only.
+cd infra
+cp terraform.tfvars.example terraform.tfvars   # then edit it
+terraform init && terraform apply
 
 # 6. Read the service's URL, put it in terraform.tfvars as public_base_url, and apply again.
 #    Leave that variable out for pass 5 rather than inventing a value: it is every link in
