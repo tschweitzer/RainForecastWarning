@@ -73,6 +73,35 @@ terraform output api_url
 An apply that fails part-way is safe to re-run: Terraform is idempotent, and what it already
 created (service accounts, buckets, IAM bindings) is simply adopted on the next pass.
 
+**Except for a Cloud Run resource whose creation failed.** Terraform marks it tainted, which
+plans as destroy-then-create, and the provider refuses the destroy unless `deletion_protection`
+is false *in state*. It is false in `run.tf`, but a replace never writes the new value first —
+the provider reads the flag from the prior state, where it is still true. So the apply loops on
+the same two errors no matter how many times it is run:
+
+```
+Error: cannot destroy service without setting deletion_protection=false and running `terraform apply`
+Error: cannot destroy job without setting deletion_protection=false and running `terraform apply`
+```
+
+Clear the taint instead of trying to satisfy the destroy. An update in place needs no destroy, so
+it writes `deletion_protection = false` into state on the way past and the trap does not close
+again:
+
+```sh
+terraform untaint google_cloud_run_v2_service.api
+terraform untaint google_cloud_run_v2_job.ingest
+terraform untaint google_cloud_run_v2_job.migrate
+terraform plan        # expect "update in-place", no destroy
+terraform apply
+```
+
+If the plan still shows a replace, or the apply 404s because the object was never really created,
+drop it from state and let the next apply make it: `terraform state rm <address>`. That removes
+Terraform's record, not the resource, so check with `gcloud run services list --region
+europe-west3` and `gcloud run jobs list --region europe-west3` first — if it does exist, delete it
+by hand before applying, or the create collides with it.
+
 Migrations run by hand, deliberately — an automatic migration on container start means a rollback
 can find a schema from the future:
 
