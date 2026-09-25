@@ -45,6 +45,14 @@
          word-break:break-all; font-size:.92rem; }
   /* The navigation carries the rule that used to separate the footer, so the two do not stack
      into a pair of lines a few pixels apart. */
+  .working { display:flex; align-items:center; gap:.6rem; }
+  .spinner { width:1.1em; height:1.1em; flex:none; border-radius:50%;
+             border:2px solid var(--line); border-top-color:var(--accent);
+             animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* Motion here is decoration - it says "working", and the sentence beside it says the same
+     thing. Anyone who has asked for less of it loses nothing by keeping the ring still. */
+  @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
   nav.site { display:flex; flex-wrap:wrap; gap:1.25rem; margin-top:2.5rem; padding-top:1rem;
              border-top:1px solid var(--line); font-size:.95rem; }
   nav.site strong { color:var(--muted); font-weight:600; }

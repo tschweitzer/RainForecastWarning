@@ -1,17 +1,5 @@
 {% extends "base.html" %}
 {% block body %}
-<style>
-  /* Only this page has a step that happens without the reader doing anything, so the spinner
-     lives here rather than in base.html. */
-  .working { display:flex; align-items:center; gap:.6rem; }
-  .spinner { width:1.1em; height:1.1em; flex:none; border-radius:50%;
-             border:2px solid var(--line); border-top-color:var(--accent);
-             animation:spin .8s linear infinite; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-  /* Motion here is decoration - it says "working", and the sentence beside it says the same
-     thing. Anyone who has asked for less of it loses nothing by keeping the ring still. */
-  @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
-</style>
 <h1>Anmeldung bestätigen</h1>
 <p class="lede" id="lede">Ein Klick noch, dann bist du angemeldet.</p>
 

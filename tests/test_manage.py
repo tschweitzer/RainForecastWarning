@@ -670,3 +670,69 @@ def test_a_valid_token_of_another_purpose_is_not_accepted_by_the_button(client, 
     ):
         assert client.post("/api/v1/manage/request", json={"token": wrong}).status_code == 202
         assert len(notifier.sent) == before, "a token minted for something else was accepted"
+
+
+def test_the_settings_page_starts_on_none_of_its_states(client):
+    """Four states, and the served markup commits to none of them.
+
+    The page used to render the gate as its default. That made the form the thing you looked at
+    while any other path was still working - most visibly arriving from a notification, where
+    "we sent you a link" appeared *underneath* a form asking for the topic it had just used.
+    """
+    body = client.get("/manage").text
+
+    def opening_tag(marker):
+        start = body.index(marker)
+        return body[body.rindex("<", 0, start) : body.index(">", start) + 1]
+
+    for marker in ('id="sent"', 'id="gate"', 'id="panel"'):
+        assert "hidden" in opening_tag(marker), f"{marker} must start hidden: {opening_tag(marker)}"
+    # ...and something honest is on screen until the script decides.
+    assert 'id="busy"' in body and "spinner" in body
+
+
+def test_every_exit_from_the_settings_dispatch_names_a_state(client):
+    """The old code relied on the gate being the default, so several paths just `return`ed and
+    left whatever happened to be on screen. With nothing shown by default that is a blank page,
+    so each one has to say what it wants.
+
+    Two assertions rather than one loose scan: a single "did some function get called near this
+    return" check has to accept `redeem`, and then it is only an allowlist of names. So the
+    dispatch's own returns are checked here, and `redeem` - the one exit that decides elsewhere -
+    is pinned by the test below.
+    """
+    body = client.get("/manage").text
+    start = body.index("async function start()")
+    dispatch = body[start : body.index("start();", start)]
+
+    deciders = ("show(STATES", "gateWithNote(", "requestLink(", "redeem(")
+    for chunk in dispatch.split("return;")[:-1]:
+        tail = chunk[-400:]
+        assert any(d in tail for d in deciders), tail
+
+
+def test_a_spent_settings_link_asks_for_the_form_by_name(client):
+    """`redeem` is the exit the dispatch delegates to, so it has to name a state itself. It used
+    to write its message into the gate and return - which worked only because the gate was
+    already on screen. With nothing shown by default that is a spinner forever, with the
+    explanation hidden behind it."""
+    body = client.get("/manage").text
+    redeem = body[body.index("async function redeem") : body.index("async function load")]
+    failure = redeem[redeem.index("if (!response.ok)") :]
+    assert "gateWithNote(" in failure, failure
+    assert "gilt nicht mehr" in failure
+
+
+def test_a_failed_link_request_does_not_blame_the_reader_for_our_fault(client):
+    """429 and 500 used to give the same answer, which sent somebody away for an hour over a
+    fault on our side."""
+    body = client.get("/manage").text
+    request_fn = body[body.index("async function requestLink") : body.index("async function start")]
+    assert "response.status === 429" in request_fn
+    assert "schiefgegangen" in request_fn
+
+
+def test_the_settings_page_says_why_nothing_happens_without_script(client):
+    body = client.get("/manage").text
+    assert "<noscript>" in body
+    assert "JavaScript" in body[body.index("<noscript>") : body.index("</noscript>")]

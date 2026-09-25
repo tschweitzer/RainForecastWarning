@@ -3,10 +3,30 @@
 {% block body %}
 <h1>Einstellungen</h1>
 
-{# Three states, one page: asking for a link, redeeming one from the fragment, and the form.
-   Which one is shown is decided in the browser, because the token lives in the URL fragment and
-   the server never sees it. #}
-<div id="gate">
+{# Four states, one page, and exactly one of them is on screen at a time. Which one is decided
+   in the browser, because the token lives in the URL fragment and the server never sees it.
+
+   Every state starts hidden and `show()` reveals one. The page used to render the gate as its
+   default and let each path hide it afterwards, which made the gate the thing you saw while any
+   other path was still working - most visibly on `#r=`, where the "we sent you a link" answer
+   appeared *underneath* a form asking for the topic it had just used. Worse, several paths only
+   `return`ed on failure and relied on that default still being there, so "show the gate" was
+   never written down anywhere and could not be reasoned about. #}
+<p class="working" id="busy"><span class="spinner" aria-hidden="true"></span>
+<span role="status">Einen Moment …</span></p>
+
+<div id="sent" hidden>
+  <p class="lede" id="sent-text"></p>
+  {# The way out if nothing arrives - a subscription deleted from another device still holds a
+     valid token, so the link can be sent to a channel nobody is listening on any more. Offered
+     after the fact rather than beside the answer, because for almost everyone the link is simply
+     already there. #}
+  <p class="hint"><button type="button" class="secondary" id="sent-fallback">Nichts
+  angekommen? Kanal von Hand eingeben</button></p>
+</div>
+
+<div id="gate" hidden>
+  <div id="gate-note" class="hint error" hidden></div>
   <p class="lede">Wir schicken dir einen Link auf den Kanal, mit dem du angemeldet bist.</p>
   <form id="link-form">
     <fieldset class="channel">
@@ -21,6 +41,12 @@
   </form>
   <p id="gate-result" role="status"></p>
 </div>
+
+<noscript>
+  <p class="hint error">Diese Seite braucht JavaScript: der Zugangscode steht im Link hinter dem
+  <code>#</code>, und nur der Browser selbst kann ihn lesen – an den Server wird er absichtlich
+  nie geschickt.</p>
+</noscript>
 
 <div id="panel" hidden>
   <p class="lede" id="who"></p>
@@ -262,9 +288,11 @@
     body.set('token', token);
     var response = await fetch('/api/v1/manage/session', {method: 'POST', body: body});
     if (!response.ok) {
-      gateResult.textContent = 'Dieser Link gilt nicht mehr – er läuft nach '
+      // With the gate no longer the default, this has to ask for it by name - otherwise a spent
+      // link left the reader on a spinner with the explanation hidden behind it.
+      gateWithNote('Dieser Link gilt nicht mehr – er läuft nach '
         + '{{ settings.manage_link_ttl_minutes }} Minuten ab und kann nur einmal benutzt werden. '
-        + 'Fordere einfach einen neuen an.';
+        + 'Fordere einfach einen neuen an.');
       return false;
     }
     adoptSession(await response.json());
@@ -530,6 +558,30 @@
   });
 
   // ---- what to show ------------------------------------------------------------------------
+  // One of four, never two. Naming the state at every exit is the point: the old code showed
+  // the gate by default and returned on failure, so what you ended up looking at depended on
+  // what had not happened yet rather than on anything anyone had decided.
+  var STATES = {busy: 'busy', sent: 'sent', gate: 'gate', panel: 'panel'};
+
+  function show(state) {
+    document.getElementById('busy').hidden = state !== STATES.busy;
+    document.getElementById('sent').hidden = state !== STATES.sent;
+    gate.hidden = state !== STATES.gate;
+    panel.hidden = state !== STATES.panel;
+  }
+
+  //: Shown above the form, so "request a new one" sits next to the thing that requests one.
+  function gateWithNote(text) {
+    var note = document.getElementById('gate-note');
+    note.textContent = text;
+    note.hidden = !text;
+    show(STATES.gate);
+  }
+
+  document.getElementById('sent-fallback').addEventListener('click', function () {
+    gateWithNote('');
+  });
+
   // The fallback behind the notification button, for a client that renders no buttons. Same
   // durable token, same endpoint - it just arrives via a tap on a link instead of on a button.
   // In the fragment for the same reason the magic link is: a fragment never reaches a server
@@ -540,9 +592,19 @@
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({token: token})
     });
-    gateResult.textContent = response.ok
-      ? 'Wir haben dir einen Link geschickt – schau in deine Nachrichten.'
-      : 'Gerade zu viele Anfragen. Bitte versuch es in einer Stunde noch einmal.';
+    if (response.ok) {
+      document.getElementById('sent-text').textContent =
+        'Der Link ist unterwegs – schau in deine Nachrichten. Er gilt '
+        + '{{ settings.manage_link_ttl_minutes }} Minuten und kann nur einmal benutzt werden.';
+      show(STATES.sent);
+      return;
+    }
+    // 429 and 500 used to give the same answer, which sent somebody away for an hour over a
+    // fault on our side.
+    gateWithNote(response.status === 429
+      ? 'Gerade zu viele Anfragen von dieser Verbindung. Bitte in etwa einer Stunde noch '
+        + 'einmal – am Link liegt es nicht.'
+      : 'Bei uns ist gerade etwas schiefgegangen. Du kannst den Link auch von Hand anfordern.');
   }
 
   async function start() {
@@ -565,12 +627,20 @@
       // not cost a new email. The CSRF value is deliberately not in the cookie, so it is fetched
       // back; the cookie is what authorises that, and another site cannot read the answer.
       var again = await fetch('/api/v1/manage/csrf');
-      if (!again.ok) { return; }
+      if (!again.ok) {
+        // The ordinary way in: no link, no session, so ask for one. This is the *only* path
+        // where the form is the right thing to look at.
+        gateWithNote('');
+        return;
+      }
       adoptSession(await again.json());
     }
-    if (!await load()) { return; }
-    gate.hidden = true;
-    panel.hidden = false;
+    if (!await load()) {
+      gateWithNote('Deine Einstellungen konnten gerade nicht geladen werden. Fordere am besten '
+        + 'einen neuen Link an.');
+      return;
+    }
+    show(STATES.panel);
     fill();
     buildMap();
   }
