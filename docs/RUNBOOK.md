@@ -64,10 +64,15 @@ make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 #    out: that is what makes it push-only.
 cd infra && terraform init && terraform apply
 
-# 6. Read the api_url output, set public_base_url to it, and apply again. Until this is done
-#    every link in every notification points at a placeholder - and the overlays bucket's CORS
-#    rule names that placeholder as its allowed origin, so the map shows no rain either.
+# 6. Read the service's URL, put it in terraform.tfvars as public_base_url, and apply again.
+#    Leave that variable out for pass 5 rather than inventing a value: it is every link in
+#    every message and the overlays bucket's only allowed CORS origin, so a made-up hostname
+#    is a service whose links go nowhere and whose map shows nothing, with no error anywhere.
+#    Put it in the file, not at an interactive prompt - a prompted value is not saved, so the
+#    next apply asks again and silently reconfigures the service with whatever is typed then.
 terraform output api_url
+# or, straight from the source, which also works when the output is empty:
+gcloud run services describe rainalert-api --region europe-west3 --format='value(status.url)' 
 ```
 
 An apply that fails part-way is safe to re-run: Terraform is idempotent, and what it already

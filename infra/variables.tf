@@ -11,8 +11,23 @@ variable "region" {
 }
 
 variable "public_base_url" {
-  description = "Origin every emailed link is built from. Until a domain exists, set this to the Cloud Run service URL after the first apply and re-apply."
+  description = "Origin every link in every message is built from, and the overlays bucket's allowed CORS origin. Two-pass by nature: the service has to exist before its URL is known, and it cannot reference its own uri without a dependency cycle. Leave it empty for the first apply, then set it to the api_url output and apply again."
   type        = string
+  default     = ""
+
+  validation {
+    # The example file ships a placeholder with an obvious hole in it. Pasting that unedited
+    # configures a service whose every link points at a host that does not exist and whose
+    # overlay bucket allows an origin nobody browses from - and nothing downstream complains,
+    # because it is a perfectly well-formed URL.
+    condition     = var.public_base_url == "" || can(regex("^https://[^X]+$", var.public_base_url))
+    error_message = "public_base_url still contains the XXXXXXXX placeholder. Leave it empty for the first apply, then set it to `terraform output api_url`."
+  }
+
+  validation {
+    condition     = var.public_base_url == "" || startswith(var.public_base_url, "https://")
+    error_message = "public_base_url must be https:// - the session cookie's Secure flag and the browser geolocation API are both decided by this string."
+  }
 }
 
 variable "mail_from" {

@@ -3,12 +3,20 @@ project_id = "rainchecker-195519"
 region     = "europe-west3"
 
 # Cloud Run serves https on its own generated hostname with a managed certificate, so this needs
-# no domain and no certificate work. Apply once with a placeholder, read the api_url output, set
-# it here and apply again. Every link in every message is built from it - and https is not
-# cosmetic: the session cookie only gets its Secure flag when this starts with https, and
-# browsers refuse geolocation outside a secure context, so the "use my location" control on the
-# maps cannot work until it does.
-public_base_url = "https://rainalert-XXXXXXXX-ey.a.run.app"
+# no domain and no certificate work. It is two-pass by nature - the service has to exist before
+# its URL is known, and it cannot reference its own uri without a dependency cycle:
+#
+#   1. leave this commented out and apply
+#   2. terraform output api_url
+#   3. paste it here and apply again
+#
+# Do not invent a value for pass one. Every link in every message is built from this, and it is
+# also the overlays bucket's only allowed CORS origin, so a made-up hostname is a service whose
+# links go nowhere and whose map shows nothing - with no error anywhere, because it is a
+# perfectly well-formed URL. https is not cosmetic either: the session cookie only gets its
+# Secure flag when this starts with https, and browsers refuse geolocation outside a secure
+# context, so the locate control on both maps cannot work until it does.
+# public_base_url = "https://rainalert-000000000000.europe-west3.run.app"
 
 # By digest, not by tag. `make image-push REGION=... PROJECT=...` prints it after the build.
 image = "europe-west3-docker.pkg.dev/rainchecker-195519/rainalert/rainalert@sha256:..."
