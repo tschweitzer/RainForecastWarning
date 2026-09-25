@@ -37,11 +37,24 @@ alert_email = "you@example.org"
 # mail_from     = "RainAlert <noreply@example.org>"
 
 # --- Basemap ---------------------------------------------------------------------------------
-# With this empty the map draws the radar over a graticule and a few cities. That is the designed
-# no-provider state, not a broken map (DESIGN.md §2). tile.openstreetmap.org is not an option:
-# it is volunteer-run, its usage policy excludes applications, and it blocks them.
-# map_tile_url         = "https://tiles.example.com/{z}/{x}/{y}.png?key=..."
-# map_tile_attribution = "© ... contributors"
+# With these empty the map draws the radar over a graticule and a few cities. That is the
+# designed no-provider state, not a broken map (DESIGN.md §2).
+#
+# A provider you have signed up with:
+# map_tile_url         = "https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY"
+# map_tile_attribution = "&copy; Example Maps"
+#
+# What local development uses (docs/LOCAL.md). It works, and it is NOT acceptable here:
+# OpenStreetMap's tile servers are volunteer-run and their usage policy excludes applications.
+# One browser looking at a map during development is light; a deployed service on a five-minute
+# cadence is an application, and they will block it - rightly. Shown so the shape of both
+# settings is concrete, not as something to uncomment:
+# map_tile_url         = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+# map_tile_attribution = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
+#
+# Whatever you pick, pick a MUTED style - grey "positron"/"light"/"canvas". The radar is the
+# foreground, and a basemap with saturated green landcover hides the "mäßiger Regen" band,
+# which is green too.
 
 # --- Push ------------------------------------------------------------------------------------
 # The public server sees every topic name and every message body. Fine for a first test, worth

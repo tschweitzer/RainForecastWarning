@@ -138,6 +138,18 @@ class Settings(BaseSettings):
     #: it would be taking something that was not offered. With no provider set the map draws the
     #: radar over a plain background with a graticule and a few cities for orientation, which is
     #: enough to read a rain field and costs nobody anything.
+    #:
+    #: With a provider you have signed up with:
+    #:     MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
+    #:     MAP_TILE_ATTRIBUTION=&copy; Example Maps
+    #:
+    #: Local development uses OSM's own servers (docs/LOCAL.md), which is fine for one browser
+    #: and not fine for a deployed service:
+    #:     MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
+    #:     MAP_TILE_ATTRIBUTION=&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
+    #:
+    #: Pick a muted style either way - grey "positron"/"light"/"canvas". The radar is the
+    #: foreground, and saturated green landcover hides the "mäßiger Regen" band, which is green.
     map_tile_url: str = ""
     #: Required by every provider worth using, and by their licence. Shown in the map's corner.
     map_tile_attribution: str = ""
