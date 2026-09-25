@@ -711,16 +711,42 @@ def test_every_exit_from_the_settings_dispatch_names_a_state(client):
         assert any(d in tail for d in deciders), tail
 
 
-def test_a_spent_settings_link_asks_for_the_form_by_name(client):
-    """`redeem` is the exit the dispatch delegates to, so it has to name a state itself. It used
-    to write its message into the gate and return - which worked only because the gate was
-    already on screen. With nothing shown by default that is a spinner forever, with the
-    explanation hidden behind it."""
+def test_a_spent_link_falls_through_to_a_session_this_browser_already_has(client):
+    """Opening the settings link twice in one browser is not a dead end.
+
+    The first open spends the token *and* sets the session cookie, so the second answered
+    "dieser Link gilt nicht mehr" to somebody who was signed in - and reloading that same page
+    then worked, which is the part that makes it baffling rather than merely wrong. `redeem`
+    now reports; only the dispatch decides, and only once the session has also been ruled out.
+    """
     body = client.get("/manage").text
+
     redeem = body[body.index("async function redeem") : body.index("async function load")]
-    failure = redeem[redeem.index("if (!response.ok)") :]
-    assert "gateWithNote(" in failure, failure
-    assert "gilt nicht mehr" in failure
+    assert "gateWithNote(" not in redeem, "redeem must report, not decide: " + redeem
+
+    start = body[
+        body.index("async function start()") : body.index(
+            "start();", body.index("async function start()")
+        )
+    ]
+    spent_at = start.index("spent = !await redeem(token)")
+    session_at = start.index("/api/v1/manage/csrf")
+    complaint_at = start.index("gilt nicht mehr")
+    # The session is consulted between the failed redemption and the complaint about it.
+    assert spent_at < session_at < complaint_at, start
+    # ...and the complaint is reached only when that session lookup fails.
+    assert "if (!again.ok)" in start[session_at:complaint_at], start[session_at:complaint_at]
+
+
+def test_a_spent_link_that_still_opens_says_so(client):
+    """Otherwise the second tab looks identical to the first and the earlier confusion just
+    becomes silent. Its own element, because fill() owns #panel-banner and the two would
+    overwrite each other."""
+    body = client.get("/manage").text
+    assert 'id="panel-note"' in body
+    note = body[body.index('id="panel-note"') :]
+    assert "hidden" in note[: note.index(">")]
+    assert "schon benutzt" in body
 
 
 def test_a_failed_link_request_does_not_blame_the_reader_for_our_fault(client):

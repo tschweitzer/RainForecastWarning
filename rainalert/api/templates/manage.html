@@ -50,6 +50,9 @@
 
 <div id="panel" hidden>
   <p class="lede" id="who"></p>
+  {# Why this page opened even though the link was spent. Separate from #panel-banner, which
+     fill() uses for facts about the subscription itself. #}
+  <p class="hint" id="panel-note" hidden></p>
   <div id="panel-banner" class="note" hidden></div>
 
   <div id="map" style="height:46vh;min-height:280px;border-radius:10px;border:1px solid var(--line)"></div>
@@ -287,14 +290,11 @@
     var body = new URLSearchParams();
     body.set('token', token);
     var response = await fetch('/api/v1/manage/session', {method: 'POST', body: body});
-    if (!response.ok) {
-      // With the gate no longer the default, this has to ask for it by name - otherwise a spent
-      // link left the reader on a spinner with the explanation hidden behind it.
-      gateWithNote('Dieser Link gilt nicht mehr – er läuft nach '
-        + '{{ settings.manage_link_ttl_minutes }} Minuten ab und kann nur einmal benutzt werden. '
-        + 'Fordere einfach einen neuen an.');
-      return false;
-    }
+    // Reports, does not decide. A spent link is only the end of the road if this browser has no
+    // session either - opening the same link in a second tab spends it there, and answering
+    // "dieser Link gilt nicht mehr" to somebody who is still signed in is both wrong and
+    // baffling, because reloading then works.
+    if (!response.ok) { return false; }
     adoptSession(await response.json());
     return true;
   }
@@ -616,21 +616,28 @@
       return;
     }
     var token = hash.indexOf('#t=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
+    var spent = false;
     if (token) {
       // Erased before anything else can read it, and replaceState so Back does not return to a
       // URL still carrying a spent token.
       history.replaceState(null, '', window.location.pathname);
-      if (!await redeem(token)) { return; }
+      // Not an exit. The session below may still let this through, and it usually does: opening
+      // the link a second time is what spent it, and the tab that spent it is signed in.
+      spent = !await redeem(token);
     }
     if (!csrf) {
-      // No fragment, but there may still be a live session from a moment ago - a reload should
-      // not cost a new email. The CSRF value is deliberately not in the cookie, so it is fetched
-      // back; the cookie is what authorises that, and another site cannot read the answer.
+      // No fragment, or one that was already used - but there may still be a live session from
+      // a moment ago, and a reload should not cost a new link. The CSRF value is deliberately
+      // not in the cookie, so it is fetched back; the cookie is what authorises that, and
+      // another site cannot read the answer.
       var again = await fetch('/api/v1/manage/csrf');
       if (!again.ok) {
-        // The ordinary way in: no link, no session, so ask for one. This is the *only* path
-        // where the form is the right thing to look at.
-        gateWithNote('');
+        // Now a spent link really is the end of the road, and only now is it worth saying so.
+        gateWithNote(spent
+          ? 'Dieser Link gilt nicht mehr – er läuft nach '
+            + '{{ settings.manage_link_ttl_minutes }} Minuten ab und kann nur einmal benutzt '
+            + 'werden. Fordere einfach einen neuen an.'
+          : '');
         return;
       }
       adoptSession(await again.json());
@@ -642,6 +649,14 @@
     }
     show(STATES.panel);
     fill();
+    if (spent) {
+      // Set after fill(), which owns #panel-banner - and in an element of its own, so neither
+      // can silently overwrite the other.
+      var note = document.getElementById('panel-note');
+      note.textContent = 'Dieser Link war schon benutzt – in diesem Browser bist du aber noch '
+        + 'angemeldet.';
+      note.hidden = false;
+    }
     buildMap();
   }
 
