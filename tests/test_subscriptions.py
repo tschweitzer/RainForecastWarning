@@ -431,11 +431,21 @@ def test_a_scanner_cannot_spend_the_push_token_by_fetching_the_link(client, noti
 
 def test_the_page_confirms_on_open_only_for_the_push_marker(client, db):
     """`#a=` submits as soon as the page has the token; `#t=` waits. Both read the same field,
-    so the branch is the only thing keeping mail behind a click."""
+    so the branch is the only thing keeping mail behind a click (F-4).
+
+    Asserted as an ordering rather than by slicing the script's source: the first version of
+    this test split on `if (field.value && auto)` and broke the moment that line was rewritten,
+    which says nothing about whether mail still waits.
+    """
     body = client.get("/confirm").text
     assert "hash.indexOf('#a=') === 0" in body
     assert "hash.indexOf('#t=') === 0" in body
-    auto = body.split("if (field.value && auto)")[1].split("}")[0]
-    assert ".submit()" in auto
-    # The form stays on screen: if the submit does not fire, the button behind it still works.
-    assert "hidden = true" not in auto
+
+    submit = body.index("form.submit()")
+    mail_branch = body.index("if (!auto)")
+    # The mailed path returns before the submit is ever reached. If that return moved below it,
+    # every mailed confirmation would spend its token on whatever fetched the link.
+    assert mail_branch < submit, "the mail branch must return before the auto-submit"
+    assert "return" in body[mail_branch:submit]
+    # ...and nothing submits ahead of that branch.
+    assert body.count("form.submit()") == 1

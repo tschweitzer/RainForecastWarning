@@ -1072,3 +1072,31 @@ def test_the_api_table_lists_the_endpoints_that_exist(client, db):
     for path in routes:
         short = path.replace("/api/v1", "")
         assert re.search(rf"`{re.escape(short)}[`#?/]", table), f"{path} is not in the API table"
+
+
+def test_the_confirm_button_is_not_in_the_page_until_it_is_needed(client):
+    """A push confirmation confirms on open, so its button is a thing to press that is already
+    being pressed - and it appeared for a moment on every one of them, which is exactly long
+    enough to reach for.
+
+    Asserted on the served markup rather than in a browser because that is where the guarantee
+    lives: `hidden` plus base.html's `[hidden] { display: none !important }` cannot be painted
+    before the script runs, whereas hiding it *from* the script always can be. The script runs
+    after this markup is parsed, so by then the button may already be on screen.
+    """
+    body = client.get("/confirm").text
+    form = body[body.index("<form") : body.index("</form>")]
+    assert "hidden" in form.split(">")[0], form.split(">")[0]
+    # Revealed on the mailed path only - that one does wait for a human (F-4).
+    assert "form.hidden = false" in body
+    # And there is something to look at while the push path works.
+    assert 'id="busy"' in body and "spinner" in body
+
+
+def test_the_confirm_page_says_why_nothing_happens_without_script(client):
+    """The code is in the fragment, so no script means no confirmation - and until now the page
+    just sat there. A reader who sees nothing happen deserves the reason."""
+    body = client.get("/confirm").text
+    assert "<noscript>" in body
+    note = body[body.index("<noscript>") : body.index("</noscript>")]
+    assert "JavaScript" in note

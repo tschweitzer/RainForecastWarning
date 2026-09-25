@@ -1,13 +1,44 @@
 {% extends "base.html" %}
 {% block body %}
+<style>
+  /* Only this page has a step that happens without the reader doing anything, so the spinner
+     lives here rather than in base.html. */
+  .working { display:flex; align-items:center; gap:.6rem; }
+  .spinner { width:1.1em; height:1.1em; flex:none; border-radius:50%;
+             border:2px solid var(--line); border-top-color:var(--accent);
+             animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* Motion here is decoration - it says "working", and the sentence beside it says the same
+     thing. Anyone who has asked for less of it loses nothing by keeping the ring still. */
+  @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
+</style>
 <h1>Anmeldung bestätigen</h1>
 <p class="lede" id="lede">Ein Klick noch, dann bist du angemeldet.</p>
-<form method="post" action="/confirm" id="form">
+
+{# Hidden until the script knows which kind of link this is. A push confirmation confirms on
+   open, so its button would be a thing to press that is already being pressed - it appeared for
+   a moment on every push confirmation, which is exactly long enough to reach for. Hiding it here
+   rather than hiding it from script is what removes the flash: the script runs after this markup
+   has been parsed, and by then the button may already have been painted. #}
+<form method="post" action="/confirm" id="form" hidden>
   <input type="hidden" name="token" id="token" value="">
   <button type="submit">Jetzt bestätigen</button>
 </form>
+
+<p class="working" id="busy" hidden><span class="spinner" aria-hidden="true"></span>
+<span role="status">Einen Moment – wir bestätigen deine Anmeldung …</span></p>
+
 <p class="hint error" id="no-token" hidden>Diesem Link fehlt der Bestätigungscode. Öffne ihn
 noch einmal direkt aus der Nachricht.</p>
+
+{# Without script the code in the fragment cannot be read at all, so this page cannot work -
+   and a reader who sees nothing happen deserves to be told why rather than left guessing. #}
+<noscript>
+  <p class="hint error">Zum Bestätigen wird JavaScript gebraucht: der Bestätigungscode steht im
+  Link hinter dem <code>#</code>, und nur der Browser selbst kann ihn lesen – an den Server wird
+  er absichtlich nie geschickt.</p>
+</noscript>
+
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // The token rides in the fragment (D-26). A fragment is never sent to the server, so unlike
@@ -15,6 +46,8 @@ noch einmal direkt aus der Nachricht.</p>
   // This is the only way the field is filled: the server does not read a token from the query,
   // so the old shape is gone rather than deprecated.
   var field = document.getElementById('token');
+  var form = document.getElementById('form');
+  var lede = document.getElementById('lede');
   var hash = window.location.hash || '';
   // `#a=` arrives from a push notification and confirms on open; `#t=` arrives by mail and waits
   // for the click. Which one is sent is decided in the message, where the channel is known.
@@ -24,21 +57,33 @@ noch einmal direkt aus der Nachricht.</p>
     // Erased, and replaceState so Back does not return to a URL still carrying the token.
     history.replaceState(null, '', window.location.pathname);
   }
-  if (field.value && auto) {
-    // The form is left on screen rather than hidden: if this submit does not fire for any
-    // reason, the button behind it is still the working way through.
-    document.getElementById('lede').textContent =
-      'Einen Moment – wir bestätigen deine Anmeldung …';
-    document.getElementById('form').submit();
-    return;
-  }
+
   if (!field.value) {
-    document.getElementById('form').hidden = true;
     // The lede promises the very thing this state cannot deliver ("ein Klick noch"), so it goes
     // with the button rather than sitting above the explanation contradicting it.
-    document.getElementById('lede').hidden = true;
+    lede.hidden = true;
     document.getElementById('no-token').hidden = false;
+    return;
   }
+
+  if (!auto) {
+    form.hidden = false;
+    return;
+  }
+
+  lede.hidden = true;
+  document.getElementById('busy').hidden = false;
+  form.submit();
+
+  // The button is still the working way through if that submit never lands - a dropped
+  // connection leaves this page sitting on a spinner forever otherwise. It is offered late and
+  // only on evidence, rather than shown up front on the chance that something goes wrong.
+  window.setTimeout(function () {
+    document.getElementById('busy').hidden = true;
+    lede.textContent = 'Das dauert länger als erwartet. Tippe hier, um es noch einmal zu versuchen.';
+    lede.hidden = false;
+    form.hidden = false;
+  }, 8000);
 })();
 </script>
 {% endblock %}
