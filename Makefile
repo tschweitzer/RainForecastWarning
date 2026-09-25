@@ -184,11 +184,23 @@ pin-base:
 	@docker pull python:3.11-slim >/dev/null && \
 	 docker inspect --format="FROM python:3.11-slim@{{index .RepoDigests 0}}" python:3.11-slim | sed "s|python:3.11-slim@python:3.11-slim|python:3.11-slim|"
 
+# Building is only half a deploy. Cloud Run is pinned to a digest (infra: var.image), so an
+# apply that still names the previous one redeploys the previous code and reports success - the
+# quietest possible way to spend twenty minutes wondering why a fix did nothing. So this prints
+# the tfvars line rather than the bare digest: the next step is a paste, not a transcription.
+#
+# It also warns about uncommitted changes, because `gcloud builds submit` uploads the working
+# directory while the tag comes from HEAD. That builds what you have and labels it with the last
+# commit, which makes the tag a lie about what is running.
 image-push:
 	@test -n "$(REGION)" || (echo "usage: make image-push REGION=europe-west3 PROJECT=rainchecker-195519" && exit 2)
+	@git diff --quiet HEAD || echo "WARNING: uncommitted changes will be built and tagged $$(git rev-parse --short HEAD)"
 	gcloud builds submit --tag $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD)
-	@echo "deploy by digest:" && gcloud artifacts docker images describe \
-	  $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD) --format="value(image_summary.fully_qualified_digest)"
+	@digest=$$(gcloud artifacts docker images describe \
+	   $(REGION)-docker.pkg.dev/$(PROJECT)/rainalert/rainalert:$$(git rev-parse --short HEAD) \
+	   --format="value(image_summary.fully_qualified_digest)") && \
+	 echo && echo "Put this in infra/terraform.tfvars, then apply - nothing deploys until you do:" && \
+	 echo && echo "image = \"$$digest\"" && echo
 
 # Wipes local test state. Keeps radar archives - re-fetching a full window is 577 requests to DWD.
 # `make reset-local ALL=1` drops those too.

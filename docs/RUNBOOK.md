@@ -159,6 +159,38 @@ Expect, per cycle: one `stored cycle …` line, one `cycle … evaluated` line, 
 
 ---
 
+## 1b. Deploying a change
+
+Every code change is the same four steps, and **the third is the one that is easy to skip**:
+
+```sh
+git pull                                                    # or commit your own work first
+make image-push REGION=europe-west3 PROJECT=rainchecker-195519
+#   -> prints:  image = "…@sha256:…"
+#   paste that into infra/terraform.tfvars, replacing the old line
+cd infra && terraform apply
+```
+
+Cloud Run is pinned to a digest (`var.image`), never a tag — that is what makes a rollback mean
+something. The cost is that a build is not a deploy: `terraform apply` with the previous digest
+still in `terraform.tfvars` redeploys the previous code, changes nothing, and **says "Apply
+complete!"**. There is no error to notice. If a fix appears to have done nothing, check the
+digest in `terraform.tfvars` against the one the build printed before looking anywhere else.
+
+`make image-push` prints the whole `image = "…"` line for that reason: the next step is a paste,
+not a transcription.
+
+Two more things about that build:
+
+- It uploads the **working directory**, not the commit, while tagging the image with `HEAD`. An
+  uncommitted change gets built and labelled with the previous commit, so the tag becomes a lie
+  about what is running. The target warns when the tree is dirty.
+- **A migration is not deployed by the apply.** Changing the image makes the new migration
+  *available*; running it is still `gcloud run jobs execute rainalert-migrate --region
+  europe-west3 --wait`, by hand, after the apply.
+
+---
+
 ## 2. "Is it actually working?"
 
 The one question worth asking, and the order to ask it in:

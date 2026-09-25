@@ -18,7 +18,11 @@ region     = "europe-west3"
 # context, so the locate control on both maps cannot work until it does.
 # public_base_url = "https://rainalert-000000000000.europe-west3.run.app"
 
-# By digest, not by tag. `make image-push REGION=... PROJECT=...` prints it after the build.
+# By digest, not by tag: a tag is mutable, and a digest is what makes a rollback mean something.
+#
+# It also means this line has to change on EVERY deploy. `make image-push` prints the whole line
+# ready to paste. An apply that still names the previous digest redeploys the previous code and
+# reports "Apply complete!" - there is no error, and the fix you just built simply is not there.
 image = "europe-west3-docker.pkg.dev/rainchecker-195519/rainalert/rainalert@sha256:..."
 
 alert_email = "you@example.org"
