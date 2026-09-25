@@ -117,6 +117,11 @@ can find a schema from the future:
 gcloud run jobs execute rainalert-migrate --region europe-west3 --wait
 ```
 
+The migration job also grants the web tier read/write on what it creates. Two database roles is
+the design (F-6) and Postgres does not share ownership, so without that grant every page that
+touches a table answers 500 while the container stays healthy and the ingest job keeps working.
+Re-run the job after any migration; it is the only thing that maintains those grants.
+
 Then subscribe yourself from a phone and confirm the notification arrives. Nothing is proven
 until it does.
 

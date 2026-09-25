@@ -13,7 +13,9 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
+from psycopg import errors
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -60,8 +62,18 @@ def schema_complaint(session: Session) -> str | None:
         return None
     try:
         actual = current_revision(session)
-    except Exception:  # noqa: BLE001 - no alembic_version table at all is the "never run" case
+    except Exception as exc:  # noqa: BLE001 - a probe must not raise, but it must say what it saw
         session.rollback()
+        # Two very different failures used to be reported with the same sentence, and the wrong
+        # one sent you to the wrong fix: a *missing* alembic_version means migrations have never
+        # run, while "permission denied" means they have and this role was never granted access
+        # to what they created. Measured in production - the schema was present and current, the
+        # page said it did not exist.
+        if isinstance(exc, ProgrammingError) and isinstance(exc.orig, errors.InsufficientPrivilege):
+            return (
+                "the database schema exists but this role cannot read it - the migrations grant "
+                "the web tier its tables, so run them (`make migrate`)"
+            )
         return "the database has no schema yet - run `make migrate`"
     if actual is None:
         return "the database has no schema yet - run `make migrate`"

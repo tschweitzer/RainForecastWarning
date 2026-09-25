@@ -234,3 +234,121 @@ def test_reset_keeps_radar_data_by_default(db, tmp_path):
     reset(engine, (), keep_radar=False)
     with db() as session:
         assert session.query(RadarCycle).count() == 0
+
+
+def test_the_web_tier_can_read_the_tables_the_migrations_create(postgres_url, monkeypatch):
+    """Two roles by design (F-6), and nothing was granting the second one anything.
+
+    The ingest role owns the schema; the web tier only reads and writes rows. Postgres does not
+    share ownership, so every table belonged to the migration runner and the API's first query
+    answered 500 with "permission denied for table radar_cycles" - past a healthy container, a
+    working ingest job and a `/readyz` that could not say so because its own probe reads
+    `alembic_version` and hit the same wall.
+
+    Runs the real migrations against a real second role, because that is the only place the
+    grant exists.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+
+    engine = create_engine(postgres_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+            # The role the grant names. Terraform creates it (infra/main.tf); here it has to
+            # exist before the migration runs, exactly as it does in production.
+            conn.execute(
+                text("""
+                DO $$ BEGIN
+                  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rainalert_api') THEN
+                    CREATE ROLE rainalert_api LOGIN PASSWORD 'test-only';
+                  END IF;
+                END $$;
+                """)
+            )
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        config = Config(str(root / "alembic.ini"))
+        config.set_main_option("script_location", str(root / "migrations"))
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            # SET ROLE is how this asks the question without a second connection: privileges are
+            # evaluated for the assumed role, which is what the web tier connects as.
+            conn.execute(text("SET ROLE rainalert_api"))
+            for table in ("radar_cycles", "subscribers", "subscriptions", "alembic_version"):
+                # A bare execute is the assertion: without the grant this raises
+                # InsufficientPrivilege, which is precisely the production failure.
+                conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1"))
+            conn.execute(text("RESET ROLE"))
+
+            # The half that keeps it fixed: a table created after the grant must be readable
+            # too, or the next migration reintroduces this one deploy later.
+            conn.execute(text("CREATE TABLE later_migration_table (id int)"))
+            conn.execute(text("SET ROLE rainalert_api"))
+            conn.execute(text("SELECT 1 FROM later_migration_table LIMIT 1"))
+            conn.execute(text("RESET ROLE"))
+            conn.execute(text("DROP TABLE later_migration_table"))
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_a_permission_error_is_not_reported_as_a_missing_schema(postgres_url, monkeypatch):
+    """The readiness probe used to say "the database has no schema yet" when the schema was
+    present, current, and merely unreadable by the role asking. That sentence names a cause and
+    a fix, and both were wrong - it sent you to re-run migrations that had already run."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.orm import Session as OrmSession
+
+    from rainalert.db.schema import schema_complaint
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+
+    engine = create_engine(postgres_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+            conn.execute(
+                text("""
+                DO $$ BEGIN
+                  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rainalert_nogrant') THEN
+                    CREATE ROLE rainalert_nogrant LOGIN PASSWORD 'test-only';
+                  END IF;
+                END $$;
+                """)
+            )
+            conn.execute(text("GRANT USAGE ON SCHEMA public TO rainalert_nogrant"))
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        config = Config(str(root / "alembic.ini"))
+        config.set_main_option("script_location", str(root / "migrations"))
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn, OrmSession(bind=conn) as session:
+            # A role the grant migration does not name: the schema is there, it just cannot see
+            # it - which is exactly the production shape.
+            session.execute(text("SET ROLE rainalert_nogrant"))
+            complaint = schema_complaint(session)
+            session.rollback()
+            session.execute(text("RESET ROLE"))
+
+        assert complaint is not None
+        assert "cannot read it" in complaint
+        assert "no schema yet" not in complaint
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
