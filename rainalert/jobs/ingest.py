@@ -26,7 +26,7 @@ from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.db.session import pipeline_lock
 from rainalert.radar.client import BreakerOpen, BudgetExhausted, DWDClient, FetchError
 from rainalert.radar.decoder import RVFormatError, RVFrame, read_frames
-from rainalert.radar.overlay import build_projection, render_frame
+from rainalert.radar.overlay import DRAWN_FROM_MM_5MIN, build_projection, render_frame
 from rainalert.storage import ArchiveStore, OverlayStore
 
 logger = logging.getLogger(__name__)
@@ -225,12 +225,25 @@ def ingest_once(
             if report.blast_radius_tripped:
                 logger.error("blast radius tripped for cycle %s - no mail sent", nominal)
 
+        # How wet the analysis frame was, on the same line as the rest. Without it a cycle that
+        # decoded to almost nothing and a cycle full of rain log identically, and the only way
+        # to tell them apart is to download the overlay and count its pixels - which is what
+        # answering "is the map empty because it is dry, or because something is broken?"
+        # actually took. `wet` counts cells at or above the lowest band the map draws
+        # (0.05 mm/5min, about 0.6 mm/h): lighter returns are real and deliberately not drawn,
+        # so counting every non-zero cell would not answer the question being asked.
+        analysis = frames[0].values
+        finite = analysis[np.isfinite(analysis)]
+        peak = float(finite.max()) if finite.size else 0.0
+        wet = int((finite >= DRAWN_FROM_MM_5MIN).sum())
         logger.info(
-            "stored cycle %s: %d frames, %d bytes, %d attempt(s)",
+            "stored cycle %s: %d frames, %d bytes, %d attempt(s), peak %.2f mm/5min, %d wet cells",
             nominal,
             len(frames),
             len(blob),
             result.attempts,
+            peak,
+            wet,
         )
         return IngestOutcome(
             "ok" if complete else "partial",

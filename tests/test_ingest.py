@@ -174,3 +174,29 @@ def test_prune_removes_only_old_archives(store, settings):
     store.put(datetime(2026, 9, 16, 13, 55, tzinfo=UTC), b"new")
     assert prune_archives(store, settings, now=NOW) == 1
     assert len(list(store.root.glob("*.tar.bz2"))) == 1
+
+
+def test_the_cycle_log_says_how_wet_it_was(db, settings, store, wet_cycle, caplog):
+    """A cycle that decodes to almost nothing and a cycle full of rain used to log identically.
+
+    Telling them apart meant downloading an overlay and counting its pixels, which is what
+    answering "is the map empty because it is dry, or because something is broken?" actually
+    took. The peak and the wet-cell count go on the line that already exists.
+    """
+    import logging
+
+    from rainalert.radar.overlay import DRAWN_FROM_MM_5MIN
+
+    client, _ = _client(wet_cycle.read_bytes())
+    with caplog.at_level(logging.INFO, logger="rainalert.jobs.ingest"), db() as session:
+        ingest_once(session, client, store, settings, now=NOW)
+
+    line = next(m for m in caplog.messages if m.startswith("stored cycle"))
+    assert "peak" in line and "wet cells" in line, line
+    # The fixture is a real archive with real rain in it, so the numbers have to be real too - a
+    # line that always said "peak 0.00, 0 wet cells" would pass a substring check and tell
+    # nobody anything.
+    peak = float(line.split("peak ")[1].split(" mm")[0])
+    wet = int(line.rsplit(", ", 1)[1].split(" ")[0])
+    assert peak >= DRAWN_FROM_MM_5MIN, line
+    assert wet > 0, line

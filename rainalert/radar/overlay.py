@@ -77,6 +77,12 @@ INTENSITY_BANDS: tuple[tuple[float, tuple[int, int, int, int], str], ...] = (
 #: because the whole point of the change above is that there is one opacity, not two.
 LAYER_OPACITY = 1.0
 
+#: The lowest intensity the map draws anything at. Anything below this is real rain that is
+#: deliberately not rendered, which is exactly the distinction the ingest log needs to make when
+#: it reports how wet a cycle was - otherwise "0 wet cells" and "nothing visible" look like the
+#: same fact when they are not.
+DRAWN_FROM_MM_5MIN: float = INTENSITY_BANDS[0][0]
+
 #: What the renderer wants: just the thresholds and their colours.
 COLOR_STOPS: tuple[tuple[float, tuple[int, int, int, int]], ...] = tuple(
     (threshold, colour) for threshold, colour, _ in INTENSITY_BANDS
