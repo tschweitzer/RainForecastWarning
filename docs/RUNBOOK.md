@@ -251,6 +251,22 @@ from what is configured, and it has to name the overlay bucket as well as the ti
 the browser console says so plainly. Local development cannot reproduce it: `LocalOverlayStore`
 serves overlays from the app itself, which is already `'self'`.
 
+**The radar draws but the land underneath is blank.** That is the basemap, not the radar, and the
+network tab tells the cases apart:
+
+- **Tiles 404, or return something that is not an image.** The tile URL is wrong. Run
+  `make verify-basemap`, which substitutes one tile and reports the status and content type. For
+  basemap.de check the path component by component: the layer name
+  (`de_basemapde_web_raster_farbe`), the tile matrix set (`GLOBAL_WEBMERCATOR`, *not*
+  `DE_EPSG_25832_ADV`, which is UTM32 and will not line up with Leaflet), and the `.png`
+  extension.
+- **Tiles return 200 and the map is a jumble** - real coastlines and roads, none of them where
+  they belong. The placeholder order is reversed. basemap.de is WMTS and wants `{z}/{y}/{x}`;
+  OSM-derived providers want `{z}/{x}/{y}`. Nothing errors, because every request is for a tile
+  that exists.
+- **Tiles are fine inside Germany and blank outside it.** Working as intended. basemap.de covers
+  Germany only, and so does the radar.
+
 
 The alerting path and the map path are independent: the map can be broken while warnings still go
 out, and that is the better failure of the two. Check that overlays are being written
@@ -309,8 +325,14 @@ support mail.
   Monitoring cannot see; reaching it needs something to scrape `/metrics`. The two alert policies
   in `infra/monitoring.tf` catch the same failure from the outside (a halted or failing job stops
   producing cycles), so this is an observability gap rather than a safety one.
-- **Leaflet and OSM tiles are third-party.** Every visitor to `/map` reveals their IP to unpkg and
-  to OpenStreetMap. Vendor Leaflet into `static/` and choose a tile provider before any public use.
+- ~~**Leaflet and OSM tiles are third-party.**~~ *Closed 2026-09-27.* Leaflet is vendored under
+  `rainalert/api/static/vendor/leaflet` and served by this app, so `script-src` and `style-src` are
+  back to `'self'` and no CDN sees a visitor. The basemap now defaults to basemap.de Web Raster
+  (BKG, CC BY 4.0, no key, no quota, no non-commercial clause), so a visitor's IP reaches a German
+  federal agency's tile service and nothing else. `make verify-basemap` checks that endpoint with
+  one request — worth running once per environment, because a wrong WMTS path serves blank tiles
+  rather than an error. Setting `map_tile_url` and `map_tile_attribution` to `""` restores the
+  no-basemap state (radar over a graticule) if you want nobody at all in the request path.
 - **Cloud Run logs full request URLs** for 30 days by default. No token is in one any more —
   confirm, unsubscribe, the magic link and a warning's location reference all ride in the URL
   fragment, which a browser never sends (D-26) — but the paths themselves still say who asked

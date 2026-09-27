@@ -131,28 +131,45 @@ class Settings(BaseSettings):
     mail_from: str = "RainAlert <rainalert@localhost>"
     mail_reply_to: str | None = None
 
-    # --- Basemap (Q-10: the tile provider is not chosen yet) ----------------------------------
-    #: Leaflet tile template, e.g. "https://tiles.example.com/{z}/{x}/{y}.png?key=...".
-    #: Empty by default, and deliberately so: the obvious choice, tile.openstreetmap.org, is a
-    #: volunteer-run service whose usage policy excludes applications, and it blocks them. Using
-    #: it would be taking something that was not offered. With no provider set the map draws the
-    #: radar over a plain background with a graticule and a few cities for orientation, which is
-    #: enough to read a rain field and costs nobody anything.
+    # --- Basemap (Q-5, resolved 2026-09-27: basemap.de) ---------------------------------------
+    #: Leaflet tile template. Defaults to basemap.de Web Raster, the German federal mapping
+    #: agency's (BKG) own basemap: CC BY 4.0, no API key, no account, no quota, and no
+    #: non-commercial clause - so it stays valid if this service ever carries ads or takes money.
+    #: Its coverage is Germany only, which is the right shape here because the DE1200 radar
+    #: composite stops at roughly the same border (DESIGN.md D-43).
     #:
-    #: With a provider you have signed up with:
+    #: It is a WMTS service, so the template is **{z}/{y}/{x}** - y before x, unlike the
+    #: {z}/{x}/{y} that OSM-style providers use. Getting that backwards renders a scrambled map
+    #: rather than an error, which is why it is called out here and asserted in the tests.
+    #: `GLOBAL_WEBMERCATOR` is the tile matrix set that lines up with Leaflet's default CRS; the
+    #: service also offers `DE_EPSG_25832_ADV`, which is UTM32 and will not.
+    #:
+    #: Set both to "" for no basemap at all: the map then draws the radar over a graticule with a
+    #: dozen cities marked, which is enough to read a rain field. That was the default until
+    #: 2026-09-27 and is still a supported state, not a broken one.
+    #:
+    #: Any other provider you have signed up with:
     #:     MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
     #:     MAP_TILE_ATTRIBUTION=&copy; Example Maps
     #:
-    #: Local development uses OSM's own servers (docs/LOCAL.md), which is fine for one browser
-    #: and not fine for a deployed service:
-    #:     MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
-    #:     MAP_TILE_ATTRIBUTION=&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
-    #:
-    #: Pick a muted style either way - grey "positron"/"light"/"canvas". The radar is the
-    #: foreground, and saturated green landcover hides the "mäßiger Regen" band, which is green.
-    map_tile_url: str = ""
+    #: Two things to know before switching. A key in this URL is public - it is in the rendered
+    #: HTML and in every visitor's network tab - so restrict it by HTTP referer in the provider's
+    #: console or somebody else will spend your quota. And several providers' free tiers are
+    #: non-commercial only (Stadia, Jawg, MapTiler at the time of writing), which stops being
+    #: allowed the day this service carries advertising; basemap.de and Esri do not have that
+    #: clause. docs/LOCAL.md §"Choosing a basemap" has the comparison.
+    map_tile_url: str = (
+        "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0"
+        "/de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png"
+    )
     #: Required by every provider worth using, and by their licence. Shown in the map's corner.
-    map_tile_attribution: str = ""
+    #: CC BY 4.0 wants the licence named *and linked*, and BKG asks that its own name link to
+    #: bkg.bund.de - hence the two anchors rather than a plain string. Change this whenever you
+    #: change `map_tile_url`; an attribution that credits the wrong service is worse than none.
+    map_tile_attribution: str = (
+        '&copy; <a href="https://www.bkg.bund.de">BKG</a> (basemap.de) '
+        '<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>'
+    )
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
     #: console | file | smtp | ntfy | push | auto. SMTP reaches every provider worth using, so

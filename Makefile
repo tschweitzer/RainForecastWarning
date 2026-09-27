@@ -7,7 +7,8 @@ PY   := $(VENV)/bin/python
 RUFF := $(VENV)/bin/ruff
 
 ALL_TARGETS := dev test lint fmt probe run-ingest serve migrate verify rerender pin-base \
-	image-push reset-local outbox backfill serve-bg backfill-bg ingest-loop-bg stop status logs
+	image-push reset-local outbox backfill serve-bg backfill-bg ingest-loop-bg stop status logs \
+	verify-basemap vendor-leaflet
 .PHONY: $(ALL_TARGETS)
 
 # --- Running detached, for a box you only reach over ssh -----------------------------------
@@ -206,3 +207,58 @@ image-push:
 # `make reset-local ALL=1` drops those too.
 reset-local:
 	$(PY) -m rainalert.cli reset-local $(if $(ALL),--all,) $(if $(YES),--yes,)
+
+# --- Basemap and vendored assets -----------------------------------------------------------
+# LEAFLET_SHA512 is the npm registry's own integrity value for leaflet@1.9.4. Vendoring is only
+# worth anything if what landed is what upstream published, so this checks rather than trusts.
+LEAFLET_VERSION := 1.9.4
+LEAFLET_SHA512  := nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==
+LEAFLET_DIR     := rainalert/api/static/vendor/leaflet
+
+# The basemap default is a WMTS path, and a wrong WMTS path does not error - it serves blank tiles,
+# which looks exactly like "no rain anywhere" on a map whose whole job is showing rain. One request
+# settles it. Needs plain outbound access; the sandbox this was written in could not reach
+# sgx.geodatenzentrum.de at all, which is the whole reason the target exists.
+verify-basemap:
+	@url=$$($(PY) -c 'from rainalert.config import Settings; print(Settings().map_tile_url)'); \
+	if [ -z "$$url" ]; then \
+	  echo "no basemap configured (MAP_TILE_URL is empty) - nothing to verify"; exit 0; \
+	fi; \
+	probe=$$(printf '%s' "$$url" | sed -e 's/{z}/8/' -e 's/{y}/86/' -e 's/{x}/135/' -e 's/{s}/a/' -e 's/{r}//'); \
+	echo "GET $$probe"; \
+	out=$$(curl -sS -o /dev/null -m 30 -w '%{http_code} %{content_type}' "$$probe") || exit 1; \
+	echo "  -> $$out"; \
+	case "$$out" in \
+	  "200 image/"*) echo "OK - tiles are being served" ;; \
+	  *) echo "NOT OK - expected 200 and an image/* content type."; \
+	     echo "  For a WMTS provider, check the {z}/{y}/{x} order and the tile matrix set."; \
+	     exit 1 ;; \
+	esac
+
+# Refreshes the vendored Leaflet from the npm registry - the same bytes unpkg serves, but with a
+# checksum to verify them against. Writes nothing unless the tarball matches LEAFLET_SHA512.
+# See $(LEAFLET_DIR)/README.md; after a version bump update the hashes there and in
+# tests/test_vendored_leaflet.py.
+vendor-leaflet:
+	@set -e; \
+	tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	url="https://registry.npmjs.org/leaflet/-/leaflet-$(LEAFLET_VERSION).tgz"; \
+	echo "fetching $$url"; \
+	curl -sSf -m 120 -o "$$tmp/leaflet.tgz" "$$url"; \
+	got=$$($(PY) -c 'import base64,hashlib,sys; print("sha512-"+base64.b64encode(hashlib.sha512(open(sys.argv[1],"rb").read()).digest()).decode())' "$$tmp/leaflet.tgz"); \
+	if [ "$$got" != "sha512-$(LEAFLET_SHA512)" ]; then \
+	  echo "CHECKSUM MISMATCH - nothing written"; \
+	  echo "  expected sha512-$(LEAFLET_SHA512)"; \
+	  echo "  got      $$got"; \
+	  exit 1; \
+	fi; \
+	echo "checksum ok"; \
+	tar xzf "$$tmp/leaflet.tgz" -C "$$tmp"; \
+	mkdir -p $(LEAFLET_DIR)/images; \
+	cp "$$tmp/package/dist/leaflet.js" "$$tmp/package/dist/leaflet.css" $(LEAFLET_DIR)/; \
+	cp "$$tmp/package/LICENSE" $(LEAFLET_DIR)/LICENSE; \
+	for i in layers.png layers-2x.png marker-icon.png; do \
+	  cp "$$tmp/package/dist/images/$$i" $(LEAFLET_DIR)/images/$$i; \
+	done; \
+	echo "vendored Leaflet $(LEAFLET_VERSION) into $(LEAFLET_DIR)"; \
+	sha256sum $(LEAFLET_DIR)/leaflet.js $(LEAFLET_DIR)/leaflet.css

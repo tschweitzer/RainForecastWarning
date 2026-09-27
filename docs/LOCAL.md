@@ -95,25 +95,35 @@ NOTIFIER=file
 MAIL_OUTBOX_DIR=./var/outbox
 PUBLIC_BASE_URL=http://localhost:8000
 
-# No basemap by default. OpenStreetMap's tile servers are volunteer-run and their usage policy
-# excludes applications - they will block you, and they are right to. The map draws the radar
-# over a graticule with cities marked, which is enough to read a rain field. To use a provider
-# you have signed up with:
+# Nothing to set for the basemap: it defaults to basemap.de Web Raster (BKG), which needs no key
+# and no account. Uncomment only to override. `make verify-basemap` confirms the endpoint with one
+# request - worth doing once, because a wrong WMTS path serves blank tiles rather than an error.
+#
 # MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY
 # MAP_TILE_ATTRIBUTION=&copy; Example Maps
 #
-# Pick a MUTED style. The radar is the foreground; a basemap with saturated green landcover
-# hides the "mäßiger Regen" band, which is green too. Grey "positron"/"light"/"canvas" styles
-# are the usual choice for exactly this reason. See "Choosing a basemap" below.
+# Mind the placeholder order if you do. basemap.de is WMTS and wants {z}/{y}/{x}; most
+# OSM-derived providers want {z}/{x}/{y}. Swap them and you get a scrambled map, not an error.
 #
-# On OpenStreetMap's own servers during development: their policy asks that the application be
-# identifiable, attributed, and light. The first is handled - the tile layer overrides this
-# site's `Referrer-Policy: no-referrer` so tiles carry the origin - and the second is the
-# attribution line below, which is required and must stay. The third is on you: one browser
-# looking at a map is light, an unattended reload loop is not. Zoom goes to 18 so street names
-# are readable - the radar overlay goes blocky past ~12, which is honest about it being 1 km
-# data. For anything public, use a provider you pay or have
-# signed up with; the policy excludes applications, and a deployed service is one.
+# Set both to empty for no basemap at all - the radar over a graticule with cities marked. That
+# was the default until 2026-09-27 and is still supported: it is the option for working offline,
+# or for not having a third party in the request path at all.
+# MAP_TILE_URL=
+# MAP_TILE_ATTRIBUTION=
+#
+# On colour: a basemap with saturated green landcover fights the overlay, because `mäßiger Regen`
+# is green as well. basemap.de also publishes a grey variant (swap `_farbe` for `_grau` in the
+# URL) if that bothers you; the other fix is to change the intensity ramp instead. See
+# "Choosing a basemap" below.
+#
+# Zoom goes to 18 so street names are readable. The radar overlay goes blocky past ~12, which is
+# honest about it being 1 km data.
+#
+# What this used to point at, kept as a warning rather than an option: OpenStreetMap's own tile
+# servers are volunteer-run and their usage policy excludes applications. One browser looking at a
+# map during development is light; a deployed service on a five-minute cadence is an application,
+# and they will block it - rightly. There is no longer any reason to reach for it, since the
+# default costs nobody anything. Do not uncomment:
 # MAP_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
 # MAP_TILE_ATTRIBUTION=&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors
 SECRET_KEY=local-development-only
@@ -431,9 +441,9 @@ Three things that trip people up locally:
   else would let a stranger test who has signed up - so "the link is on its way" is not a
   confirmation that the address is known.
 
-Without `MAP_TILE_URL` there is no basemap, so the picker draws the radar and a few cities over
-an empty background. Good enough to choose a town, not a street; set a tile provider (§2) if you
-want to aim properly.
+With `MAP_TILE_URL` cleared there is no basemap, so the picker draws the radar and a few cities
+over an empty background - good enough to choose a town, not a street. The default basemap (§2)
+carries street names, which is what makes aiming at your own roof possible.
 
 ### Moving an existing subscription somewhere else
 
@@ -505,31 +515,69 @@ done without deploying.
 
 ### Choosing a basemap
 
-The radar is the thing being read; the basemap only has to answer "where is that". A style with
-strong green landcover actively fights the overlay, because `mäßiger Regen` is green as well.
-What you want is low saturation, roads and place names, no terrain.
+**The default is already a reasonable answer**, so read this only if you want to change it.
+`MAP_TILE_URL` points at basemap.de Web Raster — the German federal mapping agency's (BKG) own
+basemap, published under CC BY 4.0. No API key, no account, no quota, no billing relationship, no
+non-commercial clause, and it is a German public body rather than an ad-funded one. Coverage is
+Germany only, which sounds like a limitation and is not: the DE1200 radar composite stops at
+roughly the same border, so a global basemap would only buy you a prettier view of places where
+this service has nothing to say.
+
+Confirm the endpoint once before relying on it:
+
+```
+make verify-basemap
+```
+
+A wrong WMTS path returns blank tiles rather than an error, which on a rain map looks exactly like
+"no rain anywhere". That target substitutes one tile and checks for a 200 with an `image/*` type.
+
+#### If you want to change it
+
+The radar is the thing being read; the basemap only has to answer "where is that".
 
 **Preview them all in one place:** <https://leaflet-extras.github.io/leaflet-providers/preview/>
 lists the tile providers that work with Leaflet and renders each one live, so you can pan to
 your area and compare before editing `.env`. That is the fastest way to answer this for yourself.
 
-The styles usually chosen as a backdrop for weather data:
+| Provider / style | Tile URL template | Free allowance | Commercial? |
+|---|---|---|---|
+| **basemap.de Farbe** (default) | `https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0/de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png` | unlimited, CC BY 4.0 | **yes** |
+| basemap.de Grau | the same with `_grau` for `_farbe` | unlimited, CC BY 4.0 | **yes** |
+| Esri World Light Gray | `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}` | 2M tiles/month, then metered | **yes** |
+| CARTO Positron | `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` | 5M tiles/month, 1M if commercial | yes, reduced |
+| CARTO Dark Matter | `.../dark_all/{z}/{x}/{y}{r}.png` | as above | yes, reduced |
+| Stadia Alidade Smooth | `https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png` | 200k credits/month | **no** |
+| MapTiler | keyed, see their console | 100k requests/month | **no** |
+| Jawg | keyed, see their console | 25k map views/month | **no** |
 
-| Style | Tile URL template | Notes |
-|---|---|---|
-| CARTO Positron | `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png` | Light grey, roads + labels, almost no colour. The default choice for data overlays |
-| CARTO Positron, no labels | `.../light_nolabels/{z}/{x}/{y}{r}.png` | The same without place names - quieter, harder to orient by |
-| CARTO Dark Matter | `.../dark_all/{z}/{x}/{y}{r}.png` | Dark equivalent; bright radar colours pop hardest against it |
-| Esri World Light Gray | `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}` | Note the `{z}/{y}/{x}` order, not `{z}/{x}/{y}` |
-| Stadia Alidade Smooth | `https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png` | Needs a free API key since 2023 |
+Four things that bite when switching:
 
-Attribution is not optional - every one of these requires it, and `MAP_TILE_ATTRIBUTION` is
-where it goes. CARTO wants `&copy; <a href="https://carto.com/attributions">CARTO</a>` alongside
-the OpenStreetMap credit, Esri wants its own line, and each has usage limits that a development
-map will not notice and a public service will. Check the provider's terms before deploying -
-the same argument as §2's note about OpenStreetMap's own servers.
+1. **Placeholder order.** WMTS services (basemap.de, Esri) want `{z}/{y}/{x}`. OSM-derived ones
+   want `{z}/{x}/{y}`. Getting it backwards renders a scrambled map at a plausible zoom, with
+   every tile a real tile in the wrong place — no error anywhere. `{r}` is Leaflet's retina
+   placeholder and expands to `@2x` on high-density screens.
+2. **"Free" often means non-commercial.** The three marked **no** above disallow commercial use on
+   their free tiers, which includes the day this page starts carrying advertising. basemap.de and
+   Esri have no such clause. The figures here were checked in September 2026 and this is exactly
+   the sort of thing providers change, so read their current terms rather than this table.
+3. **A key in `MAP_TILE_URL` is public.** It lands in the rendered HTML and in every visitor's
+   network tab — unavoidable for client-side tiles, and every provider expects it. Restrict it by
+   HTTP referer to your own hostname in their console, or somebody else will spend your quota.
+4. **Attribution is a licence condition, not a courtesy.** Every provider above requires it, and
+   every OSM-derived one also requires the OpenStreetMap credit. Paste their exact required string
+   into `MAP_TILE_ATTRIBUTION` rather than paraphrasing. Terraform refuses an apply that sets a
+   tile URL with an empty attribution, and `tests/test_vendored_leaflet.py` asserts the same for
+   the defaults.
 
-`{r}` is Leaflet's retina placeholder and expands to `@2x` on high-density screens.
+#### On colour
+
+A basemap with saturated green landcover fights the overlay, because `mäßiger Regen` is green as
+well. There are two fixes and the basemap is only one of them: switch to a muted style (grey
+"positron"/"light"/"canvas", or basemap.de's own `_grau`), **or** change the intensity ramp in
+`rainalert/radar/overlay.py` to a single blue-to-violet progression, which is what most modern
+radar products do and reads better for intensity anyway. The second is the better fix if you like
+a colourful map, because it stops the constraint propagating into every future provider choice.
 
 ### Choosing how far back the map looks
 

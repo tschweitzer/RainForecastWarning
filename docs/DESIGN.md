@@ -89,6 +89,8 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-30 | Re-rendering reads **only the first tar member** (`read_analysis_frame`), not the whole archive | bz2 is a stream, so reaching member 25 means unpacking 1-24 on the way, and that unpacking is ~96% of the re-render's time. RV writes t+0 first, so one member is all that has to come out: measured 2.254 s and a 252 MB peak for a full 25-member cycle against 0.055 s and 9 MB. It deliberately cannot do the completeness and mixed-nominal-time checks `read_cycle` does - which is why it is a separate function, used only where the archive was already validated when it was stored, and why it raises rather than guessing if the first member is not t+0 |
 | D-29 | Changing the rule does **not** reset the alert state; only a location change does (D-17) | The state describes a place, so moving invalidates it. A threshold describes what to do with what is already known - and resetting on every adjustment would let someone being rained on re-arm their own "rain is starting" warning by nudging a number |
 | D-31 | The signup QR is **returned in the response body**, not fetched from a `/qr?text=` endpoint, which is removed | The topic is not a hint, it is the credential - whoever holds one can subscribe to it, ask for a settings link on it and read the location - so D-26's rule covers it: it must never travel in a URL that ends up in a log, and uvicorn and Cloud Run both log the query string. Inlining also retires the allow-list that existed only to stop the endpoint encoding somebody else's URL |
+| D-44 | **Leaflet is served by this app**, from `static/vendor/leaflet`, byte-identical to the npm tarball and pinned by sha256 in the tests | It was on a CDN from 2026-09-17 (`caf7ad9`) because the machines doing the work could not reach unpkg to copy it, and the note in the security review said so. The thing that unblocked it was not new capability but checking a second source: `registry.npmjs.org` served the same bytes and, unlike a CDN, published a sha512 to verify them against, so the vendored copy is provably upstream's rather than merely plausible. That is also why `make vendor-leaflet` refuses to write anything on a checksum mismatch, and why the tests pin both files - a vendored dependency that drifts is worse than a CDN, because nobody can diff it against anything. The point of all of it is one line: `script-src` and `style-src` are `'self'` again, so no visitor announces themselves to a third party before the map draws. The source map is deliberately not vendored - its 78 sources carry no `sourcesContent`, so it would resolve to nothing; one devtools-only 404 is the cheaper price than 225 KB that cannot work or an edited `leaflet.js` that no longer matches upstream |
+| D-43 | The basemap **defaults to basemap.de** (BKG, CC BY 4.0) rather than to nothing | §11.1 (*Basemap tiles*) has the reasoning; what belongs here is why the earlier no-default decision was right and still got reversed. The objection was to *borrowing* a volunteer-run service, not to having a basemap, and open government data published for reuse is not borrowed. The property that picked it over better-looking alternatives was the licence rather than the cartography: Stadia, Jawg and MapTiler restrict their free tiers to non-commercial use, so any of them would have had to be revisited the day this page carried an ad, whereas CC BY 4.0 has no such concept. Germany-only coverage is not the compromise it looks like - RV is a German product, so global tiles would render places the rest of the system cannot speak about. The cost is a WMTS `{z}/{y}/{x}` template whose reversal is silent, which is why it has its own test and `make verify-basemap` |
 | D-42 | A **spent magic link falls through to the session this browser already has**, and says so; the complaint about it is reached only once that session has been ruled out too | Opening the link twice in one browser is ordinary - a second tab, a restored tab, a link tapped again - and the first open both spends the token and sets the cookie. So the second was answered "dieser Link gilt nicht mehr" while the reader was signed in, and reloading that same page then worked, which is what made it baffling rather than merely wrong. The cookie is the authority (D-25); a spent token subtracts nothing from it. `redeem` therefore reports and only the dispatch decides. It is not silent about it either: `#panel-note`, separate from the `#panel-banner` that `fill()` owns, explains why the page opened anyway - otherwise the second tab is indistinguishable from the first and the confusion just goes quiet. In a browser with no session a spent link still refuses, which is the case the single-use rule exists for |
 | D-41 | `/manage` renders **four states, all hidden**, and the script reveals exactly one: `busy`, `sent`, `gate`, `panel` | The gate used to be the markup's default, so it was what you looked at while any other path was still working - and arriving from a notification (`#r=`) the "we sent you a link" answer appeared *underneath* a form asking for the topic it had just used. The deeper fault was that the default was load-bearing without being written down: `redeem`, `load` and the CSRF refetch each only `return`ed on failure and relied on the gate still being there, so what a reader ended up seeing depended on what had not happened yet. With nothing shown by default every exit has to name a state, which is what makes the page's behaviour reviewable. The `sent` state names the link's TTL and offers the form only afterwards, as "nichts angekommen?" - a subscription deleted elsewhere still holds a valid request token, so the link can be sent to a channel nobody is listening on. A 429 and a 500 also stopped giving the same answer, which had been sending people away for an hour over a fault on our side |
 | D-40 | The confirm page's button is **hidden in the markup** and revealed only on the mailed path; the push path shows a spinner, and the button returns after 8 s if the submit has not landed | D-36 confirms a push link on open, so its button is a thing to press that is already being pressed - and it appeared for a moment on every push confirmation, long enough to reach for. Hiding it *from* script cannot fix that: the script runs after the markup is parsed, so by then it may already be painted. `hidden` plus base.html's `[hidden] { display: none !important }` is the only version that cannot flash. The fallback is kept but offered on evidence rather than up front - a dropped connection would otherwise leave the reader on a spinner forever. A `<noscript>` now says why the page needs script at all: the token is in the fragment, so without it there is nothing to read |
@@ -836,14 +838,49 @@ to read "fine for a private map picker"; it was wrong. OpenStreetMap's tile serv
 funded and their usage policy excludes applications outright, not merely heavy ones - and they
 enforce it. A single developer instance was blocked, which is how this was found.
 
-So there is no default provider. `MAP_TILE_URL` is empty unless configured, and with nothing set
-the map draws the radar over a graticule with a dozen cities marked, which is enough to read a
-rain field. Borrowing a donated service by default would have been taking something that was not
-offered, and would have shifted the moment of failure from a developer's screen to a user's.
+So from 2026-09-18 (`792db77`, *stop borrowing OpenStreetMap's tiles*) there was no default
+provider at all: `MAP_TILE_URL` was empty unless configured, and the map drew the radar over a
+graticule with a dozen cities marked. Borrowing a donated
+service by default would have been taking something that was not offered, and would have shifted
+the moment of failure from a developer's screen to a user's.
+
+**Resolved 2026-09-27 (Q-5): the default is basemap.de Web Raster, colour variant.** The objection
+above was to *borrowing*, not to having a basemap, and basemap.de is not borrowed — it is the
+German federal mapping agency's (BKG) basemap, published as open data under CC BY 4.0 precisely to
+be reused. Four properties decided it over the alternatives:
+
+- **No key and no account.** Nothing to provision, nothing to rotate, nothing to leak. Every keyed
+  provider puts its key in the rendered HTML, where it is public by construction and has to be
+  referer-restricted to stop strangers spending the quota.
+- **No quota.** Not a large free tier — no metering at all. There is no traffic level at which the
+  map switches off or starts costing money, which removes a whole class of thing to monitor.
+- **No non-commercial clause.** This is the one that separates it from the styles that look
+  nicest. Stadia, Jawg and MapTiler all restrict their free tiers to non-commercial use, which
+  would stop being satisfied the day this page carried advertising; CARTO drops from 5M to 1M
+  tiles a month on the same event. CC BY 4.0 has no such concept, so the decision does not have to
+  be revisited if the service's funding ever changes.
+- **Its coverage is the radar's coverage.** Germany only. That reads as a limitation and is not:
+  RADVOR RV is a German product on the DE1200 grid, so a global basemap would only render places
+  this service can say nothing about. Expanding past Germany means finding another radar source
+  (OPERA, or per-country services) — a data problem, not a tile problem — so paying for global
+  tiles today would be buying coverage the rest of the system cannot use.
+
+The trade accepted in exchange: it is WMTS, so the template is `{z}/{y}/{x}` rather than the
+`{z}/{x}/{y}` the rest of the world uses, and getting that backwards renders a *scrambled* map
+with every tile a real tile in the wrong place and no error anywhere. That failure is silent
+enough to be worth a test of its own
+(`test_the_default_basemap_template_puts_y_before_x`) and a `make verify-basemap` target, because
+the neighbouring failure — a wrong path serving blank tiles — looks exactly like "no rain
+anywhere" on a map whose entire job is showing rain.
+
+Setting both `map_tile_url` and `map_tile_attribution` to `""` restores the graticule state. It is
+still a supported configuration rather than a historical one: it is the answer for working offline,
+and for anyone who wants no third party in the request path at all.
 
 `Content-Security-Policy: img-src` is derived from whatever `MAP_TILE_URL` is set to, so the
-policy can never be broader than the provider in use, and names no origin at all by default.
-Choosing a provider (**Q-5**) is now a deployment decision with no code in it.
+policy can never be broader than the provider in use, and narrows to nothing when no provider is
+configured. Choosing a *different* provider remains a deployment decision with no code in it —
+two lines in `terraform.tfvars` and an apply, no image rebuild, because the digest does not change.
 
 ---
 
@@ -1001,8 +1038,8 @@ this page is for choosing a spot, `/map` is for watching weather) is drawn under
 else, because an overlay on top hides the thing being positioned.
 
 Picking a spot and showing rain on it are separate capabilities: with no `OVERLAY_DIR` the map
-still works, it just has no radar on it. With no `MAP_TILE_URL` there is no basemap either, and
-the fallback is the same graticule-and-cities used by `/map`.
+still works, it just has no radar on it. Clearing `MAP_TILE_URL` removes the basemap too, and the
+fallback is the same graticule-and-cities used by `/map`.
 
 **Saving** is two requests, not one, because a move resets the alert state and a rule change does
 not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
@@ -1487,7 +1524,7 @@ owns them:
 | F-14–F-16 `/forecast` amplification, rule-parameter abuse, web hardening | M3/M5 | CSP `frame-ancestors`, `Referrer-Policy`, CSRF, mail header injection, session model |
 | F-17 location updates silently suppress alerting for a moving user | M7 | D-17 resets state on a >1 km move; an app updating location often could keep a user permanently in `UNKNOWN` |
 | F-18 supply chain and deploy path | M6 | Pin dependencies, pin base image by digest |
-| **Leaflet is loaded from a CDN** | M6 | *Half resolved 2026-09-18.* The tile half is gone: there is no default basemap, so no tile server sees anyone's IP unless an operator configures one, and `img-src` follows that choice. Leaflet itself still comes from unpkg, so every visitor's browser still reveals its IP there. **Vendor Leaflet into `static/` before any public use** and drop `MAP_SCRIPT_SRC` back to `'self'`. Neither this environment nor the dev VM could reach unpkg to vendor it |
+| ~~**Leaflet is loaded from a CDN**~~ | M6 | **Resolved 2026-09-27.** Leaflet 1.9.4 is vendored under `rainalert/api/static/vendor/leaflet`, byte-identical to the npm tarball (which is what unpkg serves) and checked against the registry's own sha512 at vendoring time. `MAP_SCRIPT_SRC` is gone; `script-src` and `style-src` are `'self'` again, and no page loads a script or stylesheet from another origin. The blocker was never the work but the network — neither this environment nor the dev VM could reach unpkg — and it turned out `registry.npmjs.org` was reachable all along, which is the better source anyway because it ships a checksum to verify against. `make vendor-leaflet` re-vendors and refuses to write anything on a checksum mismatch; `tests/test_vendored_leaflet.py` pins both files' sha256 so a local edit fails the suite instead of silently becoming a fork |
 
 ## 19. Open questions
 
@@ -1497,7 +1534,7 @@ owns them:
 | Q-2 | Confirm the private-audience assumption (D-18). Going public adds Impressum, Datenschutzerklärung, provider DPA | before any public link |
 | ~~Q-3~~ | **Resolved 2026-09-16: Cloud SQL `db-f1-micro` in `europe-west3` for production, Neon or local Postgres for dev/CI.** Reasoning in §6.3 — the 5-minute cadence exhausts Neon's free CU-hour allowance around day 16 of each month, and Neon would add a second, US-headquartered processor for the table holding email plus home coordinates | done |
 | Q-4 | Mail provider account: Brevo vs Mailgun vs SendGrid (all have a usable free tier) | M3 |
-| Q-5 | Map tiles: OSM public tiles are fine privately but not for a public launch | M5 |
+| ~~Q-5~~ | **Resolved 2026-09-27: basemap.de Web Raster (BKG) is the default.** CC BY 4.0, no API key, no account, no quota, and — the property that decided it — no non-commercial clause, so it survives this service ever carrying ads. Germany only, which matches the DE1200 composite's own footprint; expanding past Germany is a radar-data problem (OPERA or per-country services) long before it is a basemap problem, so global coverage was not worth paying for. Reasoning and the alternatives in §11.1 (*Basemap tiles*) and docs/LOCAL.md §"Choosing a basemap" | done |
 | Q-6 | Should raw archives be kept longer than 48 h — and become a permanent cold archive? They are the system of record (D-23), N-independent at ~500 GB/year, ≈ €2–4/month on Coldline, and the only thing that allows retroactively re-tuning thresholds against real weather. My recommendation: 48 h hot now, revisit once alerting is tuned | M2 |
 | Q-8 | Is 12 h the right past span, or would 24 h be more useful? Storage is negligible (~22 MB per 12 h); the real limits are DWD's own file retention and slider usability | M5 |
 | Q-9 | Accept the mail provider's DPA and Google's CDPA before the first friend subscribes (F-12). Ten minutes of clicking, and Art. 28 GDPR applies from the first address handed over — this is not launch paperwork | M3 |

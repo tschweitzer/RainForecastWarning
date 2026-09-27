@@ -460,7 +460,13 @@ def test_the_policy_was_not_widened_to_fix_the_marker(client):
 
 
 def test_no_page_relies_on_a_third_party_image(client):
-    """Scripts and styles come from the CDN until Leaflet is vendored; images must not."""
+    """No page pulls an image from another origin.
+
+    This used to be the narrower claim - scripts and styles came from unpkg, so only images could
+    be held to 'self'. Since Leaflet was vendored (D-44) nothing does, and
+    tests/test_vendored_leaflet.py asserts the general form. This stays as the specific one,
+    because the marker icon is exactly where it was broken before.
+    """
     for path in ("/", "/map", "/manage"):
         page = client.get(path).text
         for marker in ('<img src="https://', "src: 'https://", "iconUrl"):

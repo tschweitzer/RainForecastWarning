@@ -41,24 +41,41 @@ alert_email = "you@example.org"
 # mail_from     = "RainAlert <noreply@example.org>"
 
 # --- Basemap ---------------------------------------------------------------------------------
-# With these empty the map draws the radar over a graticule and a few cities. That is the
-# designed no-provider state, not a broken map (DESIGN.md §2).
+# Nothing to set: the default is basemap.de Web Raster (BKG), which needs no key and no account.
+# CC BY 4.0, no quota, and no non-commercial clause - so it stays valid if this service ever
+# carries ads. Germany only, which is the right shape because the DE1200 radar composite stops
+# at roughly the same border (DESIGN.md D-43).
 #
-# A provider you have signed up with:
+# Confirm the endpoint once before you rely on it - a WMTS path is easy to get subtly wrong and
+# a wrong one renders blank tiles rather than an error:
+#   make verify-basemap
+#
+# To use a different provider instead. NOTE the key here is public - it lands in the rendered
+# HTML and in every visitor's network tab - so restrict it by HTTP referer in the provider's
+# console, or somebody else will spend your quota:
 # map_tile_url         = "https://tiles.example.com/{z}/{x}/{y}.png?key=YOUR_KEY"
 # map_tile_attribution = "&copy; Example Maps"
 #
-# What local development uses (docs/LOCAL.md). It works, and it is NOT acceptable here:
-# OpenStreetMap's tile servers are volunteer-run and their usage policy excludes applications.
-# One browser looking at a map during development is light; a deployed service on a five-minute
-# cadence is an application, and they will block it - rightly. Shown so the shape of both
-# settings is concrete, not as something to uncomment:
+# Watch the placeholder order when you switch. basemap.de is WMTS and wants {z}/{y}/{x}; most
+# OSM-derived providers want {z}/{x}/{y}. Swapping them renders a scrambled map, not an error.
+#
+# Watch the licence too. Several providers' free tiers are non-commercial only - Stadia, Jawg and
+# MapTiler at the time of writing - which stops being allowed the day this page carries
+# advertising. basemap.de and Esri (2M tiles/month free, then metered) have no such clause, and
+# CARTO drops from 5M to 1M tiles/month when the use is commercial. docs/LOCAL.md
+# §"Choosing a basemap" has the comparison.
+#
+# For no basemap at all - the radar over a graticule with cities marked, which is a supported
+# state and not a broken map - set both to empty:
+# map_tile_url         = ""
+# map_tile_attribution = ""
+#
+# What local development used to use (docs/LOCAL.md), kept here as a warning rather than an
+# option: OpenStreetMap's own tile servers are volunteer-run and their usage policy excludes
+# applications. One browser looking at a map is light; a deployed service is an application, and
+# they will block it - rightly. Do not uncomment this:
 # map_tile_url         = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 # map_tile_attribution = "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
-#
-# Whatever you pick, pick a MUTED style - grey "positron"/"light"/"canvas". The radar is the
-# foreground, and a basemap with saturated green landcover hides the "mäßiger Regen" band,
-# which is green too.
 
 # --- Push ------------------------------------------------------------------------------------
 # The public server sees every topic name and every message body. Fine for a first test, worth

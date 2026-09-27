@@ -59,15 +59,31 @@ variable "ntfy_server" {
 }
 
 variable "map_tile_url" {
-  description = "Basemap tile template, e.g. https://tiles.example.com/{z}/{x}/{y}.png?key=... Empty by default and deliberately so (DESIGN.md §2): the obvious choice, tile.openstreetmap.org, is volunteer-run, its usage policy excludes applications, and it blocks them. With nothing set the map draws the radar over a graticule and a few cities, which is enough to read a rain field and costs nobody anything."
+  description = "Basemap tile template. Defaults to basemap.de Web Raster (BKG): CC BY 4.0, no key, no quota, no non-commercial clause, Germany only - which matches the radar's own footprint (DESIGN.md D-43). Note it is WMTS, so the order is {z}/{y}/{x}, y before x. Set to \"\" along with map_tile_attribution for no basemap at all: the map then draws the radar over a graticule with cities marked, which is a supported state rather than a broken one."
   type        = string
-  default     = ""
+  default     = "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0/de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png"
+
+  validation {
+    # Deliberately does NOT check the {z}/{y}/{x} vs {z}/{x}/{y} order: both are legitimate
+    # depending on the provider, so Terraform cannot know which is right. What it does catch is
+    # pasting a finished tile URL with the numbers already substituted in, which is the one
+    # version of this mistake that is unambiguously wrong. The order is checked instead against
+    # the shipped default, in tests/test_vendored_leaflet.py.
+    condition     = var.map_tile_url == "" || (strcontains(var.map_tile_url, "{z}") && strcontains(var.map_tile_url, "{x}") && strcontains(var.map_tile_url, "{y}"))
+    error_message = "map_tile_url must contain the {z}, {x} and {y} placeholders, or be empty for no basemap."
+  }
 }
 
 variable "map_tile_attribution" {
-  description = "Required by every provider worth using, and by their licence. Shown in the map's corner."
+  description = "Required by every provider worth using, and by their licence. Shown in the map's corner. Change it whenever you change map_tile_url - an attribution that credits the wrong service is worse than none."
   type        = string
-  default     = ""
+  default     = "&copy; <a href=\"https://www.bkg.bund.de\">BKG</a> (basemap.de) <a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>"
+
+  validation {
+    # The one pairing that is actually wrong: tiles from somebody with no credit on screen.
+    condition     = var.map_tile_url == "" || var.map_tile_attribution != ""
+    error_message = "map_tile_attribution cannot be empty when map_tile_url is set: every provider requires credit, and so does their licence."
+  }
 }
 
 variable "image" {

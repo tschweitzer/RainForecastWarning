@@ -40,7 +40,7 @@
   {% endfor %}
 </nav>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <style>
   .controls { display:flex; gap:.75rem; align-items:center; margin-top:1rem; }
   .controls button { margin:0; width:3rem; }
@@ -76,7 +76,7 @@
            margin-top:.35rem; font-size:.85rem; color:var(--muted); }
   .range strong { color:var(--accent); }
 </style>
-<script nonce="{{ request.state.csp_nonce }}" src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="/static/vendor/leaflet/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">

@@ -75,12 +75,6 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # belongs on every page, so it should not depend on each handler remembering to pass it.
 TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 
-#: Leaflet is loaded from a CDN because this environment cannot vendor it. That means every
-#: visitor's browser tells unpkg.com their IP, which sits badly with a service whose whole
-#: privacy story is data minimisation. **Vendor Leaflet into static/ before deploying** (M6) and
-#: drop these two origins back to 'self'.
-MAP_SCRIPT_SRC = "https://unpkg.com"
-
 #: The settings-page session. Not prefixed `__Host-`, which would be the stronger choice, because
 #: that prefix requires Secure and this service is served over plain http in development - a
 #: cookie the browser silently refuses to store is a page that silently never logs in.
@@ -292,8 +286,12 @@ def create_app(
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
-            f"script-src 'self' 'nonce-{nonce}' {MAP_SCRIPT_SRC}; "
-            f"style-src 'self' 'unsafe-inline' {MAP_SCRIPT_SRC}; "
+            # No third-party origin in either of these. Leaflet used to come from unpkg, which
+            # meant every visitor announced their IP to a CDN before the map drew anything. It is
+            # vendored under static/vendor/leaflet now (M6), so both directives are back to
+            # 'self': every script and stylesheet a page loads is served by this app.
+            f"script-src 'self' 'nonce-{nonce}'; "
+            "style-src 'self' 'unsafe-inline'; "
             # Both configured image sources, not just the tiles. The overlays are PNGs on
             # whatever OVERLAY_PUBLIC_BASE_URL names - a GCS bucket in production - and with
             # only 'self' allowed the browser blocked every one of them: the map drew an empty
