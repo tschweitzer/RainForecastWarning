@@ -18,8 +18,20 @@ dependencies = [
     "python-multipart>=0.0.9",
     "alembic>=1.13",
     "pillow>=10.0",
-    # QR codes for the ntfy subscribe URL. Pure Python, no dependencies, ~60 KB.
-    "segno>=1.6",
+    # Web push (D-45). Deliberately not `pywebpush`, which is the usual choice: it brings both
+    # `requests` and `aiohttp`, neither of which this project uses, and it owns the HTTP call - so
+    # the injectable `httpx.BaseTransport` every other transport here is tested through would not
+    # work. These two are the libraries pywebpush itself uses for the parts that are actually hard.
+    #   py-vapid  - signs the RFC 8292 Authorization header
+    #   http-ece  - RFC 8291 aes128gcm payload encryption
+    # Both are single-maintainer PyPI "critical projects"; noted in DESIGN.md D-45 as a risk to
+    # watch rather than a reason to hand the whole thing to a third dependency that wraps them.
+    "py-vapid>=1.9",
+    "http-ece>=1.2",
+    # Imported directly by notify/webpush.py for the ephemeral P-256 keypair each message needs,
+    # not only pulled in by the two above. Declared because it is imported: a transitive dependency
+    # that a direct import relies on breaks the day the intermediate drops it.
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

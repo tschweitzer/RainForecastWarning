@@ -305,6 +305,23 @@ gcloud run jobs execute rainalert-migrate --region europe-west3 --wait
 CI fails if the models and migrations have drifted, so a missing migration is caught before it
 reaches here.
 
+### Reverting the web push change specifically
+
+`git revert` of the D-45 commit also reverts the migration *file*, so alembic's head drops back to
+`d5a1c7e93b42` while the database is still at `f3b8c21e7a94`. The old code then meets
+`push_p256dh`/`push_auth` columns it does not know and `channel = 'webpush'` rows it cannot route.
+
+Downgrade the database **before** deploying the revert, not after:
+
+```sh
+gcloud run jobs execute rainalert-migrate --region europe-west3 --args=downgrade,-1 --wait
+# then deploy the reverted image
+```
+
+The migration handles this correctly in both directions — it deletes the `webpush` rows on the way
+down, because the older schema has nowhere to put their keys. It is the ordering that has to be
+right, and it is the opposite of the usual "deploy, then migrate".
+
 ### Rolling back
 
 Deploy the previous digest. Roll the schema back only if the new one is genuinely incompatible —
@@ -316,6 +333,53 @@ Postgres will happily serve an older application from a newer schema in most cas
 It signs the unsubscribe links, which are stateless. Rotating it **invalidates every unsubscribe
 link already in someone's inbox**. Only do it if the key is believed compromised, and expect
 support mail.
+
+### Do not rotate the VAPID key
+
+`rainalert-vapid-private-key` signs every web push send, and a push service checks each one against
+the key the subscription was created with. Replace it and **every existing push subscriber silently
+stops being warned**: the rejection is a 401 or 403, not the 410 that would tell us to delete the
+row, so nothing is cleaned up and nothing is reported. Subscribers keep their notification
+permission, see no error, and simply never hear from us again. There is no repair short of asking
+every one of them to subscribe afresh, and no way to reach them to ask.
+
+Terraform generates it (`tls_private_key.vapid` in `infra/secrets.tf`) and will not replace it on its
+own, because the resource has no inputs that change. What *would* replace it is a `terraform taint`,
+a `-replace=`, or losing the state file. If the state is ever lost, restore it from the bucket's
+versions rather than re-applying: a fresh apply mints a new key and takes every subscriber with it.
+
+If it genuinely has to be rotated - a real compromise - accept that push subscribers are gone, and
+delete their rows so the database does not hold coordinates for people who can no longer be reached:
+
+```sh
+gcloud run jobs execute rainalert-migrate --region europe-west3   # nothing schema-related; just
+# ... then, with the proxy up:
+psql -c "delete from subscribers where channel = 'webpush';"
+```
+
+### The liveness job
+
+`rainalert-liveness` runs weekly (Wednesdays) and is the only mechanism that notices a push
+subscriber who left without telling us — blocking notifications, clearing site data and uninstalling
+the browser all revoke the subscription silently (D-46). It sends one notification to anyone who has
+heard nothing for `WEBPUSH_LIVENESS_DAYS` (30), and deletes whoever the push service reports as
+gone. Weekly rather than monthly because a monthly run does not bound silence at 30 days - somebody
+quiet since just after a run is not yet 30 days quiet at the next one, so the first run that sees
+them is the one after, about 60 days. Three runs in four find nobody due, which costs nothing.
+
+Check what it would do before trusting it, which needs no schedule:
+
+```sh
+gcloud run jobs execute rainalert-liveness --region europe-west3 --wait
+gcloud run jobs executions logs read --region europe-west3 --job rainalert-liveness --limit 50
+```
+
+Two failure modes worth knowing. If it has **never run successfully**, stale subscriber rows
+accumulate and so do their stored coordinates — which is a retention problem, not just an
+operational one. If it deletes **everybody at once**, suspect the VAPID key rather than the
+subscribers: a rotated key makes every send fail, and while those failures are 401/403 rather than
+410 and should *not* delete anyone, a mass deletion here is the signal to stop the scheduler and
+look before the next run.
 
 ---
 
@@ -338,6 +402,51 @@ support mail.
   fragment, which a browser never sends (D-26) — but the paths themselves still say who asked
   for what, and the logs carry client IPs.
 - **Nothing here has spoken to the real DWD server.** Every test uses fixtures or a local replay.
+- **Nothing here has spoken to a real push service either, and no real phone has been tested**
+  (Q-14). The encryption round-trips against a simulated browser; the service worker and the signup
+  page's JavaScript are now *executed* rather than grepped (`tests/js/`, bridged by
+  `tests/test_service_worker.py`), so what the worker does with a payload is checked; and Chromium
+  renders and drives the pages. Still unverified: a real permission prompt, a notification in an
+  Android shade, the action buttons drawing, whether FCM and Mozilla accept our RFC 8291 bodies, and
+  `pushsubscriptionchange` firing on a rotation. Treat the first real subscriber as the test, and
+  watch `notifications.status` on their first warning.
+- **No `Topic` header (RFC 8030 §5.4), deliberately.** A phone offline for 25 minutes comes back to
+  several queued warnings; `Topic` would let the push service collapse them server-side so only the
+  newest is delivered. It is not needed for the *reader's* experience, because the client-side `tag`
+  already collapses them: each queued push wakes the worker, each `showNotification` under the same
+  tag replaces the last, and what they see is the freshest one — which is the one they want. What
+  `Topic` would actually buy is bandwidth: several encrypted payloads delivered to a metered radio
+  instead of one. That is a real but small cost, and it is the whole of the argument.
+  **Revisit this if the tags change.** The reasoning depends entirely on same-kind messages sharing
+  a tag. They now use two tags (`rainalert-alert` and `rainalert-manage`, see `api/mail.py`), which
+  preserves the collapse *within* a family; splitting further — per event, say — would break it and
+  make `Topic` worth having.
+- **There is no instrument for a push that is accepted and never displayed.** If a payload were
+  encrypted to the wrong keys, the push service would still answer 201 and this service would record
+  `sent`; the reader sees nothing and has nothing to report. `run_liveness` cannot catch it either,
+  because it measures successful *sends*. Two things bound it, and they are worth stating because
+  together they make the gap smaller than it first looks:
+  1. **A confirmation proves the chain once, per subscriber.** A push subscriber cannot reach
+     `confirmed_at` unless a notification was encrypted, delivered, rendered and tapped. So day-one
+     breakage is impossible; what is left is *regression* — a VAPID rotation, a payload-shape change
+     — after a subscriber is already confirmed.
+  2. **The liveness ping already carries a tap.** It ships an Einstellungen button, and
+     `POST /api/v1/manage/request` is reached only when a human presses it.
+  `run_liveness` now logs `silent=<n>`: confirmed push subscribers with successful sends who have
+  never had a `MANAGE` token issued. It is a smell, not an alarm — someone can simply never need
+  their settings — but a number that climbs while sends succeed is the signature of this failure,
+  and there was previously nothing at all to watch.
+- **Nothing deletes a push signup whose confirmation token has expired.** `purge_unconfirmed` runs
+  at `unconfirmed_purge_hours` and covers it, so the row does go — but `due_for_liveness` excludes
+  unconfirmed subscribers by design, so until the purge runs the coordinates of somebody who never
+  completed a signup are held with nothing watching them. Worth re-checking if the purge job's
+  schedule ever changes.
+- **iOS needs the site on the Home Screen** before web push works at all, which is a step the page
+  describes and nobody here has performed. An iPhone user who does not do it gets no warnings and no
+  error.
+- **Desktop push only arrives while the browser is running.** Chrome, Firefox and Safari all launch
+  the service worker for a push only if the browser process is alive, so a closed laptop misses
+  warnings. Not a regression — the old browser route had the same ceiling — and not fixable.
 - **The database has a public endpoint.** Nothing may connect to it — `authorized_networks` is
   empty and `ssl_mode` is `ENCRYPTED_ONLY`, so the only way in is the Cloud SQL Auth proxy
   authenticating as a service account with `roles/cloudsql.client`. Real network isolation means

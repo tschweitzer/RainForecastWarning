@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Angemeldet</h1>
-{% if channel == "ntfy" %}
-<p class="lede">Du bekommst jetzt eine Push-Nachricht, wenn Regen aufzieht.</p>
+{# `webpush` since D-45. This said `ntfy` for a while after the channel was renamed, which meant
+   every push subscriber was told they would get email - on the first page they ever see - and was
+   also denied the one line telling them how to get back into settings. #}
+{% if channel == "webpush" %}
+<p class="lede">Du bekommst jetzt eine Benachrichtigung, wenn Regen aufzieht.</p>
 {% else %}
 <p class="lede">Du bekommst jetzt eine Mail, wenn Regen aufzieht.</p>
 {% endif %}
@@ -12,20 +15,51 @@
 </p>
 <p class="hint">
   Ort, Schwelle, Vorwarnzeit und Umkreis – du bist gerade angemeldet und kommst direkt hinein.
-  {% if channel == "ntfy" %}
-  Später erreichst du das jederzeit über den Knopf „Einstellungen“ in deinen Nachrichten.
+  {% if channel == "webpush" %}
+  {# Was: "jederzeit über den Knopf Einstellungen in jeder Warnung - das ist der Weg zurück
+     hierher". Two things wrong with it. "jederzeit ... in jeder Warnung" contradicts itself: in a
+     dry month there is no warning, so it is not jederzeit. And it is not "der Weg" - /manage is
+     linked in the nav of every page and, when this browser holds a subscription, offers "Link an
+     diesen Browser schicken" without waiting for weather. A reader who wanted to move their pin,
+     or exercise deletion, in a dry spell was told to wait for rain. #}
+  {# "sie", not "wieder hierher": the reader is on the "Angemeldet" page and "Einstellungen" goes to
+     /manage, so "hierher" promised a return to this page - the same class of error as the
+     "Weg zurück hierher" sentence this paragraph replaced. #}
+  Später öffnest du sie über „Einstellungen“ unten auf jeder Seite – wir schicken dir dann eine
+  Benachrichtigung mit dem Zugang. Der Knopf „Einstellungen“ auf jeder Warnung führt an dieselbe
+  Stelle.
   {% endif %}
 </p>
+
+{% if channel == "webpush" %}
+{# D-47, on the page that marks the reader becoming a subscriber - which is where it was missing.
+   Not inside the Zugangsschlüssel <details> below: that is collapsed, its summary says the reader
+   only needs it "für die Schnittstelle", and the "kein Ersatz-Zugang" line in it is about the API
+   key, not about this. The product's hardest constraint cannot live behind a disclosure labelled
+   as irrelevant. #}
+<p class="hint">
+  Diese Anmeldung lebt in diesem Browser. Löschst du die Websitedaten („Cookies und andere
+  Websitedaten“), endet sie – einen Ersatz-Zugang gibt es nicht, du meldest dich dann neu an.
+</p>
+{% endif %}
 
 <details class="note">
   <summary><strong>Zugangsschlüssel</strong> – brauchst du nur für die Schnittstelle</summary>
   <p>Er wird nur jetzt angezeigt und nirgends noch einmal. Zum Ändern deiner Einstellungen
   brauchst du ihn nicht – dafür ist der Knopf oben da.</p>
+  {# Said explicitly because "wird nur jetzt angezeigt" invites the opposite conclusion, and D-47
+     means a reader who writes it down as their way back in has written down the wrong thing. #}
+  <p>Er ist <strong>kein</strong> Ersatz-Zugang: verlierst du diesen Browser, hilft er dir nicht.</p>
   <code>{{ api_token }}</code>
 </details>
 
 <p class="hint">
   <a href="{{ settings.public_base_url.rstrip('/') }}/unsubscribe#t={{ unsubscribe_token }}">Abmelden
-  und alles löschen</a> – geht auch jederzeit später über den Link in jeder Nachricht.
+  und alles löschen</a> –
+  {% if channel == "webpush" %}
+  geht auch jederzeit später in den Einstellungen.
+  {% else %}
+  geht auch jederzeit später über den Link in jeder Mail.
+  {% endif %}
 </p>
 {% endblock %}

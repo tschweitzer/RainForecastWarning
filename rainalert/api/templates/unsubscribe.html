@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
+{# Channel-neutral on purpose. The token is in the URL fragment (D-26), so the server never sees it
+   and this page cannot know whether it is talking to an email or a push subscriber - and it is
+   where confirmed.html's "Abmelden und alles löschen" link sends *both*. It used to say
+   "E-Mail-Adresse", which a push subscriber has never given us. #}
 <h1>Abmelden</h1>
-<p class="lede" id="lede">Damit werden E-Mail-Adresse, Standort und Verlauf gelöscht. Das lässt sich
+<p class="lede" id="lede">Damit werden deine Anmeldung, dein Standort und der Verlauf gelöscht. Das lässt sich
 nicht rückgängig machen.</p>
 <form method="post" action="/unsubscribe" id="form">
   <input type="hidden" name="token" id="token" value="">
@@ -22,6 +26,27 @@ einmal direkt aus der Nachricht.</p>
     // Erased, and replaceState so Back does not return to a URL still carrying the token.
     history.replaceState(null, '', window.location.pathname);
   }
+  /* Release the browser's own subscription as well as the server's row.
+   *
+   * Without this, a push subscriber who unsubscribes from a notification link leaves their browser
+   * still holding a live subscription: /manage then reads it, announces "Dieser Browser ist für
+   * Regenwarnungen angemeldet" and offers to send a link for a subscriber that no longer exists -
+   * and the browser goes on listing the site under its notification permissions. The settings page
+   * already calls unsubscribe() on its own delete path; this is the same act on the other route to
+   * the same outcome.
+   *
+   * Best-effort and deliberately not awaited before submitting: the server-side deletion is what
+   * matters and must not be held up by, or made to depend on, a browser API that can reject. */
+  document.getElementById('form').addEventListener('submit', function () {
+    if (!('serviceWorker' in navigator)) { return; }
+    navigator.serviceWorker.getRegistration('/').then(function (registration) {
+      if (!registration) { return; }
+      return registration.pushManager.getSubscription().then(function (subscription) {
+        return subscription && subscription.unsubscribe();
+      });
+    }).catch(function () { /* the row is gone either way */ });
+  });
+
   if (!field.value) {
     document.getElementById('form').hidden = true;
     // The lede promises the very thing this state cannot deliver ("ein Klick noch"), so it goes

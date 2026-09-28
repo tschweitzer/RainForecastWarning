@@ -211,6 +211,10 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
         Notification(
             subscription_id=subscription.id,
             event_id=event.id,
+            # Set explicitly. The column defaults to "email", so every warning queued for a push
+            # subscriber was recorded as a mail - `liveness.py` sets it and this did not. Nothing
+            # reads the column yet, which is exactly why it was wrong for as long as it was.
+            channel=subscription.subscriber.channel.value,
             status="queued",
             queued_at=now,
             payload={
@@ -231,14 +235,49 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
 def deliver_queued(
     session: Session, settings: Settings, notifier, now: datetime | None = None
 ) -> tuple[int, int]:
-    """Send everything queued. Returns (sent, expired)."""
+    """Send everything queued. Returns (sent, expired).
+
+    Also the main place dead push subscriptions are noticed. A push service answers 404 or 410 once
+    a subscription has been revoked - the reader blocked notifications, cleared their site data, or
+    uninstalled the browser - and none of those reach us any other way. `DeliveryResult.gone` is
+    that signal, and acting on it here is what keeps us from posting to a dead endpoint every time
+    it rains, and from holding somebody's coordinates after they have gone (D-46).
+    """
     from rainalert.api.mail import alert_message
 
     now = now or datetime.now(UTC)
     rows = (
         session.execute(select(Notification).where(Notification.status == "queued")).scalars().all()
     )
+    # Not every queued row is a rain warning. The liveness job (D-46) writes rows to the same table
+    # so that its own sends are recorded and counted, and one of those left `queued` by a transient
+    # push failure used to be picked up here and passed to `alert_message`, which reads
+    # `payload["predicted_start_at"]` - a KeyError that escaped the per-row try below, aborted the
+    # whole run, and rolled back the `sent` status of every warning already delivered in it. So:
+    # every five minutes, no warnings at all, and duplicate sends of the ones that had worked.
+    #
+    # Expired rather than skipped, which is what the filter used to do. A row this function cannot
+    # render is a row it will never render, so skipping left it `queued` forever - in the table and
+    # in the `notifications_pending` index - and every future run walked past it again. `run_liveness`
+    # no longer leaves one queued, so nothing reaches this today; it is here so that the next message
+    # kind added to this table fails visibly instead of accumulating.
     sent = expired = 0
+    renderable, unknown = [], []
+    for row in rows:
+        (renderable if "predicted_start_at" in (row.payload or {}) else unknown).append(row)
+    rows = renderable
+    for row in unknown:
+        logger.warning("notification %s is queued but is not a rain warning - expiring it", row.id)
+        row.status = "expired"
+        row.error = "not a rain warning: deliver_queued cannot render this payload"
+        # Counted, so the run reports it. Without this a run that expired only these returned
+        # (0, 0) and `jobs/ingest.py`'s `if sent or expired:` logged nothing at all - and the
+        # counter is what an operator actually watches.
+        expired += 1
+    # Collected rather than deleted inside the loop: deleting a subscriber cascades to the very
+    # notification rows being iterated, and mutating a collection while walking it is how this
+    # would become an intermittent bug instead of an obvious one.
+    gone: set = set()
     for row in rows:
         if now - row.queued_at > MAX_NOTIFICATION_AGE:
             row.status = "expired"
@@ -252,8 +291,11 @@ def deliver_queued(
             row.error = "subscriber gone"
             expired += 1
             continue
-        message = alert_message(session, settings, subscriber, subscription, row.payload)
         try:
+            # Inside the try, not before it. Building the message reads the payload and the
+            # subscriber, and either can be wrong in a way one row does not get to impose on every
+            # other row in the batch - which is what happened when it sat outside.
+            message = alert_message(session, settings, subscriber, subscription, row.payload)
             result = notifier.send(message)
         except Exception as exc:
             row.error = f"{type(exc).__name__}: {exc}"
@@ -262,10 +304,31 @@ def deliver_queued(
         if result.ok:
             row.status = "sent"
             row.sent_at = now
-            row.provider_message_id = result.provider_message_id
+            # Truncated like `error` below it. This is a `Location` header from a push service -
+            # the one value written here that a third party controls the length of - going into a
+            # `String(256)`. Observed lengths are 60-110, so this is a guard rather than a fix, but
+            # an over-long one would be a `DataError` on the commit that rolls back the whole batch,
+            # including the rows that were delivered successfully.
+            row.provider_message_id = (
+                result.provider_message_id or None
+            ) and result.provider_message_id[:256]
             sent += 1
         else:
             row.error = result.error
+            if result.gone:
+                # Not an error to retry: this address will never accept anything again.
+                row.status = "expired"
+                expired += 1
+                gone.add(subscriber.id)
+
+    for subscriber_id in gone:
+        doomed = session.get(Subscriber, subscriber_id)
+        if doomed is not None:
+            logger.info(
+                "deleting subscriber %s: the push service says the subscription is gone",
+                subscriber_id,
+            )
+            session.delete(doomed)
     session.commit()
     return sent, expired
 

@@ -131,13 +131,14 @@
      notification list for good, and a screenshot of one should not be somebody's address. The
      reference stops resolving after an hour, and then this is simply the ordinary map, which is
      the whole point: last week's warning tells a reader nothing about where its owner lives. */
-  (function () {
+  function openOnTheWarningsPlace() {
     var hash = window.location.hash || '';
     if (hash.indexOf('#l=') !== 0) { return; }
     var token = decodeURIComponent(hash.slice(3));
     // Erased before anything else can read it, and replaceState so Back does not return to a
     // URL still carrying it.
     history.replaceState(null, '', window.location.pathname + window.location.search);
+    document.getElementById('stale-link').hidden = true;
 
     fetch('/api/v1/locate', {
       method: 'POST',
@@ -158,7 +159,25 @@
       // are in and to judge a shower's distance against it.
       map.setView([place.lat, place.lon], 11);
     }).catch(function () { /* the map is still a map */ });
-  })();
+  }
+
+  openOnTheWarningsPlace();
+
+  /* And again whenever the fragment changes, which is the case that was broken.
+     
+     The service worker prefers to reuse an open tab, and this function erases the hash as its first
+     act - so a tab left over from an earlier warning sits at plain `/map`. Sending it to
+     `/map#l=<new token>` changes only the fragment, which is a same-document navigation: no script
+     re-runs, the new token is never read, and the reader taps their second warning and gets the
+     country view with no explanation. Verified in Chromium: one locate call for two navigations.
+     
+     This listener IS the fix, and the direction matters: `focusOrOpen` in sw.js navigates an open
+     tab on purpose and depends on this to re-read the token. An earlier version had the worker dodge
+     the problem by opening a new window instead, and this comment used to describe that - but the
+     dodge matched every warning after the first, so an afternoon of showers left a column of map
+     tabs, and it was removed. A future reader reconciling the two comments would have been one step
+     from putting it back. It also covers a reader following two warning links by hand. */
+  window.addEventListener('hashchange', openOnTheWarningsPlace);
 
   RainRadar.timeline(map, {
     // Already resolved and clamped by the server, which also rendered the heading and the range

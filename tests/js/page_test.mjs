@@ -1,0 +1,118 @@
+/* Behavioural tests for the inline JavaScript the signup page ships.
+ *
+ * Takes the path to a rendered page as argv[2], pulls the functions out of it and runs them. The
+ * page's script is not a module and touches `document` at load, so it cannot simply be imported;
+ * extracting by brace-matching is the cheap way to test the parts that are pure logic.
+ *
+ * These exist because the alternative was asserting that substrings appear in the HTML, and that
+ * kind of test passed while `sameKey` would have destroyed a working subscription on every signup
+ * on a browser that reports an empty applicationServerKey. */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const body = fs.readFileSync(process.argv[2], 'utf8');
+/* The settings page, when given: `usesOurKey` there mirrors `sameKey` here, and two copies of a
+   comparison that decides whether a subscription is usable is exactly the pair that drifts. */
+const managed = process.argv[3] ? fs.readFileSync(process.argv[3], 'utf8') : null;
+
+function extract(name, source = body) {
+  const at = source.indexOf('function ' + name + '(');
+  assert.notEqual(at, -1, `the page no longer defines ${name}() - has it been renamed?`);
+  let depth = 0, started = false;
+  for (let i = at; i < source.length; i++) {
+    if (source[i] === '{') { depth++; started = true; }
+    else if (source[i] === '}') { depth--; if (started && depth === 0) return source.slice(at, i + 1); }
+  }
+  throw new Error(`unbalanced braces in ${name}()`);
+}
+
+const sandbox = {};
+new Function('sandbox', `${extract('keyBytes')}\n${extract('sameKey')}\n` +
+  'sandbox.keyBytes = keyBytes; sandbox.sameKey = sameKey;')(sandbox);
+const { keyBytes, sameKey } = sandbox;
+
+const KEY = 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkTCkLnCJ0i5H8Y_tJc5Hbv3bYlV0dBQdLHzWcAkLSVRxDDQ2cCLFxE';
+const bytes = keyBytes(KEY);
+const other = keyBytes(KEY.slice(0, -1) + (KEY.slice(-1) === 'A' ? 'B' : 'A'));
+
+const results = [];
+function test(name, fn) {
+  try { fn(); results.push(['ok', name]); }
+  catch (e) { results.push(['FAIL', name, e.message]); }
+}
+
+test('a base64url key decodes to the 65 bytes P-256 requires', () => {
+  assert.equal(bytes.length, 65);
+  assert.equal(bytes[0], 0x04, 'an uncompressed P-256 point starts with 0x04');
+});
+
+test('the same key is reused', () => {
+  assert.equal(sameKey({ options: { applicationServerKey: bytes.buffer } }, KEY), true);
+});
+
+test('a different key of the same length is replaced', () => {
+  assert.equal(sameKey({ options: { applicationServerKey: other.buffer } }, KEY), false);
+});
+
+test('a truncated key is replaced', () => {
+  assert.equal(sameKey({ options: { applicationServerKey: bytes.slice(0, 32).buffer } }, KEY), false);
+});
+
+// The four "we cannot tell" shapes. All must reuse: discarding a subscription we cannot prove is
+// stale costs the reader their settings, which is worse than the stale-key case it guards against.
+test('a subscription with no options is reused', () => {
+  assert.equal(sameKey({}, KEY), true);
+});
+
+test('options without a key is reused', () => {
+  assert.equal(sameKey({ options: {} }, KEY), true);
+});
+
+test('a null key is reused', () => {
+  assert.equal(sameKey({ options: { applicationServerKey: null } }, KEY), true);
+});
+
+test('an empty ArrayBuffer is reused, not treated as a mismatch', () => {
+  // Truthy, so `!key` did not catch it; length 0 !== 65 made it a "mismatch" and unsubscribed a
+  // working subscription on every signup attempt.
+  assert.equal(sameKey({ options: { applicationServerKey: new ArrayBuffer(0) } }, KEY), true);
+});
+
+test('a key that is not an ArrayBuffer at all is reused', () => {
+  assert.equal(sameKey({ options: { applicationServerKey: KEY } }, KEY), true);
+});
+
+// --- the settings page's copy of the same decision ---
+if (managed) {
+  const box = {};
+  new Function('box', `const VAPID_KEY = ${JSON.stringify(KEY)};\n` +
+    `${extract('usesOurKey', managed)}\nbox.usesOurKey = usesOurKey;`)(box);
+  const { usesOurKey } = box;
+
+  const shapes = [
+    ['our key', { options: { applicationServerKey: bytes.buffer } }, true],
+    ['a different key', { options: { applicationServerKey: other.buffer } }, false],
+    ['a truncated key', { options: { applicationServerKey: bytes.slice(0, 32).buffer } }, false],
+    ['no options', {}, true],
+    ['options without a key', { options: {} }, true],
+    ['a null key', { options: { applicationServerKey: null } }, true],
+    ['an empty ArrayBuffer', { options: { applicationServerKey: new ArrayBuffer(0) } }, true],
+    ['a key that is not an ArrayBuffer', { options: { applicationServerKey: KEY } }, true]
+  ];
+  for (const [label, sub, want] of shapes) {
+    test(`/manage agrees with / on ${label}`, () => {
+      assert.equal(usesOurKey(sub), want);
+      // The two must not merely both be defined - they must decide the same way, or a subscription
+      // is usable on one page and dead on the other.
+      assert.equal(usesOurKey(sub), sameKey(sub, KEY));
+    });
+  }
+}
+
+let failed = 0;
+for (const [status, name, message] of results) {
+  if (status === 'FAIL') { failed++; console.log(`FAIL ${name}: ${message}`); }
+  else { console.log(`ok   ${name}`); }
+}
+console.log(failed ? `\n${failed} of ${results.length} failed` : `\nall ${results.length} passed`);
+process.exit(failed ? 1 : 0);

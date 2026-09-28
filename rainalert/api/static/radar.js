@@ -149,11 +149,21 @@
      disagree about what a pin means. Nothing here is draggable and nothing binds a map click -
      this marks a spot, it does not pick one. */
   function mark(map, lat, lon, radius) {
-    L.circle([lat, lon], {
+    /* Removes the previous pin before drawing the new one. This used to add and keep no handle,
+       which was fine while it ran once per document - a warning opened a new tab. Since a tapped
+       warning now re-uses an open /map tab and `hashchange` re-reads the token, it runs again in
+       the same document: a reader who has moved would see the old pin and the new one with no way
+       to tell which is current, and every warning after that would retain another pair of layers. */
+    if (map.__rainalertMark) {
+      map.__rainalertMark.forEach(function (layer) { map.removeLayer(layer); });
+    }
+    var circle = L.circle([lat, lon], {
       radius: Math.max(radius || 0, 50), color: '#1f6fb2', weight: 1, fillOpacity: 0.08,
       interactive: false
     }).addTo(map);
-    L.marker([lat, lon], { icon: pinIcon(), interactive: false, keyboard: false }).addTo(map);
+    var pin = L.marker([lat, lon], { icon: pinIcon(), interactive: false, keyboard: false })
+      .addTo(map);
+    map.__rainalertMark = [circle, pin];
   }
 
   /* The radar loop. Every element is optional except the map, so a page can take the overlay

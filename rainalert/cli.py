@@ -479,7 +479,71 @@ def build_parser() -> argparse.ArgumentParser:
         "a longer run (try 0.5 on a shared-core instance)",
     )
     b.set_defaults(func=rerender)
+
+    k = sub.add_parser(
+        "vapid-keys", help="generate a VAPID keypair for web push (run once, then store it)"
+    )
+    k.set_defaults(func=vapid_keys)
+
+    live = sub.add_parser(
+        "liveness",
+        help="send the 'still subscribed' push and delete subscriptions that have gone",
+    )
+    live.add_argument("--dry-run", action="store_true", help="list who is due and send nothing")
+    live.set_defaults(func=liveness)
     return parser
+
+
+def vapid_keys(args: argparse.Namespace) -> int:
+    """Print a fresh VAPID keypair.
+
+    Run once per deployment. The private key goes into Secret Manager as `vapid-private-key`; the
+    public key is not configured anywhere - the app derives it from the private one so the two
+    cannot drift.
+
+    **Rotating this unsubscribes everybody, silently.** A push service checks each send against the
+    key the subscription was created with, and rejects a mismatch with 401/403 rather than the 410
+    that would tell us to delete the row. Subscribers keep their notification permission, stop
+    being warned, and nothing on either side says why.
+    """
+    from rainalert.notify.webpush import generate_vapid_keys
+
+    private_pem, public = generate_vapid_keys()
+    print("# VAPID keypair. Store the private key as a secret; it is not recoverable.")
+    print("# Rotating it silently unsubscribes every existing subscriber - see docs/RUNBOOK.md.")
+    print()
+    print("--- private key (VAPID_PRIVATE_KEY) ---")
+    print(private_pem.strip())
+    print()
+    print("--- public key, for reference only (the app derives this itself) ---")
+    print(public)
+    return 0
+
+
+def liveness(args: argparse.Namespace) -> int:
+    """Send the "still subscribed" notification, and delete whoever has gone (D-46).
+
+    Its real job is the deletion. A web push subscriber who blocks notifications or clears their
+    browser data never tells us, and only a send attempt finds out - so without this, a location is
+    held indefinitely for somebody whose threshold never triggers a warning.
+    """
+    from rainalert.config import get_settings
+    from rainalert.db.session import make_engine, make_session_factory
+    from rainalert.jobs.liveness import due_for_liveness, run_liveness
+    from rainalert.notify import build_notifier
+
+    settings = get_settings()
+    session_factory = make_session_factory(make_engine(settings.database_url))
+    with session_factory() as session:
+        if args.dry_run:
+            due = due_for_liveness(session, settings)
+            print(f"{len(due)} subscriber(s) would be notified:")
+            for subscriber, _ in due:
+                print(f"  {subscriber.id}  confirmed {subscriber.confirmed_at:%Y-%m-%d}")
+            return 0
+        sent, deleted = run_liveness(session, settings, build_notifier(settings.notifier, settings))
+    print(f"{sent} notification(s) sent, {deleted} subscriber(s) deleted")
+    return 0
 
 
 def _explain_connection_failure(reason: str) -> None:

@@ -21,7 +21,7 @@ resource "random_password" "metrics_token" {
 }
 
 resource "google_secret_manager_secret" "this" {
-  for_each  = toset(["api-database-url", "ingest-database-url", "secret-key", "smtp-password", "metrics-token"])
+  for_each  = toset(["api-database-url", "ingest-database-url", "secret-key", "smtp-password", "metrics-token", "vapid-private-key"])
   secret_id = "rainalert-${each.key}"
   replication {
     user_managed {
@@ -52,11 +52,34 @@ resource "google_secret_manager_secret_version" "metrics_token" {
   secret_data = random_password.metrics_token.result
 }
 
+# The VAPID signing key for web push (D-45). Generated here rather than by hand so that a first
+# deploy has no manual step and `versions/latest` exists before Cloud Run asks for it - the same
+# trap the depends_on in run.tf documents.
+#
+# `ignore_changes` on nothing and `lifecycle` blocks are deliberately absent, but note what a
+# *replacement* of this key would mean: every existing subscription becomes undeliverable, because
+# a push service checks each send against the key the subscription was created with and answers
+# 401/403 rather than the 410 that would tell us to delete the row. Subscribers keep their
+# notification permission and simply stop being warned. Terraform will not replace it on its own -
+# `tls_private_key` has no inputs that change - but `terraform taint` or a state loss would, and
+# that is not recoverable by re-running anything.
+resource "tls_private_key" "vapid" {
+  algorithm   = "ECDSA"
+  ecdsa_curve = "P256"
+}
+
+resource "google_secret_manager_secret_version" "vapid_private_key" {
+  secret = google_secret_manager_secret.this["vapid-private-key"].id
+  # PKCS8. py_vapid accepts SEC1 too, but PKCS8 is what `cryptography` writes by default and what
+  # `rainalert vapid-keys` prints, so the two paths produce the same shape.
+  secret_data = tls_private_key.vapid.private_key_pem_pkcs8
+}
+
 # The SMTP password is the one secret Terraform must not generate. Set it by hand:
 #   echo -n 'the-password' | gcloud secrets versions add rainalert-smtp-password --data-file=-
 
 resource "google_secret_manager_secret_iam_member" "api_reads" {
-  for_each  = toset(["api-database-url", "secret-key", "smtp-password"])
+  for_each  = toset(["api-database-url", "secret-key", "smtp-password", "vapid-private-key"])
   secret_id = google_secret_manager_secret.this[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.api.email}"
@@ -69,7 +92,7 @@ resource "google_secret_manager_secret_iam_member" "api_reads_metrics_token" {
 }
 
 resource "google_secret_manager_secret_iam_member" "ingest_reads" {
-  for_each  = toset(["ingest-database-url", "secret-key", "smtp-password"])
+  for_each  = toset(["ingest-database-url", "secret-key", "smtp-password", "vapid-private-key"])
   secret_id = google_secret_manager_secret.this[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.ingest.email}"

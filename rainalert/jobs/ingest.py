@@ -28,6 +28,7 @@ from rainalert.radar.client import BreakerOpen, BudgetExhausted, DWDClient, Fetc
 from rainalert.radar.decoder import RVFormatError, RVFrame, read_frames
 from rainalert.radar.overlay import DRAWN_FROM_MM_5MIN, build_projection, render_frame
 from rainalert.storage import ArchiveStore, OverlayStore
+from rainalert.subscriptions import purge_unconfirmed
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,20 @@ def ingest_once(
                 logger.info("delivered %d notification(s), expired %d", sent, expired)
             if report.blast_radius_tripped:
                 logger.error("blast radius tripped for cycle %s - no mail sent", nominal)
+
+        # Never-confirmed signups, deleted after `unconfirmed_purge_hours`. Run here because this is
+        # the only thing that runs on a schedule often enough to honour the promise: the signup page
+        # and the privacy page both say 24 hours, and until now `purge_unconfirmed` had no production
+        # caller at all - one reference, from a test. Cheap enough to run every cycle (an indexed
+        # scan of `confirmed_at IS NULL`), and it must not wait for the weekly liveness job, which
+        # would make "24 hours" mean "up to 30 days".
+        purged = purge_unconfirmed(session, settings, now)
+        if purged:
+            logger.info(
+                "purged %d unconfirmed signup(s) older than %d h",
+                purged,
+                settings.unconfirmed_purge_hours,
+            )
 
         # How wet the analysis frame was, on the same line as the rest. Without it a cycle that
         # decoded to almost nothing and a cycle full of rain log identically, and the only way

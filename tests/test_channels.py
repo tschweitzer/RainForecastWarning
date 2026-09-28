@@ -1,13 +1,21 @@
-"""Subscribing over a push channel (D-5 revised).
+"""Subscribing over the push channel (D-5 revised, D-45).
 
 Double opt-in was never about email specifically: it is about proving the channel reaches the
-person who asked. These tests are mostly about the ways that can go wrong differently for a push
-topic than for a mailbox.
+person who asked. These tests are mostly about the ways that can go wrong differently for a browser
+push subscription than for a mailbox.
+
+Rewritten rather than adapted when ntfy was removed. Roughly half of what was here tested things
+that no longer exist - that a generated topic was unguessable, that it was never taken from the
+request, that a QR code encoded the app link, that copying it degraded without clipboard
+permission. A push endpoint is issued by the browser and never shown to anyone, so none of those
+questions can be asked. What replaces them is one ntfy never raised: the endpoint is a URL a
+stranger picks, and we POST to it.
 """
 
+import re
 import uuid
+from types import SimpleNamespace
 
-import httpx
 import pytest
 from sqlalchemy import select
 
@@ -15,12 +23,35 @@ from rainalert import subscriptions as svc
 from rainalert.config import Settings
 from rainalert.db.models import Channel, Subscriber, SubscriptionStatus
 from rainalert.notify.base import DeliveryResult, OutboundMessage
-from rainalert.notify.ntfy import NtfyNotifier
 from rainalert.notify.routing import RoutingNotifier
 from rainalert.tokens import hash_address
-from tests.helpers import Recorder
 
 FRANKFURT = (50.1109, 8.6821)
+
+#: A plausible subscription, in the shape `PushSubscription.toJSON()` produces.
+ENDPOINT = "https://fcm.googleapis.com/fcm/send/cVBhZ2VLZXkxMjM0NTY3ODkw"
+P256DH = "BN4GvZtEZiZuqFxSKVZfSfluwlTOYPkxZswgcVYpXbPSyMkNCFYrCF2WNpgLzLTOdCcSsRPHWO4bXdhgbNJHEDo"
+AUTH = "tBHItJI5svbpez7KI4CCXg"
+
+
+def push_subscriber(address=ENDPOINT):
+    """A stand-in with the two fields every webpush message needs."""
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        address=address,
+        channel=Channel.WEBPUSH,
+        push_p256dh=P256DH,
+        push_auth=AUTH,
+    )
+
+
+ALERT_PAYLOAD = {
+    "predicted_start_at": "2026-09-27T14:25:00+00:00",
+    "cycle_time": "2026-09-27T14:00:00+00:00",
+    "lead_minutes": 25,
+    "peak_mm_5min": 0.4,
+    "timezone": "Europe/Berlin",
+}
 
 
 @pytest.fixture()
@@ -44,459 +75,636 @@ def client(db, settings):
     return TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
 
 
-# --- the topic ------------------------------------------------------------------------------
+def subscribe_body(**overrides):
+    body = {
+        "channel": "webpush",
+        "lat": FRANKFURT[0],
+        "lon": FRANKFURT[1],
+        "endpoint": ENDPOINT,
+        "p256dh": P256DH,
+        "auth": AUTH,
+    }
+    body.update(overrides)
+    return body
 
 
-def test_topics_are_unguessable_and_never_repeat():
-    """A public ntfy topic is a flat namespace: whoever knows it can subscribe and read.
+def alert_for(channel, address):
+    from rainalert.api.mail import alert_message
 
-    A rain warning says where and when it will rain for the person receiving it, so a guessable
-    topic is a location leak. 128 bits is the whole defence.
+    # The keys are part of a push subscriber, not decoration: `OutboundMessage` refuses a webpush
+    # message without them, which is what makes a builder that forgets them fail in the suite.
+    subscriber = SimpleNamespace(
+        id=uuid.uuid4(),
+        address=address,
+        channel=channel,
+        push_p256dh=P256DH if channel is Channel.WEBPUSH else None,
+        push_auth=AUTH if channel is Channel.WEBPUSH else None,
+    )
+    return alert_message(
+        None,
+        _SETTINGS_FOR_ALERT,
+        subscriber,
+        SimpleNamespace(timezone="Europe/Berlin"),
+        ALERT_PAYLOAD,
+    )
+
+
+_SETTINGS_FOR_ALERT = Settings(
+    database_url="postgresql+psycopg://unused",
+    public_base_url="https://rain.example.invalid",
+    secret_key="test-secret",
+    notifier="console",
+    _env_file=None,
+)
+
+
+# --- the endpoint is the identity, and it is attacker-supplied --------------------------------
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://fcm.googleapis.com/fcm/send/x",  # not https
+        "https://169.254.169.254/computeMetadata/v1/instance/",  # the metadata service
+        "https://10.0.0.5/internal",
+        "https://localhost:5432/",
+        "https://fcm.googleapis.com.evil.test/x",  # an allowed host as a prefix of another
+        "https://notfcm.googleapis.com/x",  # an allowed host as a suffix
+    ],
+)
+def test_an_endpoint_that_is_not_a_push_service_is_refused(client, db, endpoint):
+    """The endpoint is a URL chosen by whoever is calling, and the notifier POSTs to it.
+
+    Without the host check this signup form is a server-side request forgery primitive: it makes
+    this service fetch a URL of the caller's choosing from inside its own network, and hands the
+    result back through a notification error. Refused before anything is stored.
     """
-    topics = {svc.new_ntfy_topic() for _ in range(500)}
-    assert len(topics) == 500
-
-    random_part = next(iter(topics)).removeprefix("rainalert-")
-    # url-safe base64 of 16 bytes: 22 characters, ~128 bits.
-    assert len(random_part) >= 22
-
-
-def test_the_topic_is_generated_not_taken_from_the_request(db, settings):
-    """Anything a caller supplies could be chosen to collide with somebody else's topic."""
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(endpoint=endpoint))
+    assert response.status_code == 422, endpoint
     with db() as session:
-        result = svc.subscribe(
+        assert session.execute(select(Subscriber)).first() is None, f"{endpoint} was stored"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://fcm.googleapis.com/fcm/send/abc",
+        "https://updates.push.services.mozilla.com/wpush/v2/abc",
+        "https://web.push.apple.com/abc",
+    ],
+)
+def test_the_real_push_services_are_accepted(client, db, endpoint):
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(endpoint=endpoint))
+    assert response.status_code == 202
+
+
+def test_the_same_browser_subscribing_twice_is_one_subscriber(client, db):
+    """Re-subscribing is normal: `pushManager.subscribe()` returns the same endpoint, and the page
+    calls it on every signup. It must not mint a second row."""
+    for _ in range(2):
+        assert client.post("/api/v1/subscriptions", json=subscribe_body()).status_code == 202
+    with db() as session:
+        assert len(session.execute(select(Subscriber)).scalars().all()) == 1
+
+
+def test_resubscribing_never_overwrites_the_stored_keys(db, settings):
+    """The opposite of what this used to assert, and the reversal is the point.
+
+    It read "resubscribing refreshes the keys", on the reasoning that a browser handing back the same
+    endpoint with new keys should be believed. It should not: an endpoint is not a secret - a push
+    service will not deliver to it for anyone without our VAPID key - so anyone who learns one could
+    replace the keys of a confirmed subscriber and silence them invisibly, the push service still
+    answering 201 while their browser fails to decrypt. That is the hole `/push/resubscribe` was
+    deleted for, and it was briefly reopened here.
+
+    Nothing legitimate needs the overwrite: `pushManager.subscribe()` with the same
+    applicationServerKey returns the existing subscription, so the same browser presents the same
+    pair. A genuinely rotated key comes with a new endpoint, hence a new row.
+    """
+    with db() as session:
+        svc.subscribe(
             session,
             settings,
-            channel=Channel.NTFY,
-            address="rainalert-i-picked-this",
+            channel=Channel.WEBPUSH,
+            address=ENDPOINT,
+            push_p256dh=P256DH,
+            push_auth=AUTH,
             lat=FRANKFURT[0],
             lon=FRANKFURT[1],
         )
-        assert result.address != "rainalert-i-picked-this"
-        assert result.address.startswith("rainalert-")
+        subscriber = session.execute(select(Subscriber)).scalar_one()
+        subscriber.confirmed_at = subscriber.created_at
+        session.commit()
+
+        svc.subscribe(
+            session,
+            settings,
+            channel=Channel.WEBPUSH,
+            address=ENDPOINT,
+            push_p256dh="ATTACKER" + P256DH[8:],
+            push_auth="ATTACKERattackerattac1",
+            lat=FRANKFURT[0],
+            lon=FRANKFURT[1],
+        )
+        session.expire_all()
+        subscriber = session.execute(select(Subscriber)).scalar_one()
+        assert subscriber.push_p256dh == P256DH
+        assert subscriber.push_auth == AUTH
 
 
-def test_an_email_address_on_the_ntfy_channel_is_refused_not_ignored(client, db):
-    """Silently dropping it is how someone ends up believing it was stored."""
-    response = client.post(
-        "/api/v1/subscriptions",
-        json={"channel": "ntfy", "email": "me@example.com", "lat": 50.11, "lon": 8.68},
-    )
+def test_an_endpoint_longer_than_a_mailbox_is_stored_whole(db, settings):
+    """`address` was VARCHAR(320), the RFC 5321 bound on a mailbox. A push endpoint has no such
+    bound, and a truncated one is a subscriber who can never be reached and cannot be repaired."""
+    long_endpoint = "https://fcm.googleapis.com/fcm/send/" + ("x" * 400)
+    with db() as session:
+        svc.subscribe(
+            session,
+            settings,
+            channel=Channel.WEBPUSH,
+            address=long_endpoint,
+            push_p256dh=P256DH,
+            push_auth=AUTH,
+            lat=FRANKFURT[0],
+            lon=FRANKFURT[1],
+        )
+        assert session.execute(select(Subscriber)).scalar_one().address == long_endpoint
+
+
+# --- what the two channels will and will not accept -------------------------------------------
+
+
+def test_an_email_address_on_the_push_channel_is_refused_not_ignored(client, db):
+    """Silently dropping an address someone supplied is how they end up believing it was stored."""
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(email="a@b.example"))
     assert response.status_code == 422
+    with db() as session:
+        assert session.execute(select(Subscriber)).first() is None
 
 
-def test_the_ntfy_channel_needs_no_address(client, db):
-    response = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-    )
-    assert response.status_code == 202
-    body = response.json()
-    assert body["topic"].startswith("rainalert-")
-    assert body["subscribe_url"].endswith(body["topic"])
+def test_a_push_subscription_on_the_email_channel_is_refused(client, db):
+    body = subscribe_body(channel="email", email="a@b.example")
+    assert client.post("/api/v1/subscriptions", json=body).status_code == 422
+
+
+@pytest.mark.parametrize("missing", ["endpoint", "p256dh", "auth"])
+def test_two_of_the_three_push_values_is_refused(client, db, missing):
+    """All three or none. A row with an endpoint and no keys can be stored and never delivered to,
+    which looks like a working subscription from both ends."""
+    body = subscribe_body()
+    body.pop(missing)
+    assert client.post("/api/v1/subscriptions", json=body).status_code == 422
+    with db() as session:
+        assert session.execute(select(Subscriber)).first() is None
 
 
 def test_email_still_requires_an_address(client, db):
     response = client.post(
-        "/api/v1/subscriptions", json={"channel": "email", "lat": 50.11, "lon": 8.68}
+        "/api/v1/subscriptions",
+        json={"channel": "email", "lat": FRANKFURT[0], "lon": FRANKFURT[1]},
     )
     assert response.status_code == 422
 
 
-# --- identity -------------------------------------------------------------------------------
+def test_an_endpoint_spelled_like_a_mailbox_is_a_different_subscriber():
+    """The hash covers the channel, so the two namespaces cannot collide."""
+    assert hash_address("email", "a@b.example") != hash_address("webpush", "a@b.example")
 
 
-def test_a_topic_spelled_like_a_mailbox_is_a_different_subscriber(db):
-    """The hash covers the channel, or these two would be one row."""
-    assert hash_address("email", "a@example.com") != hash_address("ntfy", "a@example.com")
+def test_endpoints_are_not_case_folded(db, settings):
+    """A mailbox folds case; a URL path does not. Folding an endpoint would change which
+    subscription it names."""
+    mixed = "https://fcm.googleapis.com/fcm/send/AbCdEf"
+    with db() as session:
+        svc.subscribe(
+            session,
+            settings,
+            channel=Channel.WEBPUSH,
+            address=mixed,
+            push_p256dh=P256DH,
+            push_auth=AUTH,
+            lat=FRANKFURT[0],
+            lon=FRANKFURT[1],
+        )
+        assert session.execute(select(Subscriber)).scalar_one().address == mixed
 
 
-def test_mailboxes_fold_case_and_topics_do_not():
-    """ntfy treats Abc and abc as different topics; folding them would merge two destinations."""
-    assert hash_address("email", "A@Example.COM") == hash_address("email", "a@example.com")
-    assert hash_address("ntfy", "Rain-ABC") != hash_address("ntfy", "rain-abc")
-
-
-# --- confirmation ---------------------------------------------------------------------------
+# --- double opt-in ----------------------------------------------------------------------------
 
 
 def test_a_push_subscription_is_pending_until_the_notification_is_tapped(db, settings):
-    """The reason differs from email - there is no third party to protect - but the property
-    does not: nothing is warned about until the channel has been shown to work."""
+    """Confirmation keeps its place on web push, for the reason it always had: it proves the channel
+    reaches the subscriber. There is more of that chain to get wrong here, not less - a service
+    worker that fails to install, a permission revoked between subscribing and the first send."""
     with db() as session:
         result = svc.subscribe(
-            session, settings, channel=Channel.NTFY, lat=FRANKFURT[0], lon=FRANKFURT[1]
+            session,
+            settings,
+            channel=Channel.WEBPUSH,
+            address=ENDPOINT,
+            push_p256dh=P256DH,
+            push_auth=AUTH,
+            lat=FRANKFURT[0],
+            lon=FRANKFURT[1],
         )
-        subscriber = session.execute(
-            select(Subscriber).where(
-                Subscriber.address_hash == hash_address("ntfy", result.address)
-            )
-        ).scalar_one()
+        subscriber = session.get(Subscriber, result.subscriber_id)
         assert subscriber.confirmed_at is None
         assert subscriber.subscriptions[0].status is SubscriptionStatus.PENDING
-
-        confirmed = svc.confirm(session, settings, token=result.confirm_token)
-        assert confirmed is not None
-        session.refresh(subscriber)
-        assert subscriber.confirmed_at is not None
+        assert result.confirm_token
 
 
-def test_the_confirmation_carries_a_tappable_link(db):
-    """A push notification has nowhere to put a link except the click action.
-
-    A confirmation that works in a mail client and does nothing on a phone is the failure this
-    exists to prevent.
-    """
+def test_the_confirmation_is_tappable_and_prints_no_url(settings):
+    """A notification body is plain text that nothing linkifies, so a URL printed in one is an exit
+    the reader can see and not take. Tapping it is the way through, which is `click_url`."""
     from rainalert.api.mail import confirmation_message
 
-    settings = Settings(
-        database_url="postgresql+psycopg://x",
-        public_base_url="https://rain.example",
-        _env_file=None,
+    message = confirmation_message(
+        settings, ENDPOINT, "tok123", channel="webpush", subscriber=push_subscriber()
     )
-    message = confirmation_message(settings, "rainalert-abc", "tok123", channel="ntfy")
-    assert message.click_url == "https://rain.example/confirm#a=tok123"  # push: D-36
-    assert "tok123" in message.text  # and in the body, for anyone reading it as text
+    assert message.channel == "webpush"
+    # `#a=` is confirm-on-open. The extra click mail keeps exists to defend against mail scanners
+    # (F-4), and none of those sits between us and a phone.
+    assert message.click_url.endswith("/confirm#a=tok123")
+    assert "http" not in message.text, message.text
 
 
-# --- the notifier ---------------------------------------------------------------------------
+def test_the_email_confirmation_still_waits_for_a_click(settings):
+    from rainalert.api.mail import confirmation_message
+
+    message = confirmation_message(settings, "a@b.example", "tok123", channel="email")
+    assert "#t=tok123" in message.click_url
+    assert "/confirm#t=tok123" in message.text
 
 
-def _notifier(recorder: Recorder, **kwargs) -> NtfyNotifier:
-    return NtfyNotifier(server="https://ntfy.example", transport=recorder.transport(), **kwargs)
+# --- the way out ------------------------------------------------------------------------------
 
 
-def test_the_topic_goes_in_the_path_and_the_title_in_a_header():
-    rec = Recorder(httpx.Response(200, headers={"X-Message-Id": "abc"}))
-    result = _notifier(rec).send(
-        OutboundMessage(to="rainalert-xyz", subject="Regen", text="gleich", click_url="https://x/c")
-    )
-    assert result.ok and result.provider_message_id == "abc"
-
-    request = rec.requests[0]
-    assert str(request.url) == "https://ntfy.example/rainalert-xyz"
-    assert request.headers["Title"] == "Regen"
-    assert request.headers["Click"] == "https://x/c"
-    assert request.content == b"gleich"
+def test_a_push_alert_carries_a_settings_button_and_no_unsubscribe_url():
+    """The exit on push is the settings page, one tap in, which carries "Abmelden und meine Daten
+    loeschen". Deliberately not a second action button: a destructive one on a notification that
+    arrives whenever it rains is one mis-tap from an account nobody meant to delete."""
+    message = alert_for(Channel.WEBPUSH, ENDPOINT)
+    assert [a.label for a in message.actions] == ["Einstellungen"]
+    assert "Abmelden:" not in message.text
+    assert "http" not in message.text
 
 
-def test_a_refusal_from_ntfy_is_reported_not_swallowed():
-    rec = Recorder(httpx.Response(429, text="too many requests"))
-    result = _notifier(rec).send(OutboundMessage(to="t", subject="s", text="x"))
-    assert not result.ok
-    assert "429" in result.error and "too many" in result.error
+def test_an_email_alert_still_carries_the_unsubscribe_line():
+    message = alert_for(Channel.EMAIL, "a@b.example")
+    assert "Abmelden: https://" in message.text
+    assert message.actions == ()
+    assert "List-Unsubscribe" in message.headers
 
 
-def test_a_bearer_token_is_sent_when_configured():
-    """For a self-hosted server with access control, which is the answer to ntfy.sh seeing the
-    message text."""
-    rec = Recorder(httpx.Response(200))
-    _notifier(rec, token="secret").send(OutboundMessage(to="t", subject="s", text="x"))
-    assert rec.requests[0].headers["Authorization"] == "Bearer secret"
-
-
-def test_the_unsubscribe_link_reaches_the_body():
-    """There is no List-Unsubscribe header on a push, so it has to be in what the reader sees."""
-    rec = Recorder(httpx.Response(200))
-    _notifier(rec).send(
-        OutboundMessage(
-            to="t", subject="s", text="Regen", headers={"List-Unsubscribe": "<https://x/u?t=1>"}
-        )
-    )
-    assert b"https://x/u?t=1" in rec.requests[0].content
-
-
-def test_a_line_break_in_a_field_is_still_refused():
-    """The topic ends up in a URL and the subject in a header."""
-    with pytest.raises(ValueError):
-        OutboundMessage(to="topic\nX-Evil: 1", subject="s", text="x")
-    with pytest.raises(ValueError):
-        OutboundMessage(to="t", subject="s", text="x", click_url="https://x\nY: 2")
-
-
-def test_the_whole_push_flow_end_to_end(db, settings):
-    """Subscribe, receive the test push, tap it, become active.
-
-    The one test that would have caught a confirmation link that never reaches a phone.
-    """
-
-    from fastapi.testclient import TestClient
-
-    from rainalert.api.app import create_app
-
-    rec = Recorder(*[httpx.Response(200) for _ in range(4)])
-    push = NtfyNotifier(server="https://ntfy.example", transport=rec.transport())
-    client = TestClient(create_app(settings, session_factory=db, notifier=push))
-
-    created = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-    )
-    assert created.status_code == 202
-    topic = created.json()["topic"]
-
-    # the test push went to that topic, and nowhere else
-    assert str(rec.requests[0].url).endswith(f"/{topic}")
-
-    # tapping it means opening the Click URL, which is a GET; confirming is the POST behind it
-    link = rec.requests[0].headers["Click"]
-    token = link.split("/confirm#a=")[1]
-    assert client.get("/confirm").status_code == 200  # the page, changes nothing
-    assert client.post("/confirm", data={"token": token}).status_code == 200
-
-    with db() as session:
-        subscriber = session.execute(
-            select(Subscriber).where(Subscriber.address_hash == hash_address("ntfy", topic))
-        ).scalar_one()
-        assert subscriber.confirmed_at is not None
-        assert subscriber.subscriptions[0].status is SubscriptionStatus.ACTIVE
-
-
-def test_the_topic_never_travels_in_a_url(client, db):
-    """The QR used to be `<img src="/qr?text=https://ntfy.sh/<topic>">`.
-
-    A topic is not a hint, it is the credential: whoever has one can subscribe to it, ask for a
-    settings link on it and read the location. tokens.py states the rule that shape was breaking
-    - "a token must never travel in a URL that ends up in a log" - and uvicorn and Cloud Run both
-    log the query string. So the QR comes back in the response body and the endpoint is gone,
-    which also retires the allow-list that kept it from encoding somebody else's URL.
-    """
-    response = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-    )
-    body = response.json()
-    assert body["qr_svg"].lstrip().startswith("<svg")
-
-    assert client.get("/qr", params={"text": body["subscribe_url"]}).status_code == 404
-    assert "?text=" not in client.get("/").text
-
-
-def test_the_phone_can_subscribe_without_scanning_its_own_screen(client):
-    """Signing up on the phone you want warned is the normal case, and the QR is useless there.
-
-    It used to be folded away behind a disclosure on every platform, which was the compromise
-    available while all three got the same markup. Now the phone branch does not render one at
-    all, and the desktop branch shows it open - so this holds more strongly than it did.
-    """
-    body = client.get("/").text
-    mobile = body.split("if (here === 'desktop')")[1].split("} else {")[1]
-    assert "qrCode()" not in mobile
-
-    # Typing the topic in by hand is still there for whatever the app did not register as a
-    # link handler - behind a disclosure, because it is the path nobody should need.
-    assert "navigator.clipboard.writeText" in body
-    assert "Kopieren" in body
-    assert "Thema von Hand eintragen" in body
-
-
-def test_copying_still_offers_something_without_clipboard_permission(client):
-    """Clipboard access needs a secure context and permission, and neither is guaranteed."""
-    body = client.get("/").text
-    assert "selectNodeContents" in body
-
-
-def test_a_rate_limited_signup_is_not_blamed_on_the_input(client, db):
-    """The page said "check your input" for every failure, including the limiter.
-
-    That is the one case where checking the input changes nothing, and following the advice
-    spends the attempts the person did not know they were short of.
-    """
-    body = client.get("/").text
-    assert "response.status === 429" in body
-    assert "an den Eingaben liegt es nicht" in body
-
-    # and the server really does answer 429 rather than something vaguer
-    for _ in range(6):
-        last = client.post(
-            "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-        )
-    assert last.status_code == 429
-
-
-def test_a_push_body_never_carries_the_one_click_url():
-    """The notifier appends an unsubscribe line when the body has none, taken from the
-    `List-Unsubscribe` header. D-33 dropped one-click, so that header is the fragment link now -
-    the query-string shape below is the one it used to carry, kept here as the thing that must
-    never reach a push body if it ever comes back.
-
-    Checked on what is actually published rather than on the OutboundMessage, because the
-    appending happens inside `send`: a test that reads `message.text` sees the body before the
-    notifier has touched it, and would pass with the leak reinstated.
-    """
-    rec = Recorder()
-    _notifier(rec).send(
-        OutboundMessage(
-            to="rainalert-abc",
-            subject="Regen in etwa 20 Minuten",
-            text="Es faengt bald an zu regnen.\n\nAbmelden: https://rain.example/unsubscribe#t=tok",
-            headers={"List-Unsubscribe": "<https://rain.example/unsubscribe?token=tok>"},
-        )
-    )
-    published = rec.requests[0].content.decode("utf-8")
-    assert "/unsubscribe#t=tok" in published
-    assert "?token=" not in published, "the logged one-click shape reached a push body"
-
-
-def test_a_push_still_gets_an_unsubscribe_line_when_the_body_has_none():
-    """The append is not dead code - it is what stops a push arriving with no way out."""
-    rec = Recorder()
-    _notifier(rec).send(
-        OutboundMessage(
-            to="rainalert-abc",
-            subject="Regen",
-            text="Es faengt bald an zu regnen.",
-            headers={"List-Unsubscribe": "<https://rain.example/unsubscribe?token=tok>"},
-        )
-    )
-    assert (
-        "Abmelden: https://rain.example/unsubscribe?token=tok" in rec.requests[0].content.decode()
-    )
-
-
-# --- one process, two transports ---------------------------------------------------------
+# --- routing ----------------------------------------------------------------------------------
 
 
 class Spy:
-    """A notifier that records instead of delivering."""
+    def __init__(self):
+        self.seen = []
 
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.sent: list[OutboundMessage] = []
-
-    def send(self, message: OutboundMessage) -> DeliveryResult:
-        self.sent.append(message)
+    def send(self, message):
+        self.seen.append(message)
         return DeliveryResult(ok=True)
 
 
-def test_a_mailbox_is_never_published_to_the_push_server():
-    """The bug this exists to prevent, stated as the test.
-
-    There used to be one notifier per process, picked by NOTIFIER and applied to everything, and
-    `NtfyNotifier.send` puts `message.to` in the URL path. So with NOTIFIER=ntfy an email
-    subscriber's confirmation was POSTed to `<server>/<their address>`: the address becomes a
-    public topic name and the confirmation link becomes that topic's contents.
-    """
-    mail, push = Spy("mail"), Spy("push")
-    router = RoutingNotifier(email=mail, ntfy=push)
-
-    router.send(OutboundMessage(to="someone@example.org", channel="email", subject="s", text="t"))
-    router.send(OutboundMessage(to="rainalert-abc", channel="ntfy", subject="s", text="t"))
-
-    assert [m.to for m in push.sent] == ["rainalert-abc"]
-    assert [m.to for m in mail.sent] == ["someone@example.org"]
+def test_a_mailbox_is_never_handed_to_the_push_transport():
+    """The failure this exists to prevent, in its original form: with one notifier for everything,
+    an email subscriber's confirmation was published to a public ntfy topic named after their
+    address. The transports changed; a message reaching the wrong one still means somebody's
+    warning was not delivered."""
+    email, push = Spy(), Spy()
+    router = RoutingNotifier(email=email, webpush=push)
+    router.send(OutboundMessage(to="a@b.example", subject="s", text="t", channel="email"))
+    router.send(
+        OutboundMessage(
+            to=ENDPOINT,
+            subject="s",
+            text="t",
+            channel="webpush",
+            push_p256dh=P256DH,
+            push_auth=AUTH,
+        )
+    )
+    assert [m.to for m in email.seen] == ["a@b.example"]
+    assert [m.to for m in push.seen] == [ENDPOINT]
 
 
 def test_a_channel_with_no_transport_raises_rather_than_falling_back():
-    """A fallback would be the same bug wearing a helpful face: the message still leaves, and
-    still on the wrong transport. Refusing to send is the outcome we want from a mismatch."""
-    router = RoutingNotifier(ntfy=Spy("push"))
-    with pytest.raises(ValueError, match="email"):
+    """A fallback here would be the same bug wearing a helpful face."""
+    router = RoutingNotifier(email=Spy())
+    with pytest.raises(ValueError, match="no transport configured"):
         router.send(
-            OutboundMessage(to="someone@example.org", channel="email", subject="s", text="t")
+            OutboundMessage(
+                to=ENDPOINT,
+                subject="s",
+                text="t",
+                channel="webpush",
+                push_p256dh=P256DH,
+                push_auth=AUTH,
+            )
         )
 
 
 def test_the_production_notifier_routes_and_the_dev_ones_do_not(settings):
-    """`console` and `file` are sinks - a local run must not start publishing to a public ntfy
-    server because a test subscriber picked push."""
-    from rainalert.notify import ConsoleNotifier, build_notifier
+    """`console` and `file` stay sinks that take everything, so a local run never posts to a real
+    push service because a test subscriber happened to pick push."""
+    from rainalert.notify import build_notifier
+    from rainalert.notify.webpush import generate_vapid_keys
 
-    assert isinstance(build_notifier("auto", settings), RoutingNotifier)
-    assert isinstance(build_notifier("console", settings), ConsoleNotifier)
+    assert not isinstance(build_notifier("console", settings), RoutingNotifier)
+    assert not isinstance(build_notifier("file", settings), RoutingNotifier)
+    private, _ = generate_vapid_keys()
+    # Both, because `auto` builds a real `WebPushNotifier` and that refuses to exist without a
+    # subject - `vapid_subject` defaults to empty rather than to a placeholder, so a deployment
+    # that forgets it fails at startup instead of signing every JWT with `ops@example.invalid`
+    # and being rejected by the push service. Terraform always passes one (falling back to
+    # `mailto:${alert_email}`), so the empty state is local-only.
+    production = settings.model_copy(
+        update={
+            "vapid_private_key": private,
+            "vapid_subject": "mailto:ops@rain.example.invalid",
+        }
+    )
+    assert isinstance(build_notifier("auto", production), RoutingNotifier)
 
 
-def test_every_message_the_service_builds_carries_its_channel(db, settings):
-    """Routing is only as good as the label, and the label is set at five separate call sites.
+def test_auto_disables_push_rather_than_refusing_to_start(settings):
+    """A misconfigured push channel must not take the rest of the service down with it.
 
-    An unlabelled message defaults to email, so a push message that forgot to say so would be
-    handed to SMTP - which fails, loudly, but only in production and only for that subscriber.
+    This test previously asserted the opposite - that `auto` raises without a usable VAPID subject,
+    so a deployment which forgot one failed loudly at startup. Review showed what "loudly at startup"
+    means on Cloud Run: `create_app` builds the notifier before anything else, so an empty, disabled
+    or unreadable VAPID secret made the process raise at import, no revision ever became ready, and
+    the map, the radar, the privacy page and the *email* channel went down with the push channel.
+    `api/app.py` already had a comment saying that must not happen, one screen below the code that
+    made it happen.
+
+    So the contract is now: build what can be built, log the rest, and let `RoutingNotifier` refuse
+    per *message*. A push subscriber's warning fails and is recorded as failed; nobody else notices.
     """
-    from types import SimpleNamespace
+    from rainalert.notify import RoutingNotifier, build_notifier
+    from rainalert.notify.base import OutboundMessage
+    from rainalert.notify.webpush import generate_vapid_keys
 
+    private, _ = generate_vapid_keys()
+    for label, update in [
+        ("no subject", {"vapid_private_key": private, "vapid_subject": ""}),
+        ("no key", {"vapid_private_key": "", "vapid_subject": "mailto:ops@rain.example.invalid"}),
+        ("malformed key", {"vapid_private_key": "nonsense", "vapid_subject": "mailto:a@b.invalid"}),
+    ]:
+        notifier = build_notifier("auto", settings.model_copy(update=update))
+        assert isinstance(notifier, RoutingNotifier), label
+        # Email still works - that is the whole point.
+        assert "email" in notifier._by_channel, label
+        # And a push message fails as one message, not as the process.
+        with pytest.raises(ValueError, match="no transport configured"):
+            notifier.send(
+                OutboundMessage(
+                    to="https://fcm.googleapis.com/fcm/send/x",
+                    channel="webpush",
+                    subject="s",
+                    text="t",
+                    push_p256dh="A" * 87,
+                    push_auth="B" * 22,
+                )
+            )
+
+
+def test_every_message_the_service_builds_names_its_channel(settings):
+    """Nothing may be sent without a channel: that field is what keeps an address off the wrong
+    transport, and a default of "email" on a push message would be exactly that bug."""
     from rainalert.api.mail import (
-        alert_message,
         confirmation_message,
         deletion_receipt,
         manage_link_message,
-        settings_anchor_message,
+        push_keys,
     )
 
-    topic = "rainalert-abc"
-    # The warning itself, first: it is the message the whole service exists to send, the only
-    # one sent over and over, and the only one whose channel comes off a database row.
-    for channel, address in ((Channel.NTFY, topic), (Channel.EMAIL, "a@example.org")):
-        warning = alert_message(
-            None,
-            settings,
-            SimpleNamespace(id=uuid.uuid4(), address=address, channel=channel),
-            SimpleNamespace(timezone="Europe/Berlin"),
-            {
-                "predicted_start_at": "2026-09-23T14:30:00+00:00",
-                "cycle_time": "2026-09-23T14:00:00+00:00",
-                "lead_minutes": 30,
-                "peak_mm_5min": 0.4,
-            },
+    who = push_subscriber()
+    for message in (
+        confirmation_message(settings, ENDPOINT, "t", channel="webpush", subscriber=who),
+        manage_link_message(settings, ENDPOINT, "t", who.id, channel="webpush", subscriber=who),
+        deletion_receipt(settings, ENDPOINT, channel="webpush", push=push_keys(who)),
+    ):
+        assert message.channel == "webpush", message.subject
+    for message in (
+        confirmation_message(settings, "a@b.example", "t"),
+        manage_link_message(settings, "a@b.example", "t", uuid.uuid4()),
+        deletion_receipt(settings, "a@b.example"),
+    ):
+        assert message.channel == "email", message.subject
+
+
+# --- rate limiting ----------------------------------------------------------------------------
+
+
+def test_the_limiter_answers_429_rather_than_a_validation_error(client, db, settings):
+    """429 and not 422: the input was fine, and the distinction is what the page needs to tell
+    somebody they have run out of attempts rather than sending them round the form again."""
+    last = None
+    for index in range(settings.subscribe_limit_per_hour + 2):
+        last = client.post(
+            "/api/v1/subscriptions", json=subscribe_body(endpoint=f"{ENDPOINT}{index}")
         )
-        assert warning.channel == channel.value
-
-    assert confirmation_message(settings, topic, "tok", channel="ntfy").channel == "ntfy"
-    assert confirmation_message(settings, "a@example.org", "tok").channel == "email"
-    assert settings_anchor_message(settings, topic, "tok", uuid.uuid4()).channel == "ntfy"
-    assert (
-        manage_link_message(settings, topic, "tok", uuid.uuid4(), channel="ntfy").channel == "ntfy"
-    )
-    assert manage_link_message(settings, "a@example.org", "tok", uuid.uuid4()).channel == "email"
-    assert deletion_receipt(settings, topic, channel="ntfy").channel == "ntfy"
-    assert deletion_receipt(settings, "a@example.org").channel == "email"
+    assert last.status_code == 429
 
 
-# --- a deployment with push working and no mail provider ------------------------------------
+def strip_js_comments(source: str) -> str:
+    """Remove `//` and `/* */` comments so an assertion can be about the copy rather than the prose
+    explaining it.
+
+    Deliberately crude - it does not parse strings, so a `//` inside a string literal would be cut.
+    That is fine here: these tests match German sentences, and no German sentence in this codebase
+    contains `//`. A real tokeniser would be more correct and would earn nothing.
+    """
+    source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+    return re.sub(r"(?m)^\s*//.*$", "", source)
+
+
+def test_the_page_does_not_blame_a_rate_limited_signup_on_the_input(client):
+    """The counterpart to the test above, where the wording actually lives. One message for every
+    failure told people to check their input even when the limiter had simply run out."""
+    # Comments stripped first. This assertion is about the copy a reader sees, and twice now it has
+    # failed because an explanatory comment either contained the forbidden phrase or grew long
+    # enough to push the real text out of a fixed-size window. A comment is not user-facing copy, so
+    # it has no business being matched against.
+    body = strip_js_comments(client.get("/").text)
+    assert "response.status === 429" in body
+    limiter_branch = body.split("response.status === 429")[1][:400]
+    # Matched on the claim, not the exact phrasing: this failed once for "an den" becoming
+    # "an deinen", which is a copy edit rather than the regression it exists to catch.
+    assert "Eingaben liegt es nicht" in limiter_branch
+    # And it must not name a cause it cannot know: subscribe limits per IP *and* per address, so
+    # blaming the connection is wrong whenever the address half is what tripped.
+    assert "dieser Verbindung" not in limiter_branch
+
+
+def test_the_endpoint_is_rate_limited_as_well_as_the_ip(client, db, settings):
+    """A browser re-subscribing is normal; a flood naming one endpoint is not, and the endpoint is
+    the only per-subscriber thing such a flood would have in common."""
+    seen = set()
+    for _ in range(settings.subscribe_limit_per_hour + 2):
+        seen.add(client.post("/api/v1/subscriptions", json=subscribe_body()).status_code)
+    assert 429 in seen
+
+
+# --- push-only deployments --------------------------------------------------------------------
 
 
 @pytest.fixture()
-def push_only(db, settings):
+def push_only_client(db, settings):
     from fastapi.testclient import TestClient
 
     from rainalert.api.app import create_app
     from rainalert.notify import ConsoleNotifier
 
-    only = settings.model_copy(update={"email_channel_enabled": False})
-    return TestClient(create_app(only, session_factory=db, notifier=ConsoleNotifier()))
+    push_only = settings.model_copy(update={"email_channel_enabled": False})
+    return TestClient(create_app(push_only, session_factory=db, notifier=ConsoleNotifier()))
 
 
-def test_the_email_channel_can_be_refused_before_anything_is_stored(push_only, db):
-    """Accepting an address a deployment cannot write to is worse than refusing it: the page
-    says to check a mailbox, and nothing ever arrives."""
-    response = push_only.post(
+def test_the_email_channel_can_be_refused_before_anything_is_stored(push_only_client, db):
+    response = push_only_client.post(
         "/api/v1/subscriptions",
-        json={"channel": "email", "email": "someone@example.org", "lat": 50.11, "lon": 8.68},
+        json={
+            "channel": "email",
+            "email": "a@b.example",
+            "lat": FRANKFURT[0],
+            "lon": FRANKFURT[1],
+        },
     )
     assert response.status_code == 422
-    assert "Push" in response.json()["detail"]
-
     with db() as session:
-        assert session.execute(select(Subscriber)).scalars().all() == []
+        assert session.execute(select(Subscriber)).first() is None
 
 
-def test_push_still_works_when_email_is_off(push_only):
-    response = push_only.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-    )
+def test_push_still_works_when_email_is_off(push_only_client, db):
+    response = push_only_client.post("/api/v1/subscriptions", json=subscribe_body())
     assert response.status_code == 202
 
 
-def test_the_page_stops_offering_a_choice_it_would_reject(push_only, client):
-    """The radio is not merely ignored - the question disappears, because its second answer is
-    refused at the API."""
-    offered = client.get("/").text
-    assert 'value="email"' in offered
-
-    push_only_body = push_only.get("/").text
-    assert 'value="email"' not in push_only_body
-    # The push radio stays checked and in the DOM: it is what the page's own script reads.
-    assert 'value="ntfy" checked' in push_only_body
+def test_the_page_stops_offering_a_choice_it_would_reject(push_only_client):
+    body = push_only_client.get("/").text
+    assert 'value="webpush"' in body
+    # The fieldset is hidden rather than dropped: the push radio stays checked and in the DOM,
+    # which is what the script reads.
+    assert 'class="channel" hidden' in body
 
 
-def test_an_existing_email_subscriber_can_still_reach_their_settings(push_only):
-    """The flag gates signing up, not delivery. Someone subscribed before it was set still has
-    a mailbox we send to, and locking them out of the settings page would be a worse bug than
-    the one the flag fixes."""
-    assert 'value="email"' in push_only.get("/manage").text
+def test_push_key_bounds_match_the_columns():
+    """The request model must not accept a key the column cannot hold.
+
+    They disagreed: `p256dh` was validated at 256 characters into a `String(128)`, `auth` at 128
+    into a `String(64)`. Anything in the gap passed validation and blew up on the flush as a
+    `DataError` - a 500 out of a public, unauthenticated endpoint, reachable by anyone willing to
+    post a long string. Equal is the only safe relation: looser is a validator handing the database
+    input it cannot store, and tighter would refuse a key we could have kept.
+    """
+    from rainalert.api.app import SubscribeRequest
+    from rainalert.db.models import Subscriber
+
+    columns = Subscriber.__table__.c
+    fields = SubscribeRequest.model_fields
+
+    def max_length(name):
+        return next(m.max_length for m in fields[name].metadata if hasattr(m, "max_length"))
+
+    assert max_length("p256dh") == columns.push_p256dh.type.length
+    assert max_length("auth") == columns.push_auth.type.length
+
+
+@pytest.mark.parametrize(("field", "column"), [("p256dh", "push_p256dh"), ("auth", "push_auth")])
+def test_a_key_too_long_for_the_column_is_refused_not_a_server_error(client, field, column):
+    """422, not 500, and the length comes from the *column* on purpose.
+
+    Deriving it from the request model instead would make this test circular: it would post one
+    character more than whatever the validator happens to allow and pass however wide that is,
+    including the 256 that caused the bug. Measured against the column, it fails the way a user
+    would find it - one character past what the database can store is an unhandled `DataError`
+    inside the transaction, which is a 500 from a public endpoint. Verified against the old bounds:
+    with `max_length=256` this posts 129 characters and gets a 500.
+    """
+    from rainalert.db.models import Subscriber
+
+    width = Subscriber.__table__.c[column].type.length
+    response = client.post(
+        "/api/v1/subscriptions", json=subscribe_body(**{field: "A" * (width + 1)})
+    )
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize(("field", "column"), [("p256dh", "push_p256dh"), ("auth", "push_auth")])
+def test_a_key_that_exactly_fills_the_column_is_still_accepted(client, field, column):
+    """The counterpart: the bound is where storage stops, not a guess at what a browser sends, so
+    a key that exactly fills the column must go through rather than be refused one character
+    early."""
+    from rainalert.db.models import Subscriber
+
+    width = Subscriber.__table__.c[column].type.length
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(**{field: "A" * width}))
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://fcm.googleapis.com:0x1bb/x",
+        "https://[fcm.googleapis.com]/x",
+        "https://℀.fcm.googleapis.com/x",
+    ],
+)
+def test_an_endpoint_that_breaks_the_parser_is_a_422_from_the_route(client, endpoint):
+    """The route half of the same contract. `check_endpoint` raising the right type is only useful
+    if nothing between it and the client converts that into a 500, so this asserts the status a
+    stranger actually sees. It is a separate test from the unit one because the unit one passed
+    while the route still returned 500: `subscribe` catches `EndpointRefused` and the route catches
+    `ValidationError`, and a bare `ValueError` fell between them."""
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(endpoint=endpoint))
+    assert response.status_code == 422, response.text
+
+
+@pytest.mark.parametrize("field", ["p256dh", "auth"])
+def test_a_push_key_outside_base64url_is_refused(client, field):
+    """A browser's keys are base64url. Anything else cannot be one under any encoding, so 422 is
+    the honest answer - and it keeps non-ASCII away from the constant-time comparison in
+    `subscriptions.subscribe`, which used to raise TypeError on it and 500."""
+    response = client.post("/api/v1/subscriptions", json=subscribe_body(**{field: "ä" * 22}))
+    assert response.status_code == 422, response.text
+
+
+def test_a_non_ascii_authorization_header_is_401_not_500(db, settings):
+    """Headers are bytes on the wire and Starlette decodes them as latin-1, so an `Authorization`
+    value can hold non-ASCII characters that `compare_digest` refused to compare. The answer to a
+    bad token is 401 whatever bytes it contains."""
+    from fastapi.testclient import TestClient
+
+    from rainalert.api.app import create_app
+    from rainalert.notify import ConsoleNotifier
+
+    guarded = settings.model_copy(update={"metrics_token": "sekret"})
+    client = TestClient(
+        create_app(guarded, session_factory=db, notifier=ConsoleNotifier()),
+        raise_server_exceptions=False,
+    )
+    # Passed as bytes: httpx will not encode a non-ASCII str into a header, but a real client can
+    # put these bytes on the wire, which is the case that mattered.
+    assert (
+        client.get("/metrics", headers={"Authorization": b"Bearer \xe4\xe4\xe4"}).status_code == 401
+    )
+    assert client.get("/metrics", headers={"Authorization": b"Bearer nope"}).status_code == 401
+
+
+def test_the_two_address_bounds_agree():
+    """A subscriber who can sign up must be able to reach their own settings.
+
+    These were 2048 and unbounded, in that order, so a browser issuing a longer endpoint subscribed
+    successfully and then got a 422 from `/api/v1/manage/link` forever. Fixing that by removing both
+    bounds left an unauthenticated body with no ceiling, which was the wrong lesson to draw.
+    """
+    from rainalert.api.app import ManageLinkRequest, SubscribeRequest
+
+    def cap(model, field):
+        return next(
+            m.max_length for m in model.model_fields[field].metadata if hasattr(m, "max_length")
+        )
+
+    assert cap(SubscribeRequest, "endpoint") == cap(ManageLinkRequest, "address")

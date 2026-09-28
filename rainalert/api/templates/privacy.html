@@ -5,8 +5,9 @@
 
 <h2>Was gespeichert wird</h2>
 <ul>
-  <li>Je nach Kanal deine E-Mail-Adresse oder dein ntfy-Thema. Das Thema wird von uns erzeugt,
-      nicht von dir gewählt – wir kennen darüber keine Gerätekennung und keine Telefonnummer.</li>
+  <li>Je nach Kanal deine E-Mail-Adresse oder die Push-Adresse deines Browsers. Diese Adresse
+      stellt dein Browser aus, wenn du Benachrichtigungen erlaubst; sie gilt nur für diesen einen
+      Browser. Wir kennen darüber keine Gerätekennung, keine Telefonnummer und keinen Namen.</li>
   <li>Dein Standort (Koordinaten) – nur der aktuelle, kein Verlauf.</li>
   <li>Deine Einstellungen und die Warnungen, die verschickt wurden.</li>
   <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
@@ -31,14 +32,35 @@ Ort, wenn jemand anders sie zu sehen bekommt.</p>
 {{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>
 
 <h2>Löschen</h2>
-<p>Über den Abmeldelink in jeder Warnung – das löscht sofort und vollständig.</p>
+{# Named both routes. Saying only "in jeder Warnung" made the deletion right look like it opens
+   only when it rains, which on the page that documents that right is the worst place for it: in a
+   dry spell there is no warning, and /manage is in the nav of every page. #}
+<p>Bei Push: öffne „Einstellungen“ (unten auf jeder Seite oder über den Knopf in jeder Warnung) und
+wähle dort „Abmelden und meine Daten löschen“. Bei E-Mail: über den Abmeldelink in jeder Mail.
+Beides löscht sofort und vollständig.</p>
 
 <h2>Rechtsgrundlage</h2>
 <p>Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), erteilt durch die Bestätigung über den Kanal,
-den du gewählt hast: den Link in der Bestätigungsmail oder das Antippen der Testnachricht.</p>
+den du gewählt hast: den Link in der Bestätigungsmail oder das Antippen der Benachrichtigung
+„Regenwarnung bestätigen“.</p>
 
-<h2>Bei Push-Benachrichtigungen (ntfy)</h2>
-<p>Die Nachrichten laufen über den ntfy-Server, der unter „Kanal“ eingestellt ist
-({{ settings.ntfy_server }}). Dieser Server sieht den Text der Warnung und den Namen des Themas.
-Eine Warnung nennt einen Ort und eine Zeit – wähle den Kanal entsprechend.</p>
+<h2>Bei Push-Benachrichtigungen</h2>
+<p>Push-Benachrichtigungen gehen über den Push-Dienst deines Browsers – bei Chrome ist das Google,
+bei Firefox Mozilla, bei Safari Apple. Wir kommen daran nicht vorbei: welcher Dienst zuständig ist,
+entscheidet dein Browser, nicht wir.</p>
+<p>Der <strong>Inhalt</strong> der Warnung ist für diesen Dienst nicht lesbar: er wird verschlüsselt
+und nur dein Browser kann ihn entschlüsseln (RFC 8291). Sichtbar sind für den Dienst der Zeitpunkt,
+die Größe der Nachricht und die Push-Adresse deines Browsers. Aus dem Zeitpunkt lässt sich
+grundsätzlich etwas über das Wetter an deinem Ort schließen – der Ort selbst wird nicht übertragen.</p>
+
+<h2>Wenn du die Websitedaten löschst</h2>
+<p>Die Anmeldung lebt in diesem Browser. Löschst du die Websitedaten oder blockierst du
+{# "die Anmeldung", not "das Abo" - the word appeared nowhere else on the site. And it is the push
+   service that reports the dead endpoint, not the browser: as written it implied a channel from the
+   reader's browser back to us, which is the opposite of what this section exists to explain. #}
+Benachrichtigungen, endet die Anmeldung – der Push-Dienst deines Browsers weist den nächsten Versand
+als ungültig zurück, und wir löschen dann Adresse, Standort und Einstellungen. Damit das auch passiert, wenn es lange nicht
+regnet, schicken wir nach {{ settings.webpush_liveness_days }} Tagen ohne Nachricht eine kurze
+Meldung, die nur bestätigt, dass die Warnung noch läuft. Bleibt sie unzustellbar, werden deine Daten
+gelöscht. Geprüft wird das wöchentlich, es kann also einige Tage länger dauern.</p>
 {% endblock %}

@@ -27,18 +27,50 @@
 
 <div id="gate" hidden>
   <div id="gate-note" class="hint error" hidden></div>
-  <p class="lede">Wir schicken dir einen Link auf den Kanal, mit dem du angemeldet bist.</p>
+  {# Hidden by the script when neither route is available: stacked straight above
+     "Dieser Browser ist nicht ... angemeldet" it promised something and then refused it in the next
+     line, and on a push-only deployment there is genuinely nothing this page can send. #}
+  <p class="lede" id="gate-lede">Wir schicken dir einen Link auf den Kanal, mit dem du angemeldet
+  bist.</p>
+
+  {# The push half of this used to be a text field asking for an ntfy topic. Nobody can type a web
+     push endpoint - it is issued by the browser, 200-odd characters long, and never shown to the
+     reader - so for push there is nothing to enter and the browser answers for itself. Shown only
+     when this browser actually holds a subscription, which the script checks. #}
+  <div id="gate-push" hidden>
+    <p>Dieser Browser ist für Regenwarnungen angemeldet.</p>
+    <button type="button" id="gate-push-send">Link an diesen Browser schicken</button>
+    {# Its own status line, next to its own button. Measured with email enabled: the shared
+       `#gate-result` sits at y=451 while this button is at y=224, with the "Oder per E-Mail" intro,
+       a label, an input and a second button in between - so the answer to a press, success or 429,
+       appeared below the thing that invites a second press. #}
+    <p id="gate-push-result" role="status"></p>
+  </div>
+
+  {# Above the email form, not below it. Hiding `#gate-lede` in this state (correctly - it promised
+     something the next line refuses) left an email-enabled deployment with no heading at all: a bare
+     "E-Mail" field and a "Link schicken" button, and only underneath them the sentence explaining
+     that this browser is not subscribed. The push subscriber this state exists for was invited to
+     type an address they never gave, and only then told it would not help. A state description
+     belongs above the controls it rules out, and "unten" rather than "hier" because the form is now
+     below it. #}
+  <p class="hint" id="gate-nothing" hidden>Dieser Browser ist nicht für Regenwarnungen angemeldet.
+  Wenn du die Websitedaten gelöscht hast („Cookies und andere Websitedaten“), ist die Anmeldung
+  damit beendet – <a href="/">melde dich einfach neu an</a>. Ort und Einstellungen musst du dabei
+  neu setzen.
+  {% if settings.email_channel_enabled %}Warst du per E-Mail angemeldet, fordere unten einen Link
+  an.{% endif %}</p>
+
+  {% if settings.email_channel_enabled %}
   <form id="link-form">
-    <fieldset class="channel">
-      <legend>Wie bist du angemeldet?</legend>
-      <label><input type="radio" name="channel" value="ntfy" checked> Push (ntfy)</label>
-      <label><input type="radio" name="channel" value="email"> E-Mail</label>
-    </fieldset>
-    <label for="address"><span id="address-label">ntfy-Thema</span></label>
-    <input type="text" id="address" name="address" required autocomplete="off"
-           placeholder="rainalert-…">
+    <p class="hint" id="gate-email-intro" hidden>Oder per E-Mail:</p>
+    <label for="address">E-Mail</label>
+    <input type="email" id="address" name="address" required autocomplete="email"
+           placeholder="du@example.org">
     <button type="submit">Link schicken</button>
   </form>
+  {% endif %}
+
   <p id="gate-result" role="status"></p>
 </div>
 
@@ -62,7 +94,7 @@
            disabled>
   </div>
   <p class="stamp" id="frame-stamp"></p>
-  <p class="hint" id="map-hint">Klicke in die Karte, um den Ort zu setzen. Der Kreis zeigt den
+  <p class="hint" id="map-hint">Tippe in die Karte, um den Ort zu setzen. Der Kreis zeigt den
     Umkreis, der ausgewertet wird.</p>
 
   <form id="settings-form">
@@ -125,6 +157,23 @@
     <button type="button" class="linklike" id="logout">Sitzung auf diesem Gerät beenden</button>
     – die Warnungen laufen weiter.
   </p>
+
+  {# The way out, and since D-45 the only one on the push channel: a notification body is plain
+     text nothing linkifies, so the "Abmelden:" URL that email still carries cannot be tapped
+     there. Every warning has an Einstellungen button, and this is what it leads to.
+
+     Two steps, not one. It deletes the location and the history, and a single mis-tap next to
+     "Sitzung beenden" would be a bad way to discover that. #}
+  <div class="danger">
+    <p><button type="button" class="linklike danger-link" id="delete">Abmelden und meine Daten
+    löschen</button></p>
+    <div id="delete-confirm" hidden>
+      <p class="hint">Standort, Regel und Verlauf werden gelöscht, und es kommen keine Warnungen
+      mehr. Das lässt sich nicht rückgängig machen – eine neue Anmeldung ist jederzeit möglich.</p>
+      <button type="button" id="delete-yes">Ja, endgültig löschen</button>
+      <button type="button" class="secondary" id="delete-no">Abbrechen</button>
+    </div>
+  </div>
 </div>
 
 
@@ -169,6 +218,12 @@
   #who { overflow-wrap:anywhere; }
   .session-end { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
                  font-size:.85rem; color:var(--muted); }
+  /* Set apart from the session controls above it, because it does something they do not: it
+     deletes. The rule is the separation, not decoration. */
+  .danger { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line); }
+  .danger-link { color:#b3261e; }
+  .danger #delete-confirm { margin-top:.5rem; }
+  .danger #delete-confirm .hint { margin:0 0 .6rem; }
   /* A button, because it performs an action - but it must not look like one of the two next to
      the form, where anything button-shaped reads as "save" or "cancel". */
   .linklike { background:none; border:0; padding:0; margin:0; font:inherit; color:var(--accent);
@@ -202,42 +257,163 @@
   var gateResult = document.getElementById('gate-result');
   var panelResult = document.getElementById('panel-result');
 
-  function channel() {
-    var picked = document.querySelector('input[name=channel]:checked');
-    return picked ? picked.value : 'ntfy';
-  }
-  Array.prototype.forEach.call(document.querySelectorAll('input[name=channel]'), function (r) {
-    r.addEventListener('change', function () {
-      var email = channel() === 'email';
-      document.getElementById('address-label').textContent = email ? 'E-Mail' : 'ntfy-Thema';
-      document.getElementById('address').type = email ? 'email' : 'text';
-      document.getElementById('address').placeholder = email ? 'du@example.org' : 'rainalert-…';
-    });
-  });
+  /* Which routes this gate can actually offer. Push is offered only if this browser holds a live
+     subscription - asking the reader to pick a channel they cannot prove they own was the old
+     shape, and for push there was nothing they could type anyway. */
+  /* The key this deployment signs with, so a subscription made under a different one can be told
+     apart from a usable one. Empty when push is not configured at all. */
+  var VAPID_KEY = {{ vapid_public_key|tojson }};
 
-  // ---- asking for a link ------------------------------------------------------------------
-  document.getElementById('link-form').addEventListener('submit', async function (event) {
-    event.preventDefault();
-    gateResult.textContent = 'Wird gesendet …';
-    var response = await fetch('/api/v1/manage/link', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({channel: channel(), address: document.getElementById('address').value})
-    });
+  async function ownSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) { return null; }
+    try {
+      var registration = await navigator.serviceWorker.getRegistration('/');
+      if (!registration) { return null; }
+      var subscription = await registration.pushManager.getSubscription();
+      /* A subscription bound to a different applicationServerKey is not a route into anything: the
+         push service rejects every send signed with our current key, so "Link an diesen Browser
+         schicken" would report success and nothing would ever arrive - the silent dead end the
+         signup page now avoids, reached through the settings page instead. Treated as no
+         subscription, which falls through to #gate-nothing and tells the reader to sign up again.
+
+         Not unsubscribed here. The signup page does that, because there it is immediately followed
+         by a fresh subscribe; doing it here would destroy the reader's only evidence of what they
+         had while offering them nothing in exchange. */
+      if (subscription && !usesOurKey(subscription)) { return null; }
+      return subscription;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function usesOurKey(subscription) {
+    /* Mirrors sameKey() on the signup page, including its bias: when the browser does not tell us
+       (no options, or a key that is not a usable ArrayBuffer) we assume the subscription is ours,
+       because treating a working one as dead would send the reader off to sign up again for
+       nothing. Kept as a copy rather than shared, because these are two standalone inline scripts
+       with no module between them; tests/js/page_test.mjs covers the signup side and
+       tests/test_pages.py asserts both pages carry the check. */
+    if (!VAPID_KEY) { return true; }
+    var key = (subscription.options || {}).applicationServerKey;
+    if (!(key instanceof ArrayBuffer) || key.byteLength === 0) { return true; }
+    var actual = new Uint8Array(key);
+    var raw = atob(VAPID_KEY.replace(/-/g, '+').replace(/_/g, '/'));
+    if (actual.length !== raw.length) { return false; }
+    for (var i = 0; i < raw.length; i++) {
+      if (actual[i] !== raw.charCodeAt(i)) { return false; }
+    }
+    return true;
+  }
+
+  async function prepareGate() {
+    var subscription = await ownSubscription();
+    var pushBox = document.getElementById('gate-push');
+    var emailForm = document.getElementById('link-form');
+    var intro = document.getElementById('gate-email-intro');
+    if (subscription) {
+      pushBox.hidden = false;
+      /* "Oder per E-Mail" only makes sense once there is something for it to be an alternative
+         to; without the push route it is simply the form. */
+      if (intro) { intro.hidden = false; }
+      var pushSend = document.getElementById('gate-push-send');
+      pushSend.addEventListener('click', function () {
+        sendLink('webpush', subscription.endpoint, pushSend);
+      });
+    }
+    if (!subscription) {
+      /* Shown whenever this browser holds no subscription, not only when there is also no email
+         form. It used to be `!subscription && !emailForm`, which meant the one place the service
+         ever explains what happened was hidden on exactly the deployment that has email - so a push
+         subscriber who had cleared their site data arrived at a box asking for an address they never
+         gave, typed one, got "Wenn dieser Kanal angemeldet ist, ist der Link unterwegs", and waited
+         forever. This is the moment D-47 is actually experienced, and it was the moment with no
+         explanation. */
+      document.getElementById('gate-nothing').hidden = false;
+      /* And withdraw the promise above it. */
+      document.getElementById('gate-lede').hidden = true;
+    }
+  }
+
+  async function sendLink(channelName, address, button) {
+    /* The answer goes to the status line belonging to the route that was pressed, not to one shared
+       line below both of them - see #gate-push-result in the markup for the measurement.
+
+       And the pressed button is disabled for the duration. index.html got this and the gate did not,
+       and it matters more here now: `/api/v1/manage/link` limits per address as well as per IP, so
+       an impatient double-tap spends two of this subscriber's five links for the hour against their
+       own endpoint. Re-enabled on every branch, because a button stuck disabled on the only route
+       into someone's settings is worse than the double-tap. */
+    var out = channelName === 'webpush'
+      ? document.getElementById('gate-push-result')
+      : gateResult;
+    function answer(message) {
+      out.textContent = message;
+      if (button) { button.disabled = false; }
+    }
+    if (button) { button.disabled = true; }
+    out.textContent = 'Wird gesendet …';
+    var response;
+    try {
+      response = await fetch('/api/v1/manage/link', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({channel: channelName, address: address})
+      });
+    } catch (error) {
+      /* The outcome that is not a branch. `fetch` rejects on a dropped connection rather than
+         returning a status, so without this the button stayed disabled and the line stayed on
+         "Wird gesendet …" until the reader reloaded - on a phone with a flaky link, which is the
+         normal condition, and on the only route a push subscriber has to deleting their data. The
+         comment above promised "re-enabled on every branch" while this path existed. */
+      answer('Keine Verbindung. Bitte versuch es noch einmal.');
+      return;
+    }
     if (response.status === 429) {
-      gateResult.textContent = 'Zu viele Anfragen von dieser Verbindung. Bitte in etwa einer '
-        + 'Stunde noch einmal probieren – an den Eingaben liegt es nicht.';
+      /* The cause is deliberately not named. This route limits per IP *and* per address, and the
+         per-address half is the one that matters: it can fire for requests that did not come from
+         this connection at all. A reader who made one request and is told their connection made too
+         many will switch to mobile data, another browser, a VPN - none of which helps, and for a
+         push subscriber this page is the only route to deleting their data. The cause is left
+         unstated because we cannot tell the reader which half tripped without telling a stranger
+         the same thing. */
+      answer('Zu viele Anfragen in der letzten Stunde. Bitte in etwa einer '
+        + 'Stunde noch einmal versuchen – an deinen Eingaben liegt es nicht.');
       return;
     }
     if (!response.ok) {
-      gateResult.textContent = 'Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal.';
+      answer('Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal.');
       return;
     }
-    // Says the same thing whether or not the address is known, because the server answers the
-    // same way: anything else here would tell a stranger who has signed up.
-    gateResult.textContent = 'Wenn dieser Kanal angemeldet ist, ist der Link unterwegs. '
-      + 'Er gilt {{ settings.manage_link_ttl_minutes }} Minuten und nur einmal.';
-  });
+    if (channelName === 'webpush') {
+      /* No hedge on this route, and it says where to look. The "Wenn dieser Kanal angemeldet ist"
+         wording exists so the email form cannot be used to test whether an address is subscribed -
+         a stranger can type any address. Nobody can type a push endpoint: it came from
+         `ownSubscription()` in this browser, and the page asserted two lines above that this browser
+         is subscribed. So here the hedge tells the reader we are unsure about something we just
+         stated, which reads as the service malfunctioning.
+
+         The second half matters more: the link arrives as a notification, not on this page. Without
+         saying so the reader waits on screen for something that will never appear there. */
+      answer('Die Benachrichtigung mit dem Link ist unterwegs – schau in deine '
+        + 'Benachrichtigungen. Der Link gilt {{ settings.manage_link_ttl_minutes }} Minuten und '
+        + 'kann nur einmal benutzt werden.');
+      return;
+    }
+    // Email: says the same thing whether or not the address is known, because the server answers
+    // the same way. Anything else here would tell a stranger who has signed up.
+    answer('Wenn dieser Kanal angemeldet ist, ist der Link unterwegs. '
+      + 'Er gilt {{ settings.manage_link_ttl_minutes }} Minuten und nur einmal.');
+  }
+
+  // ---- asking for a link ------------------------------------------------------------------
+  var emailForm = document.getElementById('link-form');
+  if (emailForm) {
+    emailForm.addEventListener('submit', function (event) {
+      event.preventDefault();
+      sendLink('email', document.getElementById('address').value,
+        emailForm.querySelector('button[type=submit]'));
+    });
+  }
 
   // ---- redeeming one ----------------------------------------------------------------------
   function adoptSession(state) {
@@ -375,26 +551,36 @@
     showLead();
     showRadius();
 
-    var where = current.channel === 'email' ? current.address : 'Push-Thema ' + current.address;
+    /* Not the address, for push. `current.address` is the endpoint - 200-odd characters of Google
+       URL - and this line is the largest text on the page: a reader expecting to see themselves saw
+       a machine identifier and could reasonably think they were looking at someone else's account.
+       "Push-Thema" was worse: *Thema* is ntfy's word for the topic this change deleted. The endpoint
+       identifies nothing to the reader and they have exactly one, so naming the browser is both
+       truthful and sufficient. */
+    var where = current.channel === 'email' ? current.address : 'Push auf diesen Browser';
     var state = {
       active: 'aktiv', pending: 'noch nicht bestätigt',
       unhealthy: 'gestört', paused: 'pausiert'
     }[current.status] || current.status;
     document.getElementById('who').textContent = where + ' · ' + state;
 
+    /* Both notices, not whichever runs last. These were two independent writes to the same
+       element, so a pending subscription that also carried a health note lost "es werden noch keine
+       Warnungen verschickt" - the more important of the two, and the one that explains why nothing
+       is arriving. Collected and joined instead, pending first. */
+    var notices = [];
     // A pending subscription is not being evaluated at all, so saying nothing here would let
     // someone tune a rule that cannot fire.
     if (current.status === 'pending') {
-      var banner = document.getElementById('panel-banner');
-      banner.hidden = false;
-      banner.textContent = 'Diese Anmeldung ist noch nicht bestätigt – es werden noch keine '
-        + 'Warnungen verschickt.';
+      notices.push('Diese Anmeldung ist noch nicht bestätigt – es werden noch keine Warnungen '
+        + 'verschickt.');
     }
     if (current.health_note) {
-      var note = document.getElementById('panel-banner');
-      note.hidden = false;
-      note.textContent = current.health_note;
+      notices.push(current.health_note);
     }
+    var banner = document.getElementById('panel-banner');
+    banner.hidden = notices.length === 0;
+    banner.textContent = notices.join(' ');
   }
 
   // ---- the map ----------------------------------------------------------------------------
@@ -571,15 +757,62 @@
   }
 
   //: Shown above the form, so "request a new one" sits next to the thing that requests one.
+  var gatePrepared = false;
   function gateWithNote(text) {
     var note = document.getElementById('gate-note');
     note.textContent = text;
     note.hidden = !text;
     show(STATES.gate);
+    /* Asking the browser for its own subscription is async, and every route into the gate is a
+       failure path where nobody should wait. So the gate appears first and grows the push button
+       when the answer arrives, rather than the gate waiting on it. Once: two visits would attach
+       the click handler twice and send two links. */
+    if (!gatePrepared) {
+      gatePrepared = true;
+      prepareGate();
+    }
   }
 
   document.getElementById('sent-fallback').addEventListener('click', function () {
     gateWithNote('');
+  });
+
+  // ---- leaving ------------------------------------------------------------------------------
+  // Two taps, and the second one is the one that deletes. See the markup for why.
+  document.getElementById('delete').addEventListener('click', function () {
+    document.getElementById('delete-confirm').hidden = false;
+    document.getElementById('delete').hidden = true;
+  });
+  document.getElementById('delete-no').addEventListener('click', function () {
+    document.getElementById('delete-confirm').hidden = true;
+    document.getElementById('delete').hidden = false;
+  });
+  document.getElementById('delete-yes').addEventListener('click', async function () {
+    panelResult.textContent = 'Wird gelöscht …';
+    var response = await fetch('/api/v1/subscriptions/me', {
+      method: 'DELETE',
+      headers: {'X-Rain-CSRF': csrf}
+    });
+    if (!response.ok) {
+      panelResult.textContent = 'Das hat nicht geklappt. Bitte später noch einmal probieren.';
+      return;
+    }
+    /* Server-side row gone; now the browser's own subscription, or it keeps a live endpoint that
+       nothing will ever post to - and the reader would still see "Benachrichtigungen erlaubt" for
+       a service they just left. Failure here is not reported: the deletion already happened, and
+       an error about tidying up would read as "your data was not deleted". */
+    try {
+      var subscription = await ownSubscription();
+      if (subscription) { await subscription.unsubscribe(); }
+    } catch (error) { /* nothing the reader can do */ }
+    panel.hidden = true;
+    document.getElementById('sent').hidden = true;
+    gate.hidden = true;
+    document.getElementById('busy').hidden = true;
+    var done = document.createElement('p');
+    done.className = 'lede';
+    done.textContent = 'Abgemeldet. Standort und Verlauf sind gelöscht.';
+    document.querySelector('main').appendChild(done);
   });
 
   // The fallback behind the notification button, for a client that renders no buttons. Same
@@ -601,8 +834,10 @@
     }
     // 429 and 500 used to give the same answer, which sent somebody away for an hour over a
     // fault on our side.
+    // "in der letzten Stunde" rather than naming the connection: this route limits per IP and per
+    // subscriber, and the second bucket is not this connection's.
     gateWithNote(response.status === 429
-      ? 'Gerade zu viele Anfragen von dieser Verbindung. Bitte in etwa einer Stunde noch '
+      ? 'Gerade zu viele Anfragen in der letzten Stunde. Bitte in etwa einer Stunde noch '
         + 'einmal – am Link liegt es nicht.'
       : 'Bei uns ist gerade etwas schiefgegangen. Du kannst den Link auch von Hand anfordern.');
   }

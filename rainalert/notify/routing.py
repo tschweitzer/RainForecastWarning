@@ -10,10 +10,15 @@ class RoutingNotifier:
 
     Until this existed there was exactly one notifier per process, picked by ``NOTIFIER`` and
     applied to everything. That is fine while only one channel is live, and unsafe the moment
-    both are: with ``NOTIFIER=ntfy`` an email subscriber's confirmation was POSTed to
-    ``<ntfy server>/<their address>``, which publishes the address as a topic name and the
-    confirmation link as its contents. Refusing to send is the *good* outcome of a mismatch;
-    delivering to the other transport is the bad one, and nothing was stopping it.
+    both are. The failure that prompted it: with the old ``NOTIFIER=ntfy`` an email subscriber's
+    confirmation was POSTed to ``<ntfy server>/<their address>``, publishing the address as a
+    public topic name and the confirmation link as its contents. Refusing to send is the *good*
+    outcome of a mismatch; delivering to the other transport is the bad one, and nothing was
+    stopping it.
+
+    The transports are ``email`` and ``webpush`` now, and the hazard is smaller but has not gone:
+    a mailbox handed to the web push transport is refused by its endpoint check, but a message
+    that reaches the wrong transport at all means somebody's warning was not delivered.
 
     A channel with no transport configured raises rather than falling back. A fallback here
     would be the same bug wearing a helpful face.

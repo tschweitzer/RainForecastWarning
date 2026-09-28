@@ -172,10 +172,10 @@ class Settings(BaseSettings):
     )
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
-    #: console | file | smtp | ntfy | push | auto. SMTP reaches every provider worth using, so
+    #: console | file | smtp | webpush | push | auto. SMTP reaches every provider worth using, so
     #: choosing one is a matter of credentials rather than code. `auto` is the production shape:
     #: each channel on its own transport (notify/routing.py). `console` and `file` stay sinks
-    #: that take everything, so a local run never publishes to a public ntfy server.
+    #: that take everything, so a local run never posts to a real push service.
     notifier: str = "console"
     #: Whether the email channel is offered at all. False is for a deployment that has push
     #: working and no mail provider yet: the signup page then shows push only, and the API
@@ -190,17 +190,39 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     smtp_timeout_seconds: float = 20.0
 
-    # --- Push (ntfy) --------------------------------------------------------------------------
-    #: The ntfy server to publish to. The public one sees the message text and the topic name,
-    #: which for a service whose privacy story is data minimisation is worth thinking about - a
-    #: rain warning names a place and a time. Self-host it for anything but testing.
-    ntfy_server: str = "https://ntfy.sh"
-    #: Prefix for generated topics. Only the random half is what makes a topic unguessable; this
-    #: is so a subscriber can recognise which of their subscriptions a topic belongs to.
-    ntfy_topic_prefix: str = "rainalert"
-    ntfy_timeout_seconds: float = 10.0
-    #: Optional bearer token, for a self-hosted server with access control.
-    ntfy_token: str | None = None
+    # --- Push (W3C Web Push, D-45) -------------------------------------------------------------
+    #: The VAPID private key, PEM. Generate one with `rainalert vapid-keys` and keep it in Secret
+    #: Manager next to `SECRET_KEY`.
+    #:
+    #: **Rotating it unsubscribes everybody, silently.** A push service checks the signature
+    #: against the key the subscription was created with, so after a rotation every send is
+    #: rejected as unauthorised - and the rejection is a 401/403, not the 410 that would tell us
+    #: to delete the row. Subscribers keep their notification permission and simply stop being
+    #: warned, with nothing on either side saying why. Treat it as permanent.
+    vapid_private_key: str = ""
+    #: The contact RFC 8292 puts in the JWT `sub` claim. Google, Apple and Mozilla receive it on
+    #: every send and use it to reach the operator when something is wrong with our traffic - the
+    #: same role `dwd_user_agent` plays for DWD. A role address, not a personal one: it is handed
+    #: to three third parties several times a day. Must be `mailto:` or `https:`.
+    #: Empty by default rather than a plausible-looking placeholder. `mailto:ops@example.invalid`
+    #: was the default, and a deployment that missed the env var would have told three push services
+    #: to reach the operator at an address that does not exist - which is the address they use before
+    #: they start refusing traffic. Empty makes the notifier refuse to build, `create_app` logs it and
+    #: disables push, and the signup page says push is unavailable. Loud beats plausible.
+    vapid_subject: str = ""
+    #: How long a push service should hold a message for a device that is offline.
+    #:
+    #: 30 minutes, matching `dispatcher.MAX_NOTIFICATION_AGE`. It was an hour, which contradicted it:
+    #: the dispatcher refuses to *send* a warning older than 30 minutes because "a late rain warning
+    #: is worse than none", and then the TTL told the push service to hold it for twice that. A phone
+    #: off-network for 50 minutes got a warning about rain that had already come and gone - the exact
+    #: case the shorter rule exists to prevent, arriving through the longer one.
+    webpush_ttl_seconds: int = 1800
+    webpush_timeout_seconds: float = 10.0
+    #: Days of silence before the liveness notification goes out (D-46). Its real job is deletion:
+    #: a subscriber who cleared their browser data never told us, and only a send attempt learns
+    #: it - so this is also the longest we can hold a location for somebody who has gone.
+    webpush_liveness_days: int = 30
 
     # --- Tokens and consent -------------------------------------------------------------------
     #: Salts the IP hashes and signs anything that needs signing. Must be set in production.

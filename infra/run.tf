@@ -8,15 +8,17 @@ locals {
   common_env = {
     PUBLIC_BASE_URL = var.public_base_url
     MAIL_FROM       = var.mail_from
-    # `auto` routes each message by its channel: topics to ntfy, addresses to SMTP. Not one
-    # transport for everything - that is how a mailbox ends up published as an ntfy topic
-    # (notify/routing.py).
+    # `auto` routes each message by its channel: push endpoints to the web push transport,
+    # addresses to SMTP. Not one transport for everything - that is how a mailbox ended up
+    # published as a public ntfy topic, which is the failure notify/routing.py exists for.
     NOTIFIER                = "auto"
     EMAIL_CHANNEL_ENABLED   = tostring(local.email_enabled)
     SMTP_HOST               = var.smtp_host
     SMTP_PORT               = tostring(var.smtp_port)
     SMTP_USERNAME           = var.smtp_username
-    NTFY_SERVER             = var.ntfy_server
+    # Falls back to alert_email so a deployment cannot end up signing with the placeholder in
+    # config.py, which some push services accept and others refuse.
+    VAPID_SUBJECT           = var.vapid_subject != "" ? var.vapid_subject : "mailto:${var.alert_email}"
     MAP_TILE_URL            = var.map_tile_url
     MAP_TILE_ATTRIBUTION    = var.map_tile_attribution
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
@@ -116,6 +118,18 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
+      # The web push signing key. Mounted on the API service because that is what serves the
+      # `applicationServerKey` the browser subscribes with, and on the ingest job because that is
+      # what sends the warnings. Both derive the public half from it, so they cannot disagree.
+      env {
+        name = "VAPID_PRIVATE_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.this["vapid-private-key"].secret_id
+            version = "latest"
+          }
+        }
+      }
 
       startup_probe {
         http_get { path = "/healthz" }
@@ -137,6 +151,7 @@ resource "google_cloud_run_v2_service" "api" {
     google_secret_manager_secret_version.ingest_database_url,
     google_secret_manager_secret_version.secret_key,
     google_secret_manager_secret_version.metrics_token,
+    google_secret_manager_secret_version.vapid_private_key,
   ]
 }
 
@@ -234,6 +249,15 @@ resource "google_cloud_run_v2_job" "ingest" {
             }
           }
         }
+        env {
+          name = "VAPID_PRIVATE_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["vapid-private-key"].secret_id
+              version = "latest"
+            }
+          }
+        }
       }
     }
   }
@@ -249,6 +273,7 @@ resource "google_cloud_run_v2_job" "ingest" {
     google_secret_manager_secret_version.ingest_database_url,
     google_secret_manager_secret_version.secret_key,
     google_secret_manager_secret_version.metrics_token,
+    google_secret_manager_secret_version.vapid_private_key,
   ]
 }
 
@@ -336,6 +361,140 @@ resource "google_cloud_scheduler_job" "tick" {
   http_target {
     http_method = "POST"
     uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.ingest.name}:run"
+    oauth_token { service_account_email = google_service_account.scheduler.email }
+  }
+
+  depends_on = [google_project_service.enabled]
+}
+
+# The liveness notification (D-46), weekly. Reuses the ingest service account and its database
+# role: it reads subscribers, sends notifications and deletes rows, which is exactly what the
+# alerting path already does - a third identity would be a third thing to keep in step for no
+# additional isolation.
+resource "google_cloud_run_v2_job" "liveness" {
+  name                = "rainalert-liveness"
+  location            = var.region
+  deletion_protection = false
+
+  template {
+    parallelism = 1
+    task_count  = 1
+
+    template {
+      service_account = google_service_account.ingest.email
+      # Not retried. A failed run costs at most a month's delay on a housekeeping task, and a retry
+      # that partially succeeded would send a second notification to everyone it already reached.
+      max_retries = 0
+      timeout     = "600s"
+
+      volumes {
+        name = "cloudsql"
+        cloud_sql_instance { instances = [google_sql_database_instance.main.connection_name] }
+      }
+
+      containers {
+        image   = var.image
+        command = ["python", "-m", "rainalert.cli"]
+        args    = ["liveness"]
+
+        # No radar decoding here, so none of the ingest job's headroom is needed.
+        resources {
+          limits = { cpu = "1", memory = "512Mi" }
+        }
+
+        volume_mounts {
+          name       = "cloudsql"
+          mount_path = "/cloudsql"
+        }
+
+        dynamic "env" {
+          for_each = local.common_env
+          content {
+            name  = env.key
+            value = env.value
+          }
+        }
+
+        env {
+          name = "DATABASE_URL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["ingest-database-url"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "SECRET_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["secret-key"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        env {
+          name = "VAPID_PRIVATE_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.this["vapid-private-key"].secret_id
+              version = "latest"
+            }
+          }
+        }
+        dynamic "env" {
+          for_each = local.email_enabled ? [1] : []
+          content {
+            name = "SMTP_PASSWORD"
+            value_source {
+              secret_key_ref {
+                secret  = google_secret_manager_secret.this["smtp-password"].secret_id
+                version = "latest"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_version.ingest_database_url,
+    google_secret_manager_secret_version.secret_key,
+    google_secret_manager_secret_version.vapid_private_key,
+  ]
+}
+
+resource "google_cloud_run_v2_job_iam_member" "scheduler_runs_liveness" {
+  name     = google_cloud_run_v2_job.liveness.name
+  location = var.region
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
+resource "google_cloud_scheduler_job" "liveness" {
+  name        = "rainalert-liveness"
+  region      = var.region
+  description = "Weekly. Sends one notification to push subscribers who have heard nothing for WEBPUSH_LIVENESS_DAYS, and deletes the ones whose subscription the push service reports as gone - which is the only way we ever learn that somebody cleared their browser data (DESIGN.md D-46)."
+  # Weekly, not monthly, even though the threshold is 30 days. A monthly run does not bound silence
+  # at 30 days: somebody who goes quiet the day after a run is not yet 30 days silent when the next
+  # one fires, so the first run that can see them is the one after that - about 60 days, while
+  # privacy.html tells them 30. Running weekly makes the worst case ~37 days, and costs nothing: the
+  # threshold does the selecting, so three runs in four find nobody due.
+  #
+  # 07:19 on Wednesdays, Berlin time. Not midnight and not on the hour - most schedules run at :00,
+  # so a run placed there waits behind them.
+  schedule  = "19 7 * * 3"
+  time_zone = "Europe/Berlin"
+
+  retry_config {
+    retry_count = 0 # see max_retries on the job: a retry re-notifies whoever already got one
+  }
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/${google_cloud_run_v2_job.liveness.name}:run"
     oauth_token { service_account_email = google_service_account.scheduler.email }
   }
 

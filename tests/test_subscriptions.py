@@ -399,8 +399,20 @@ def test_the_push_link_confirms_on_open_and_the_mail_link_does_not(client, notif
     The marker is chosen in the message because nothing downstream can work it out: the token is
     opaque, and the server never receives the fragment to look the channel up.
     """
-    client.post("/api/v1/subscriptions", json={"channel": "ntfy", "lat": 48.15, "lon": 11.55})
-    assert "/confirm#a=" in notifier.sent[-1].text
+    client.post(
+        "/api/v1/subscriptions",
+        json={
+            "channel": "webpush",
+            "lat": 48.15,
+            "lon": 11.55,
+            "endpoint": "https://fcm.googleapis.com/fcm/send/scanner-test",
+            "p256dh": "k" * 87,
+            "auth": "a" * 22,
+        },
+    )
+    # `click_url`, not the body: a push body prints no URL, because a notification body is plain
+    # text that nothing linkifies and a link nobody can tap is worse than none.
+    assert "/confirm#a=" in notifier.sent[-1].click_url
 
     client.post(
         "/api/v1/subscriptions", json={"email": "b@example.com", "lat": 48.15, "lon": 11.55}
@@ -415,8 +427,18 @@ def test_a_scanner_cannot_spend_the_push_token_by_fetching_the_link(client, noti
     /confirm` with nothing to act on, and the page it gets back needs script *and* the fragment
     before anything happens. Asserted on the database, not on the response.
     """
-    client.post("/api/v1/subscriptions", json={"channel": "ntfy", "lat": 48.15, "lon": 11.55})
-    token = notifier.sent[-1].text.split("/confirm#a=")[1].split()[0]
+    client.post(
+        "/api/v1/subscriptions",
+        json={
+            "channel": "webpush",
+            "lat": 48.15,
+            "lon": 11.55,
+            "endpoint": "https://fcm.googleapis.com/fcm/send/scanner-test",
+            "p256dh": "k" * 87,
+            "auth": "a" * 22,
+        },
+    )
+    token = notifier.sent[-1].click_url.split("/confirm#a=")[1]
 
     # Everything a fetch of that URL actually puts on the wire.
     assert client.get("/confirm").status_code == 200

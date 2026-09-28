@@ -52,10 +52,18 @@ variable "smtp_username" {
   default = ""
 }
 
-variable "ntfy_server" {
-  description = "Where push notifications are published. The public server sees the topic name and the message text, and a rain warning names a time and an intensity - self-host it for anything past testing (DESIGN.md D-30)."
+variable "vapid_subject" {
+  description = "The contact RFC 8292 puts in the VAPID `sub` claim. Google, Apple and Mozilla receive it on every send and use it to reach the operator when something is wrong with our traffic - the same role dwd_user_agent plays for DWD. A role address, not a personal one. Must be mailto: or https:."
   type        = string
-  default     = "https://ntfy.sh"
+  default     = ""
+
+  validation {
+    # A malformed subject is accepted by some push services and rejected by others, which is the
+    # worst outcome: it works in testing and fails for a subset of subscribers. Empty is allowed
+    # so that a deployment can fall back to alert_email below.
+    condition     = var.vapid_subject == "" || startswith(var.vapid_subject, "mailto:") || startswith(var.vapid_subject, "https://")
+    error_message = "vapid_subject must start with mailto: or https://, or be empty to derive it from alert_email."
+  }
 }
 
 variable "map_tile_url" {
@@ -100,4 +108,14 @@ variable "api_max_instances" {
 variable "alert_email" {
   description = "Where operator alerts go. Not a subscriber address."
   type        = string
+
+  # Validated because `vapid_subject` falls back to "mailto:${alert_email}", and an empty value
+  # produced the subject "mailto:" - which passes that variable's own check and `WebPushNotifier`'s
+  # `startswith`, and is then sent to Google, Apple and Mozilla in the VAPID claim of every push we
+  # make. A push service is entitled to reject a `sub` it cannot contact, so the failure mode is
+  # every notification silently refused, configured by omission.
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be a real address: vapid_subject falls back to a mailto: of it, and that is sent to every push service."
+  }
 }

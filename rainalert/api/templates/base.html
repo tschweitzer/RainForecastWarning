@@ -3,6 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{# Without this the manifest is served and linked by nothing, which costs two things the change
+   claims. On iOS, web push works only for a Home-Screen web app *and* only when a manifest declares
+   `display: standalone` - so the iPhone instructions on the signup page could not have worked. On
+   Android, Chrome never offers to install, and the notification keeps the bare-origin label that
+   `/manifest.webmanifest`'s own docstring says the manifest exists to replace. #}
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#1f6fb2">
 <title>{% block title %}Regenwarnung{% endblock %}</title>
 <style>
   :root { --fg:#16202c; --bg:#fbfcfd; --muted:#5b6b7c; --line:#d8e0e8; --accent:#1f6fb2;

@@ -26,26 +26,67 @@ from datetime import UTC, datetime, timedelta
 TOKEN_BYTES = 32
 
 
+def same_secret(offered: str, expected: str) -> bool:
+    """Constant-time string comparison that cannot be crashed by its input.
+
+    `hmac.compare_digest` and `secrets.compare_digest` are the same function, and on `str` it
+    raises `TypeError: comparing strings with non-ASCII characters is not supported` - because the
+    constant-time path only exists for bytes-like input, and it refuses to guess an encoding rather
+    than silently losing the timing guarantee.
+
+    Every value compared here arrives from a request: a token signature out of a URL or a POST
+    body, a push key out of a JSON payload, an `Authorization` header. One non-ASCII character in
+    any of them turned a comparison into an unhandled `TypeError`, which is a 500 from an
+    unauthenticated route - reported by review on the push keys, and present on the token
+    signatures too. Encoding both sides to bytes fixes that: bytes have no ASCII restriction, the
+    comparison stays constant-time, and a non-ASCII offering simply fails to match instead of
+    taking the process down.
+
+    `surrogatepass`, and not because anything sends surrogates on purpose. A plain
+    `.encode("utf-8")` raises `UnicodeEncodeError` on a lone UTF-16 surrogate such as "\ud800" -
+    so the first version of this fix swapped one crash for a narrower one, and its comment claimed
+    it was fixed "for good". Review found that. Nothing reaches it today: pydantic-core's JSON
+    parser rejects lone surrogates with a 422, Starlette decodes form bodies with
+    `errors="replace"`, and headers are latin-1, which cannot produce one. That is three unrelated
+    layers holding a property this function is supposed to hold itself, and swapping the JSON
+    parser or reading a token from anywhere new would be enough to expose it. Encoding that cannot
+    fail is cheaper than remembering why it currently does not.
+
+    Not a validation function. A caller that wants to reject a malformed secret should do that
+    separately - this only guarantees that comparing one is safe.
+    """
+    return hmac.compare_digest(
+        offered.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass")
+    )
+
+
 def new_token() -> str:
     return secrets.token_urlsafe(TOKEN_BYTES)
 
 
 def hash_token(token: str) -> bytes:
-    return hashlib.sha256(token.encode("utf-8")).digest()
+    # `surrogatepass` for the same reason as `same_secret`: this hashes a string that came out of a
+    # request body, and a plain UTF-8 encode raises on a lone surrogate. A hash must not be able to
+    # fail on its input - it is looking a row up, and the answer for an impossible token is "no such
+    # row", not a 500.
+    return hashlib.sha256(token.encode("utf-8", "surrogatepass")).digest()
 
 
 def hash_address(channel: str, address: str) -> bytes:
     """Stable lookup key for a subscriber, covering the channel as well as the address.
 
-    Without the channel an ntfy topic spelled like a mailbox would collide with that mailbox and
+    Without the channel, a push endpoint spelled like a mailbox would collide with that mailbox and
     the two subscribers would be one.
 
-    Mailboxes are case-folded because they are case-insensitive in practice. Topics are not:
-    ntfy treats `Abc` and `abc` as different topics, and folding them would make two distinct
-    push destinations look like one subscriber.
+    Mailboxes are case-folded because they are case-insensitive in practice. Push endpoints are not:
+    the tail of one is a path, and a path is case-sensitive, so folding would make two distinct
+    destinations look like one subscriber.
+
+    (The rule is unchanged from when this said "ntfy topic" - it was right for a topic and is right
+    for an endpoint, for the same reason. Only the example was left behind by D-45.)
     """
     normalised = address.strip().lower() if channel == "email" else address.strip()
-    return hashlib.sha256(f"{channel}:{normalised}".encode()).digest()
+    return hashlib.sha256(f"{channel}:{normalised}".encode("utf-8", "surrogatepass")).digest()
 
 
 def hash_ip(ip: str, secret: str) -> bytes:
@@ -84,7 +125,7 @@ def verify_unsubscribe_token(token: str, secret: str) -> uuid.UUID | None:
     except ValueError:
         return None
     expected = unsubscribe_token(subscriber_id, secret).partition(".")[2]
-    if not hmac.compare_digest(signature, expected):
+    if not same_secret(signature, expected):
         return None
     return subscriber_id
 
@@ -139,7 +180,7 @@ def _verify(
         return None
     expected = _sign(purpose, subscriber_id, expires, deadline, secret).rpartition(".")[2]
     # Signature first: an expired token and a forged one should cost the same to probe.
-    if not hmac.compare_digest(signature, expected):
+    if not same_secret(signature, expected):
         return None
     if (now or datetime.now(UTC)).timestamp() >= expires:
         return None

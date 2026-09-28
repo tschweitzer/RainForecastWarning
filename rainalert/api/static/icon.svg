@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Regenwarnung">
+  <!-- The notification icon and the installed app's icon. SVG because Android accepts "sizes":"any"
+       for one, which beats maintaining six PNGs that drift. Flat colours and no thin strokes: this
+       is drawn at 24px in a status bar as often as at 192px on a home screen. -->
+  <rect width="64" height="64" rx="14" fill="#1f6fb2"/>
+  <path d="M18 34a10 10 0 0 1 1.2-19.9A14 14 0 0 1 45.6 18A9 9 0 0 1 46 34z" fill="#fff"/>
+  <g fill="#9fd0f2">
+    <rect x="21" y="40" width="4" height="12" rx="2"/>
+    <rect x="30" y="43" width="4" height="14" rx="2"/>
+    <rect x="39" y="40" width="4" height="12" rx="2"/>
+  </g>
+</svg>

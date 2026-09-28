@@ -20,39 +20,33 @@
   .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
   .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
                    font-weight:normal; }
-  .ntfy-steps .topic { font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-                       word-break:break-all; background:var(--code,#0001); padding:.4rem .6rem;
-                       border-radius:6px; }
-  .ntfy-steps .topic-row { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; }
-  .ntfy-steps .topic { flex:1; min-width:12rem; }
-  /* Not scoped to .ntfy-steps: the restart line belongs to the whole result, including the
-     email branch, and scoping it there left it rendering as loudly as the instructions. */
+  /* Not scoped: the restart line belongs to the whole result, including the email branch, and
+     scoping it left it rendering as loudly as the instructions. */
   .alt { font-size:.85rem; color:var(--muted); }
-  .ntfy-steps details { margin:.6rem 0; font-size:.85rem; color:var(--muted); }
-  .ntfy-steps .qr { width:148px; height:148px; background:#fff; padding:6px; border-radius:6px;
-                    display:block; margin-top:.5rem; }
-  .ntfy-steps .done { font-weight:600; }
-  .ntfy-steps .step { font-weight:600; margin:1.1rem 0 .35rem; }
-  .ntfy-steps .route { border:1px solid var(--line); border-radius:8px; padding:.7rem .9rem;
-                       margin:.7rem 0; font-size:1rem; color:inherit; }
-  .ntfy-steps .route > summary { font-weight:600; cursor:pointer; }
-  .ntfy-steps .route[open] > summary { margin-bottom:.4rem; }
-  .ntfy-steps .manual { margin:1.1rem 0 0; font-size:.85rem; color:var(--muted); }
-  .stores { display:flex; flex-wrap:wrap; gap:.5rem; margin:.35rem 0 0; }
-  .store-link { display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .75rem;
-                border:1px solid var(--line); border-radius:8px; text-decoration:none;
-                font-size:.9rem; font-weight:600; }
-  .store-mark { width:1.1rem; height:1.1rem; flex:none; }
-  /* The one action on the page now, so it looks like one rather than like running text. */
-  .ntfy-steps .primary-link { display:inline-block; padding:.7rem 1.1rem; border-radius:8px;
-                              background:var(--accent); color:#fff; font-weight:600;
-                              text-decoration:none; }
+  .done { font-weight:600; }
+  /* The waiting state between "allow notifications" and the test notification arriving. Usually
+     under a second, occasionally several - a push service has to reach the device. */
+  .waiting { display:flex; gap:.6rem; align-items:center; }
   .already { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line);
              font-size:.9rem; color:var(--muted); }
 </style>
 <h1>Regenwarnung</h1>
 <p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
-Vorhersage bis zwei Stunden voraus.</p>
+Vorhersage bis zwei Stunden voraus. Kostenlos, ohne Konto, ohne App.</p>
+
+{# Above the channel choice, because it explains that choice.
+
+   `announceCapability()` moves the radio from push to E-Mail when this browser cannot do push, and
+   this sentence is the only thing that says why. Inside #what-happens it rendered at y=827 on a
+   390x844 phone - below the map, below the fold - so the reader's first screen was an E-Mail radio
+   they had not selected and an address box, with no reason given anywhere in view. A note that
+   changes the premise of a control has to precede the control.
+
+   No `for-push` class, deliberately. It had one, and `syncChannelFields()` sets `hidden` on every
+   `.for-push` node whenever the channel changes - so the note was force-shown (empty) on a capable
+   browser and force-hidden on the blocked one it exists for, i.e. wrong in both directions. Its
+   visibility is owned by `announceCapability()` alone. #}
+<p class="note" id="capability-note" hidden></p>
 
 <form id="signup">
   {# With no mail provider configured the API refuses `channel=email`, so the choice is not a
@@ -61,14 +55,14 @@ Vorhersage bis zwei Stunden voraus.</p>
      ask a question whose second answer would be rejected. #}
   <fieldset class="channel" {% if not settings.email_channel_enabled %}hidden{% endif %}>
     <legend>Wie sollen wir dich warnen?</legend>
-    <label><input type="radio" name="channel" value="ntfy" checked> Push aufs Handy (ntfy)</label>
+    <label><input type="radio" name="channel" value="webpush" checked> Push auf diesen Browser</label>
     {% if settings.email_channel_enabled %}
     <label><input type="radio" name="channel" value="email"> E-Mail</label>
     {% endif %}
   </fieldset>
 
   {# Hidden for push, and not merely ignored: the request is refused if an address arrives on
-     the ntfy channel, so leaving it fillable would let someone believe it had been stored. #}
+     the webpush channel, so leaving it fillable would let someone believe it had been stored. #}
   <div id="email-field" hidden>
     <label for="email">E-Mail</label>
     <input type="email" id="email" name="email" autocomplete="email"
@@ -83,7 +77,7 @@ Vorhersage bis zwei Stunden voraus.</p>
            disabled>
   </div>
   <p class="stamp" id="frame-stamp"></p>
-  <p class="hint" id="map-hint">Klicke in die Karte, um deinen Ort zu setzen.</p>
+  <p class="hint" id="map-hint">Tippe in die Karte, um deinen Ort zu setzen.</p>
 
   {# Only shown when Leaflet fails to load. Asking for decimal degrees is not something to do to
      anyone who has a map, but a blocked CDN must not mean the form cannot be filled in at all. #}
@@ -105,6 +99,53 @@ Vorhersage bis zwei Stunden voraus.</p>
     <p id="locate-status" class="hint" role="status"></p>
   </div>
 
+  {# Order here is: what will happen -> I agree -> Anmelden.
+
+     It began below the button entirely: measured on a 390x844 phone the note sat at y=859 while the
+     button was at y=798, so every word of it - the permission warning and the "clearing browser data
+     ends the subscription" sentence D-47 requires "before anyone signs up" - was off-screen at the
+     moment of the decision. Moving it above the button fixed that and left it below the consent
+     checkbox, which still asked the reader to agree to something before explaining what it sets in
+     motion. Now it precedes both. #}
+<div class="note" id="what-happens">
+  {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
+     as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
+     page always said so; this one contradicted it. #}
+  {# The one thing the reader must get right and cannot undo. Pressing Anmelden fires the browser's
+     own permission prompt, and Chrome treats a denial as permanent - a wrong tap costs a trip into
+     browser settings. Nothing on the page used to mention it, and the only explanation lived in an
+     error message shown *after* the mistake. #}
+
+  {# A <p>, not a <span>. As spans these two ran together into one six-line block, which put the
+     bold permission sentence - the only thing on this page a reader cannot undo - in the middle of
+     a paragraph instead of standing alone, undoing most of the benefit of moving it here.
+
+     "Bestätigen", not "Testbenachrichtigung": what arrives is titled "Regenwarnung bestätigen" with
+     the body "Zum Aktivieren antippen", and /confirm then says "wir bestätigen deine Anmeldung", so
+     the page was the only place calling it a test. Three names for the one notification the reader
+     is actively hunting for. #}
+  <p class="for-push" style="margin:.6rem 0 0">Du bekommst dann eine Benachrichtigung zum
+  Bestätigen – tippe sie an, dann bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
+  {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
+  Nachrichten.</p>
+
+  {# The one thing a web push subscriber has to understand, said before they sign up rather than
+     discovered afterwards. The subscription and the settings session both live in this browser's
+     site data, and Chrome clears them together: "Cookies und andere Websitedaten" unregisters the
+     service worker, which deactivates the push subscription. There is no recovery path - no
+     address to send a link to, nothing to type - so the honest thing is to say so here. D-47. #}
+  <p class="for-push" style="margin:.6rem 0 0">Die Anmeldung lebt in diesem Browser. Wenn du die
+  Websitedaten löschst oder Benachrichtigungen blockierst, endet sie – dann musst du dich neu
+  {# Not "dabei", which says: at that moment. We do not learn the subscription is gone until the
+     next send fails, and if nothing is sent the liveness ping goes after `webpush_liveness_days`
+     with a weekly check behind it - which privacy.html documents honestly as "es kann also einige
+     Tage länger dauern". Two pages must not disagree about a deletion promise. #}
+  anmelden. Deinen Standort löschen wir danach von selbst.</p>
+  <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird
+  die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine
+  weiteren Mails.</span>
+</div>
+
   {# Both wordings are rendered and one is hidden, rather than written by script: the consent
      text is the thing being agreed to, so it belongs where it can be read in the template and
      in the page source, not assembled at runtime. Which one was shown follows from the
@@ -112,65 +153,39 @@ Vorhersage bis zwei Stunden voraus.</p>
   <div class="consent">
     <input type="checkbox" id="consent" required>
     <label for="consent" style="font-weight:400;margin:0">
-      <span class="for-ntfy">Ich bin einverstanden, dass mein Push-Thema und mein Standort
-      gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über den
-      Abmeldelink.</span>
+      <span class="for-push">Ich bin einverstanden, dass die Push-Adresse dieses Browsers und
+      mein Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar
+      in den Einstellungen.</span>
       <span class="for-email" hidden>Ich bin einverstanden, dass meine E-Mail-Adresse und mein
       Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über
       den Abmeldelink.</span>
     </label>
   </div>
 
+
+  {# Immediately above the button, and not inside #what-happens with the rest.
+
+     This is the one instruction on the page a reader cannot undo without a trip into browser
+     settings, so it has to be on screen at the moment they press. Measured at 390x844: with the
+     button in view, everything from #what-happens up there is scrolled off - moving that block above
+     the consent checkbox (right, in itself: you should know what you are agreeing to before you
+     agree) pushed the button down far enough that this sentence went from fully visible to 0 pixels
+     visible. Two different jobs, so two different positions: context before the checkbox, the
+     un-undoable warning against the button. #}
+  <p class="note for-push" id="permission-prompt-note" style="margin:0 0 .8rem"><strong>Beim
+  Anmelden fragt dein Browser, ob wir dir Benachrichtigungen schicken dürfen – bitte auf „Zulassen“
+  tippen.</strong> Ohne das können wir dich nicht warnen.</p>
   <button type="submit">Anmelden</button>
 </form>
 <p id="result" role="status"></p>
 
-<div class="note" id="what-happens">
-  {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
-     as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
-     page always said so; this one contradicted it. #}
-  <span class="for-ntfy">Du bekommst zuerst eine Testnachricht aufs Handy – tippe sie an, dann
-  bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
-  {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
-  Nachrichten.</span>
-  <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird
-  die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine
-  weiteren Mails.</span>
-</div>
+
 
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <script nonce="{{ request.state.csp_nonce }}" src="/static/vendor/leaflet/leaflet.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
 <script nonce="{{ request.state.csp_nonce }}">
-/* Which of the three ways in this visitor actually has.
- *
- * Read in the browser and never sent anywhere: the server has no idea what platform anyone is
- * on, nothing about it is stored, and nothing about it reaches a log. That is the whole reason
- * this is done here rather than from the User-Agent header on the request.
- */
-var RainPlatform = (function () {
-  var PLAY = 'https://play.google.com/store/apps/details?id=io.heckel.ntfy';
-  var FDROID = 'https://f-droid.org/en/packages/io.heckel.ntfy/';
-  var APPSTORE = 'https://apps.apple.com/app/ntfy/id1625396347';
-
-  function name() {
-    var ua = navigator.userAgent || '';
-    if (/android/i.test(ua)) { return 'android'; }
-    // An iPad on iPadOS 13+ says "Macintosh"; the touch points are what give it away, and
-    // getting this wrong would offer a Mac user an App Store link for a phone app.
-    if (/iphone|ipad|ipod/i.test(ua)
-        || (/macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) { return 'ios'; }
-    return 'desktop';
-  }
-
-  return {
-    name: name,
-    PLAY: PLAY,
-    FDROID: FDROID,
-    APPSTORE: APPSTORE
-  };
-})();
 
 /* A signup that has gone through is not a form any more.
  *
@@ -180,7 +195,7 @@ var RainPlatform = (function () {
  * of a 900-pixel viewport and the page did not scroll, so one press looked like nothing had
  * happened.
  */
-function settled() {
+function settled(pending) {
   document.getElementById('signup').hidden = true;
   // Says what will happen when you sign up; you have, and the steps above now say it better.
   var standing = document.getElementById('what-happens');
@@ -193,8 +208,17 @@ function settled() {
   restart.textContent = 'Von vorn anfangen';
   again.appendChild(document.createTextNode('Etwas falsch gemacht? '));
   again.appendChild(restart);
-  again.appendChild(document.createTextNode(' – diese Anmeldung verfällt von selbst, wenn du '
-    + 'sie nicht bestätigst.'));
+  /* `pending` decides the rest of the sentence, and it used to be unconditional. An
+     already-confirmed browser re-signing up - the "I moved" case, which is the usual way anyone
+     reaches that branch - was told "diese Anmeldung verfällt von selbst, wenn du sie nicht
+     bestätigst". There is nothing to confirm and nothing expires, so the reader waited for a
+     notification that was never coming and then followed "Von vorn anfangen" back into the same
+     branch. A loop, built out of one sentence that was true for only one of the two outcomes. */
+  again.appendChild(document.createTextNode(
+    pending === false
+      ? ' – deine Anmeldung bleibt dabei bestehen.'
+      : ' – diese Anmeldung verfällt von selbst, wenn du sie nicht bestätigst.'
+  ));
   document.getElementById('result').appendChild(again);
 
   document.getElementById('result').scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -301,7 +325,7 @@ function setPlace(lat, lon, fromMap) {
 })();
 function chosenChannel() {
   var picked = document.querySelector('input[name=channel]:checked');
-  return picked ? picked.value : 'ntfy';
+  return picked ? picked.value : 'webpush';
 }
 
 function syncChannelFields() {
@@ -316,7 +340,7 @@ function syncChannelFields() {
   Array.prototype.forEach.call(document.querySelectorAll('.for-email'), function (node) {
     node.hidden = !isEmail;
   });
-  Array.prototype.forEach.call(document.querySelectorAll('.for-ntfy'), function (node) {
+  Array.prototype.forEach.call(document.querySelectorAll('.for-push'), function (node) {
     node.hidden = isEmail;
   });
 }
@@ -325,6 +349,234 @@ Array.prototype.forEach.call(
   function (radio) { radio.addEventListener('change', syncChannelFields); }
 );
 syncChannelFields();
+
+function isApplePhone() {
+  /* iPadOS reports itself as Macintosh, hence the touch-points test. */
+  return /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+/* Says up front when push cannot work here, instead of letting the reader find out after filling in
+   the form. Three states are worth naming and the rest are not: this is a note, not a diagnosis. */
+function announceCapability() {
+  var note = document.getElementById('capability-note');
+  var message = null;
+  /* Push cannot work in this browser at all. The only way forward is another channel, or - on an
+     iPhone - another way of opening the same page, so say which and move the reader off push. */
+  var impossible = !pushSupported() || !VAPID_KEY;
+  if (impossible) {
+    /* Four different messages, because the right next step differs in all four cases and a
+       concatenated one contradicted itself. The old iPhone text stated the Home Screen detour at
+       length and then withdrew it with "Wir haben E-Mail für dich ausgewählt", and said "hier
+       anmelden" when the Home Screen opens a fresh page with an empty form - so the one word naming
+       where to act pointed at the wrong place in both configurations. */
+    if (isApplePhone()) {
+      message = EMAIL_AVAILABLE
+        ? 'Wir haben E-Mail für dich ausgewählt – so bekommst du die Warnungen auch auf dem '
+          + 'iPhone. Push geht dort nur als Web-App: füge die Seite über „Teilen → Zum '
+          + 'Home-Bildschirm“ hinzu und melde dich dort an.'
+        : 'Auf dem iPhone geht Push nur als Web-App: füge die Seite über „Teilen → Zum '
+          + 'Home-Bildschirm“ hinzu und öffne sie von dort. Dort kannst du dich dann anmelden.';
+    } else {
+      message = EMAIL_AVAILABLE
+        ? 'Dieser Browser kann keine Push-Benachrichtigungen empfangen. Wir haben E-Mail für dich '
+          + 'ausgewählt.'
+        /* The intended first deployment, and the only true dead end on this page: no push here and
+           no second channel. It used to stop after the first sentence, leaving a map, a consent box
+           and a live Anmelden that could only ever repeat the same sentence into #result. Says what
+           would work, and the button goes below. */
+        : 'Dieser Browser kann keine Push-Benachrichtigungen empfangen – hier kannst du dich nicht '
+          + 'anmelden. In einem aktuellen Chrome oder Firefox funktioniert es.';
+    }
+  } else if (Notification.permission === 'denied') {
+    /* Blocked, not impossible - so the channel is left alone. Chrome shows no prompt at all on a
+       second request after a denial, which is why this has to be said before the button rather than
+       after it, but it is two taps to undo and the reader chose push. Switching channels for them
+       here would take away the thing they asked for to solve a problem they can fix. */
+    message = 'Benachrichtigungen sind für diese Seite blockiert. Erlaube sie in den '
+      + 'Website-Einstellungen deines Browsers (Symbol links neben der Adresse) – sonst können wir '
+      + 'dich nicht warnen.';
+  }
+  if (!message) { return; }
+  note.textContent = message;
+  note.hidden = false;
+  /* The bold "your browser will ask" sentence is false in both branches: there is no prompt coming
+     when push is unsupported, and none coming after a denial either. */
+  var prompt = document.getElementById('permission-prompt-note');
+  if (prompt) { prompt.hidden = true; }
+  if (impossible && EMAIL_AVAILABLE) {
+    var email = document.querySelector('input[name=channel][value=email]');
+    if (email) { email.checked = true; syncChannelFields(); }
+  }
+  if (impossible && !EMAIL_AVAILABLE) {
+    /* Nothing on this page can succeed, so the button stops inviting the attempt. Only this branch:
+       a *denied* permission is two taps to undo and the reader may well come back and press, so that
+       button stays live - the same judgement as not switching their channel for them. */
+    var submit = document.querySelector('#signup button[type=submit]');
+    if (submit) { submit.disabled = true; }
+  }
+}
+/* Called at the very bottom of this script, not here. `var VAPID_KEY` is declared further down, and
+   `var` hoists the declaration without the assignment - so calling this during parse read VAPID_KEY
+   as undefined and announced "this browser cannot receive push notifications" to every visitor on a
+   perfectly capable browser. Found by driving Chromium; nothing in the Python suite could see it,
+   and it is the second time an ordering mistake in this script has produced a confident, wrong
+   page. */
+
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) { node.className = cls; }
+  if (text) { node.textContent = text; }
+  return node;
+}
+
+/* The VAPID public key, from the server. Empty when none is configured, which is the signal that
+   this deployment cannot do push at all - rendered as JSON so an empty value is an empty string
+   rather than a syntax error. */
+var VAPID_KEY = {{ (vapid_public_key or '')|tojson }};
+/* Whether there is a second channel to fall back to, which decides what a push failure may suggest. */
+var EMAIL_AVAILABLE = {{ settings.email_channel_enabled|tojson }};
+
+/* base64url -> Uint8Array. `applicationServerKey` will not take the base64 string, only bytes,
+   and atob does not know base64url - so the two substitutions and the padding are both needed.
+   Getting this wrong produces an InvalidCharacterError at subscribe time and nothing else. */
+function keyBytes(base64url) {
+  var padded = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  padded += '='.repeat((4 - (padded.length % 4)) % 4);
+  var raw = atob(padded);
+  var bytes = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) { bytes[i] = raw.charCodeAt(i); }
+  return bytes;
+}
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+/* Everything between "Anmelden" and having something to POST. Returns the subscription, or throws
+   with a message already worded for the reader - the caller has no way to improve on it and each
+   failure here needs a different next step. */
+async function pushSubscription() {
+  if (!VAPID_KEY) {
+    /* Conditional, because the intended first deployment has email off - and then "Bitte E-Mail
+       wählen" points at an option that is not on the page. "Server" also blames machinery the
+       reader cannot see or fix. */
+    throw new Error(EMAIL_AVAILABLE
+      ? 'Push ist hier gerade nicht verfügbar. Bitte E-Mail wählen.'
+      : 'Push ist hier gerade nicht verfügbar. Das liegt nicht an dir – bitte später noch '
+        + 'einmal probieren.');
+  }
+  if (!pushSupported()) {
+    /* The iPhone instruction is the answer on iOS and noise anywhere else, so it is only given
+       there. Everywhere else, offer the channel that does work if there is one. */
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent)
+        || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) {
+      throw new Error('Auf dem iPhone geht das nur, wenn du die Seite über „Teilen → Zum '
+        + 'Home-Bildschirm“ hinzufügst und sie von dort öffnest.');
+    }
+    throw new Error('Dieser Browser kann keine Push-Benachrichtigungen empfangen.'
+      + (EMAIL_AVAILABLE ? ' Du kannst dich stattdessen per E-Mail anmelden.' : ''));
+  }
+  /* Permission first, before any await. Transient user activation does not survive an arbitrarily
+     long await, and `serviceWorker.ready` on a first-ever registration waits for install and
+     activate - so asking afterwards spends the gesture and then asks. Chrome does not enforce
+     activation for requestPermission(), which is why Android-first hid this; Firefox and Safari do,
+     and iOS-on-the-Home-Screen is the one platform D-45 still explicitly claims. There is nothing
+     to lose by asking first: a reader who says no should not have a worker registered for them.
+
+     Chrome treats a second call after a denial as already-denied and shows nothing, so "denied"
+     needs its own wording - there is no prompt left to answer and it has to be undone in the
+     browser's own UI. */
+  var permission = await Notification.requestPermission();
+  if (permission === 'denied') {
+    /* The sliders icon left of the URL, not the padlock: the padlock is desktop Chrome, and on
+       Android - the target - there is nothing there to look for. */
+    throw new Error('Benachrichtigungen sind für diese Seite blockiert. Erlaube sie in den '
+      + 'Website-Einstellungen deines Browsers (Symbol links neben der Adresse), dann hier noch '
+      + 'einmal anmelden.');
+  }
+  if (permission !== 'granted') {
+    /* Dismissed rather than denied: the prompt can still be shown again, so say how. */
+    throw new Error('Ohne erlaubte Benachrichtigungen können wir dich nicht warnen. Tippe noch '
+      + 'einmal auf „Anmelden“ und wähle „Zulassen“.');
+  }
+
+  /* Registered at the root scope, which is why app.py serves it from / and not from /static.
+
+     Wrapped because this function promises its caller a message already worded for the reader, and
+     the submit handler shows `error.message` verbatim on that promise. `register`, `ready` and
+     `subscribe` all reject with raw DOMExceptions - and `subscribe` failing is routine on Android,
+     where Play Services trouble gives "AbortError: Registration failed - push service error". A
+     German page was showing an English internal string with no next step. */
+  var registration;
+  try {
+    registration = await navigator.serviceWorker.register('/sw.js');
+    /* `register` resolves before the worker is usable; `ready` is the one that waits for active. */
+    await navigator.serviceWorker.ready;
+  } catch (error) {
+    throw new Error('Der Hintergrunddienst deines Browsers lässt sich nicht starten. Lade die '
+      + 'Seite neu; im privaten Modus funktionieren Benachrichtigungen meist nicht.');
+  }
+
+  /* An existing subscription is reused rather than replaced: subscribe() with the same key returns
+     the same endpoint, so this is idempotent, and reusing it means a second signup from the same
+     browser presents the keys the server already has rather than a new pair it would refuse.
+
+     (It is not a way back in after clearing browser data. Clearing site data unregisters the
+     worker, so getSubscription() returns null and there is nothing here to reuse - which is what
+     the page says on the tin and what D-47 accepts.)
+
+     But only if it was made with the key we are signing with now. A subscription is bound to the
+     applicationServerKey it was created with, and a push signed with any other key is rejected by
+     the push service with a 403 - forever, silently, from the reader's side: they see a successful
+     signup and are never warned. So a mismatch is replaced rather than reused. `options` is not
+     populated on every browser; when we cannot tell, reuse is the safer guess, because dropping a
+     working subscription costs the reader their settings. */
+  var existing = await registration.pushManager.getSubscription();
+  if (existing) {
+    if (sameKey(existing, VAPID_KEY)) { return existing; }
+    /* Best-effort: if the old subscription will not go away, subscribing again below is still the
+       right move, and failing here would stop the reader for a reason they cannot act on. */
+    try { await existing.unsubscribe(); } catch (error) { /* keep going */ }
+  }
+  try {
+    return await registration.pushManager.subscribe({
+      /* Required by Chrome. It is a promise that every push shows a notification, which sw.js keeps
+         on every path including its failure paths. */
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes(VAPID_KEY)
+    });
+  } catch (error) {
+    throw new Error('Dein Browser konnte die Benachrichtigungen nicht einrichten. Versuche es '
+      + 'später noch einmal – oft hilft es, den Browser neu zu starten.');
+  }
+}
+
+function sameKey(subscription, expected) {
+  /* Compares the bytes, not the encoding: `options.applicationServerKey` comes back as an
+     ArrayBuffer and the page holds base64url. Returns true when the browser does not tell us
+     (no `options`, or a null key) - see the caller for why that way round. */
+  var options = subscription.options || {};
+  var key = options.applicationServerKey;
+  /* "Cannot tell" has to include more than null. `!key` catches null and undefined, and an empty
+     ArrayBuffer is a truthy object - so a browser populating `options` with a zero-length or
+     non-ArrayBuffer key compared 0 bytes against 65, called it a mismatch, and unsubscribed a
+     working subscription on every single signup attempt: new endpoint, new pending row, the
+     confirmed one orphaned, settings lost each time. No shipping browser does this, but the whole
+     point of the fallback was to prefer keeping a subscription when we are not sure, and that is
+     exactly what this case is. */
+  if (!(key instanceof ArrayBuffer) || key.byteLength === 0) { return true; }
+  var actual = new Uint8Array(key);
+  var wanted = keyBytes(expected);
+  if (actual.length !== wanted.length) { return false; }
+  for (var i = 0; i < actual.length; i++) {
+    if (actual[i] !== wanted[i]) { return false; }
+  }
+  return true;
+}
+
+/* Everything it reads - VAPID_KEY, pushSupported, EMAIL_AVAILABLE - is defined above by here. */
+announceCapability();
 
 document.getElementById('signup').addEventListener('submit', async function (event) {
   event.preventDefault();
@@ -355,27 +607,70 @@ document.getElementById('signup').addEventListener('submit', async function (eve
     return;
   }
   out.textContent = 'Wird gesendet …';
+  /* Disabled for the duration. `settled()` closes the "press it again after it finished" hole; this
+     closes "double-tap before it answers", which on a slow connection is the likelier of the two.
+     Re-enabled on every path that leaves the form on screen - `finish()` below - because a button
+     stuck disabled after an error is worse than the double-tap it prevented. */
+  var submit = event.target.querySelector('button[type=submit]');
+  if (submit) { submit.disabled = true; }
+  function finish(message) {
+    out.textContent = message;
+    if (submit) { submit.disabled = false; }
+  }
 
   var body = { channel: channel, lat: lat, lon: lon };
-  if (channel === 'email') { body.email = document.getElementById('email').value; }
+  if (channel === 'email') {
+    body.email = document.getElementById('email').value;
+  } else {
+    /* The permission prompt happens here, not on page load. Asking before anyone has said what
+       they want is how a site trains people to hit Block, and a blocked site cannot recover
+       without the reader going into browser settings. */
+    var subscription;
+    try {
+      subscription = await pushSubscription();
+    } catch (error) {
+      finish(error.message);
+      return;
+    }
+    var keys = subscription.toJSON().keys || {};
+    body.endpoint = subscription.endpoint;
+    body.p256dh = keys.p256dh;
+    body.auth = keys.auth;
+  }
 
-  var response = await fetch('/api/v1/subscriptions', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  });
+  var response;
+  try {
+    response = await fetch('/api/v1/subscriptions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    /* A dropped connection rejects rather than returning a status. Until the submit button started
+       being disabled during the request this merely showed nothing; now it would leave a dead form,
+       so the change that made the page safer against double-taps made it worse against a flaky
+       link. This is the worse of the two pages for it: on the push channel the permission has been
+       granted and the browser is already holding a subscription the server never heard about. */
+    finish('Keine Verbindung. Bitte versuch es noch einmal – deine Anmeldung ist noch nicht '
+      + 'abgeschickt.');
+    return;
+  }
 
   if (!response.ok) {
     // One message for every failure told people to check their input even when the input was
     // fine and the limiter had simply run out - which sends them round the form again, using
     // up the attempts they did not know they were short of.
     if (response.status === 429) {
-      out.textContent = 'Zu viele Anmeldeversuche von dieser Verbindung. Bitte in etwa einer '
-        + 'Stunde noch einmal probieren – an den Eingaben liegt es nicht.';
+      // Same correction as the settings page: subscribe limits per IP *and* per address, so
+      // naming the connection as the cause is wrong whenever the address half is what tripped.
+      // (Worded without quoting the old string: a test forbids it anywhere in the served page, and
+      // a comment in an inline script is part of the served page. Third time on this file.)
+      finish('Zu viele Anmeldeversuche in der letzten Stunde. Bitte in etwa einer '
+        + 'Stunde noch einmal versuchen – an deinen Eingaben liegt es nicht.');
     } else if (response.status === 422 || response.status === 400) {
-      out.textContent = 'Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.';
+      finish('Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.');
     } else {
-      out.textContent = 'Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.';
+      finish('Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.');
     }
     return;
   }
@@ -385,199 +680,56 @@ document.getElementById('signup').addEventListener('submit', async function (eve
     return;
   }
 
-  // Push: nothing can arrive until their app is subscribed to the topic, so getting the topic
-  // into the app *is* the next step. Two ways, deliberately in this order.
+  // Push: the browser already holds the subscription it gave us a moment ago, and the test
+  // notification is on its way to it. There is nothing to display and nothing to copy - which is
+  // the whole of what changed with D-45. Under ntfy this is where the topic, the QR code, the two
+  // subscribe links and a three-step explainer lived, because none of it could be skipped.
   //
-  // Copying the topic is first because it is the one that always works: every ntfy app has a
-  // "subscribe to topic" field, on every platform, whatever the app did or did not register as
-  // a link handler. Tapping the link is offered second because when it works it is quicker, and
-  // when it does not it lands on ntfy's own page for the topic, which has a subscribe button -
-  // so it is never a dead end, only sometimes a detour.
-  //
-  // The QR is for the other case entirely: signing up on a desktop and subscribing on a phone.
-  // On the phone you are already holding it is useless, so it is folded away rather than shown.
-  var data = await response.json();
+  // What is left is a wait. It is a real wait: the push service has to reach the device, which is
+  // usually under a second and occasionally several, so saying so beats an empty pause.
+  /* Guarded for the same reason as the fetch above: a truncated or non-JSON body rejects here, and
+     everything after this line - including `settled()` - would never run, leaving the button
+     disabled on a signup the server has in fact accepted. Falling back to an empty object takes the
+     normal path, which is the right guess: a 2xx means the subscription exists. */
+  var data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = {};
+  }
+  if (data.already_active) {
+    /* This browser was already subscribed, so no test notification is on its way and a spinner
+       waiting for one would never resolve. The location has been updated, which is what signing up
+       again from this page almost always means - somebody moved, or picked a better spot. */
+    out.innerHTML = '';
+    out.appendChild(el('p', 'done', 'Dieser Browser war schon angemeldet \u2013 der Ort ist jetzt aktualisiert.'));
+    var toSettings = el('p', 'alt');
+    var link = document.createElement('a');
+    link.href = '/manage';
+    link.textContent = 'Einstellungen \u00f6ffnen';
+    toSettings.appendChild(link);
+    out.appendChild(toSettings);
+    settled(false);
+    return;
+  }
+
   out.innerHTML = '';
-  var steps = document.createElement('div');
-  steps.className = 'ntfy-steps';
-
-  function el(tag, cls, text) {
-    var node = document.createElement(tag);
-    if (cls) { node.className = cls; }
-    if (text) { node.textContent = text; }
-    return node;
-  }
-
-  function link(href, text, cls) {
-    var a = document.createElement('a');
-    a.href = href;
-    a.rel = 'noopener';
-    a.textContent = text;
-    if (cls) { a.className = cls; }
-    return a;
-  }
-
-  // The topic, for typing into the app's own "subscribe to topic" field. Behind a disclosure on
-  // every platform: it is the thing that always works and the thing nobody should have to use,
-  // and as the loudest element on the page it made a generated 22-character string look like
-  // the point of the exercise.
-  function manualEntry() {
-    var box = document.createElement('details');
-    box.className = 'manual';
-    box.appendChild(el('summary', null, 'Thema von Hand eintragen'));
-    var row = el('div', 'topic-row');
-    var topic = el('code', 'topic', data.topic);
-    row.appendChild(topic);
-
-    var copy = el('button', 'secondary', 'Kopieren');
-    copy.type = 'button';
-    copy.addEventListener('click', async function () {
-      try {
-        await navigator.clipboard.writeText(data.topic);
-        copy.textContent = 'Kopiert';
-      } catch (err) {
-        // Clipboard access needs a secure context and permission, and neither is guaranteed.
-        // Selecting the text is a worse experience but it is never nothing.
-        var range = document.createRange();
-        range.selectNodeContents(topic);
-        window.getSelection().removeAllRanges();
-        window.getSelection().addRange(range);
-        copy.textContent = 'Markiert – jetzt kopieren';
-      }
-    });
-    row.appendChild(copy);
-    box.appendChild(row);
-    return box;
-  }
-
-  function qrCode() {
-    // Inline, from the response body. This used to be an <img> pointing at a /qr endpoint with
-    // the subscribe URL in its query string, which put the topic in the access log - and a topic
-    // is the credential, not a hint. Parsed rather than assigned to innerHTML: the markup is our
-    // own server's, but this way that does not have to be taken on trust by whoever reads it.
-    var svg = new DOMParser().parseFromString(data.qr_svg, 'image/svg+xml').documentElement;
-    svg.setAttribute('class', 'qr');
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', 'QR-Code zum Abonnieren');
-    return document.importNode(svg, true);
-  }
-
-  // Drawn inline rather than fetched: the official badges are images on Apple's and Google's
-  // servers, which `img-src` does not allow and should not - a request for a badge tells them
-  // the visitor's IP. Simplified marks, for recognising which app is meant, not the official
-  // badge artwork.
-  function storeMark(which) {
-    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('class', 'store-mark');
-    svg.setAttribute('aria-hidden', 'true');
-    if (which === 'ios') {
-      svg.innerHTML = '<path fill="currentColor" d="M17.05 12.53c-.02-2.2 1.8-3.26 1.88-3.31'
-        + '-1.03-1.5-2.62-1.7-3.19-1.73-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02'
-        + '-2.85.86-3.61 2.18-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.75 2.21 1.1-.04 '
-        + '1.52-.71 2.85-.71 1.33 0 1.7.71 2.86.69 1.18-.02 1.93-1.08 2.65-2.15.84-1.23 1.18'
-        + '-2.42 1.2-2.48-.03-.01-2.3-.88-2.32-3.5zM14.9 5.8c.61-.74 1.02-1.77.91-2.8-.88.04'
-        + '-1.94.59-2.57 1.32-.56.65-1.05 1.7-.92 2.7.98.08 1.98-.5 2.58-1.22z"/>';
-    } else {
-      svg.innerHTML = '<path fill="#00d2ff" d="M3.5 2.3v19.4c0 .4.3.6.6.4l10.3-10.1L4.1 1.9c'
-        + '-.3-.2-.6 0-.6.4z"/>'
-        + '<path fill="#00f076" d="M14.4 12l3.1-3.1L5.6 2.1c-.3-.2-.6-.2-.8-.1L14.4 12z"/>'
-        + '<path fill="#ffce00" d="M17.5 8.9l3.5 2c.6.3.6 1.2 0 1.5l-3.5 2L14.4 12l3.1-3.1z"/>'
-        + '<path fill="#ff3a44" d="M14.4 12L4.8 21.9c.2.1.5.1.8-.1l11.9-6.8L14.4 12z"/>';
-    }
-    return svg;
-  }
-
-  function storeLink(which) {
-    var a = link(which === 'ios' ? RainPlatform.APPSTORE : RainPlatform.PLAY,
-                 which === 'ios' ? 'App Store' : 'Google Play', 'store-link');
-    a.insertBefore(storeMark(which), a.firstChild);
-    return a;
-  }
-
-  // Both stores are shown on a desktop, because the page has no way to know what the phone in
-  // the reader's pocket is - and naming the app in the browser is what makes it findable on the
-  // phone afterwards.
-  function installRow(only) {
-    var row = el('p', 'stores');
-    if (!only || only === 'android') { row.appendChild(storeLink('android')); }
-    if (!only || only === 'ios') { row.appendChild(storeLink('ios')); }
-    return row;
-  }
-
-  /* The phone route. `scan` is true on a desktop, where the handoff is a QR, and false on the
-     phone itself, where the link is simply tapped. The steps are otherwise the same, and so is
-     the thing that has to be said first: without the app, neither does anything at all. */
-  function phoneSteps(scan) {
-    var box = document.createDocumentFragment();
-    box.appendChild(el('p', null, 'Die Warnung kommt als Push-Nachricht aufs Handy – auch wenn '
-      + 'der Bildschirm aus ist.'));
-
-    box.appendChild(el('p', 'step', '1. ntfy-App auf dem Handy installieren'));
-    box.appendChild(installRow(scan ? null : RainPlatform.name()));
-
-    if (scan) {
-      box.appendChild(el('p', 'step', '2. Diesen Code mit dem Handy scannen'));
-      box.appendChild(qrCode());
-      box.appendChild(el('p', 'alt', 'Die App öffnet sich und abonniert das Thema. Ist die App '
-        + 'noch nicht installiert, passiert beim Scannen nichts – dann zuerst Schritt 1.'));
-    } else {
-      box.appendChild(el('p', 'step', '2. Thema in der App abonnieren'));
-      var open = el('p');
-      open.appendChild(link(data.app_url, 'In der ntfy-App öffnen und abonnieren', 'primary-link'));
-      box.appendChild(open);
-      box.appendChild(el('p', 'alt', 'Passiert nichts? Dann fehlt die App noch – siehe Schritt 1, '
-        + 'danach hier noch einmal antippen.'));
-    }
-
-    box.appendChild(el('p', 'step', '3. Testnachricht antippen'));
-    box.appendChild(el('p', null, 'Wir schicken sie sofort. Tippe sie auf dem Handy an, dann '
-      + 'bist du angemeldet. Kommt nichts an, erreichen dich die Warnungen auch nicht.'));
-    box.appendChild(manualEntry());
-    return box;
-  }
-
-  /* The browser route, offered only where it is a real choice. It is genuinely different, not a
-     lesser version: the warning lands on this computer, not in a pocket. */
-  function browserSteps() {
-    var box = document.createDocumentFragment();
-    box.appendChild(el('p', null, 'Die Warnung erscheint als Benachrichtigung auf diesem '
-      + 'Computer – ohne App, dafür nur solange er läuft und der Browser sie zustellen darf.'));
-    var open = el('p');
-    open.appendChild(link(data.subscribe_url, 'Thema bei ntfy im Browser öffnen', 'primary-link'));
-    box.appendChild(open);
-    box.appendChild(el('p', 'alt', 'Dort auf „Subscribe“ klicken und Benachrichtigungen '
-      + 'erlauben. Danach kommt sofort eine Testnachricht – klicke sie an, dann bist du '
-      + 'angemeldet. Schläft der Rechner, verpasst du die Warnung.'));
-    return box;
-  }
-
-  var here = RainPlatform.name();
-  if (here === 'desktop') {
-    // Two ways, and which one is right depends on where the reader wants to be warned - a
-    // question the page cannot answer for them. So both are offered, closed, each saying in its
-    // summary which device it is about, rather than one being guessed at and put first.
-    steps.appendChild(el('p', 'done', 'Fast geschafft – wo willst du gewarnt werden?'));
-
-    var phone = document.createElement('details');
-    phone.className = 'route';
-    phone.appendChild(el('summary', null, 'Auf dem Handy – als Push über die ntfy-App'));
-    phone.appendChild(phoneSteps(true));
-    steps.appendChild(phone);
-
-    var browser = document.createElement('details');
-    browser.className = 'route';
-    browser.appendChild(el('summary', null, 'In diesem Browser – auf diesem Computer'));
-    browser.appendChild(browserSteps());
-    steps.appendChild(browser);
-  } else {
-    // On the phone there is nothing to choose: the browser route would mean web push on the
-    // same device, which is the weaker version of what the app does. Straight to the steps.
-    steps.appendChild(el('p', 'done', 'Fast geschafft – noch drei Schritte.'));
-    steps.appendChild(phoneSteps(false));
-  }
-
-  out.appendChild(steps);
+  var waiting = el('p', 'waiting');
+  waiting.appendChild(el('span', 'spinner'));
+  waiting.appendChild(el('span', null, 'Wir schicken dir gerade eine Benachrichtigung zum Best\u00e4tigen \u2013 tippe sie an, dann bist du angemeldet.'));
+  out.appendChild(waiting);
+  // No auto-refresh and no polling. Confirming happens on the device, in the notification, and
+  // this page has no way to learn that it happened - the confirm link opens /confirm, which is
+  // where the reader ends up. A "waiting..." that never resolves is honest; a spinner that spins
+  // forever after a successful confirmation elsewhere would not be, so it says what to do rather
+  // than promising to update itself.
+  // Ends at the browser settings, not at "melde dich noch einmal an": `settled()` hides the form
+  // on the next line, so that instruction named a control no longer on the page - and the reader
+  // whose notification did not arrive is exactly the one who scrolls looking for it. The restart
+  // affordance is `settled()`'s own "Von vorn anfangen" link, and there is now only one of them.
+  out.appendChild(el('p', 'alt', 'Kommt nichts an? Dann erreichen dich die Warnungen auch nicht. '
+    + 'Pr\u00fcfe die Benachrichtigungen f\u00fcr diese Seite in den Browser-Einstellungen und fang '
+    + 'dann von vorn an.'));
   settled();
 });
 </script>

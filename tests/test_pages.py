@@ -12,15 +12,13 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from rainalert.api.app import create_app
-from rainalert.api.mail import settings_anchor_message
 from rainalert.config import Settings
 from rainalert.notify import ConsoleNotifier, MessageAction, OutboundMessage
-from rainalert.notify.ntfy import MAX_ACTIONS, NtfyNotifier, _actions_header
+from rainalert.notify.webpush import MAX_ACTIONS
 from rainalert.tokens import (
     manage_request_token,
     session_token,
@@ -151,11 +149,18 @@ def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db
 @pytest.mark.parametrize(
     ("path", "hint"),
     [
-        ("/", "Klicke in die Karte, um deinen Ort zu setzen."),
-        ("/manage", "Klicke in die Karte, um den Ort zu setzen."),
+        ("/", "Tippe in die Karte, um deinen Ort zu setzen."),
+        ("/manage", "Tippe in die Karte, um den Ort zu setzen."),
     ],
 )
-def test_the_map_hint_does_not_tell_a_desktop_reader_to_tap(client, db, path, hint):
+def test_the_map_hint_names_one_gesture_and_not_both(client, db, path, hint):
+    """The thing being avoided is "Tippe oder klicke", which is clumsy and reads as a page unsure
+    who it is talking to. Which single verb it picks is a platform judgement, and it moved: it was
+    `Klicke` while the push channel was an app you installed on a phone from a desktop signup page,
+    and it is `Tippe` now that the service is Android-first and every other instruction in these
+    templates says *antippen*. Neither is right for both platforms; consistency within the page is
+    what is achievable.
+    """
     body = client.get(path).text
     assert hint in body
     assert "Tippe oder klicke" not in body
@@ -356,7 +361,10 @@ def test_the_bands_get_more_opaque_as_the_rain_gets_heavier():
 def test_the_consent_text_has_a_wording_for_each_channel(client):
     """Push subscribers have no email address; telling them one is stored is simply false."""
     page = " ".join(client.get("/").text.split())  # the template wraps; the sentence does not
-    assert "Ich bin einverstanden, dass mein Push-Thema und mein Standort gespeichert" in page
+    assert (
+        "Ich bin einverstanden, dass die Push-Adresse dieses Browsers und mein Standort "
+        "gespeichert werden" in page
+    )
     assert "Ich bin einverstanden, dass meine E-Mail-Adresse und mein Standort gespeichert" in page
 
 
@@ -374,7 +382,7 @@ def test_the_signup_note_does_not_claim_nothing_is_stored(client):
 def test_both_channel_wordings_are_in_the_page_source(client):
     """Rendered, not assembled by script - consent should be readable in the page itself."""
     page = client.get("/").text
-    assert page.count('class="for-ntfy"') >= 2
+    assert page.count('class="for-push"') >= 2
     assert page.count('class="for-email"') >= 2
 
 
@@ -384,18 +392,28 @@ def test_the_stored_consent_record_names_the_channel_and_the_version(db, setting
     from rainalert.db.models import Channel, Subscriber
 
     with db() as session:
-        svc.subscribe(session, settings, lat=50.1, lon=8.6, channel=Channel.NTFY)
+        svc.subscribe(
+            session,
+            settings,
+            lat=50.1,
+            lon=8.6,
+            channel=Channel.WEBPUSH,
+            address="https://fcm.googleapis.com/fcm/send/abc",
+            push_p256dh="k" * 87,
+            push_auth="a" * 22,
+        )
         row = session.query(Subscriber).one()
-        assert row.channel is Channel.NTFY
+        assert row.channel is Channel.WEBPUSH
         assert row.consent_text_version == settings.consent_text_version
 
 
 def test_the_privacy_page_covers_both_channels(client):
     page = client.get("/privacy").text
-    assert "ntfy-Thema" in page
     assert "E-Mail-Adresse" in page
-    # The public server sees the message text and the topic name; that belongs on this page.
-    assert "ntfy-Server" in page
+    # What a push subscriber is actually giving us, in their words rather than ours: the browser's
+    # push address, and the fact that a third-party push service is in the path.
+    assert "Push-Adresse" in page
+    assert "Push-Dienst" in page
 
 
 def test_the_session_control_is_outside_the_settings_form(client):
@@ -538,12 +556,23 @@ def test_every_message_link_follows_the_configured_base_url(db, settings):
     Nothing in the code knows a hostname; every link is built from PUBLIC_BASE_URL. The test
     exists so that stays true: a link hard-coded anywhere would fail here.
     """
+    from types import SimpleNamespace
+
     from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
+    from rainalert.db.models import Channel
 
     local = settings.model_copy(update={"public_base_url": "http://203.0.113.10:8000"})
     messages = [
         confirmation_message(local, "you@example.com", "T"),
-        confirmation_message(local, "rainalert-abc", "T", channel="ntfy"),
+        confirmation_message(
+            local,
+            "https://fcm.googleapis.com/fcm/send/abc",
+            "T",
+            channel="webpush",
+            subscriber=SimpleNamespace(
+                channel=Channel.WEBPUSH, push_p256dh="k" * 87, push_auth="a" * 22
+            ),
+        ),
         manage_link_message(local, "you@example.com", "T", uuid.uuid4()),
         deletion_receipt(local, "you@example.com"),
     ]
@@ -579,100 +608,10 @@ def test_the_session_cookie_secure_flag_follows_the_same_setting(db, notifier, s
         assert ("secure" in response.headers["set-cookie"].lower()) is expect_secure, base
 
 
-# --- the ntfy deep link ---------------------------------------------------------------------------
-
-
-def test_the_subscribe_response_offers_an_app_link_and_a_web_link(client, db):
-    """One tap subscribes; the other always resolves. Neither covers everyone alone."""
-    response = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 48.15, "lon": 11.55}
-    )
-    assert response.status_code == 202
-    body = response.json()
-    topic = body["topic"]
-    assert body["app_url"].startswith(f"ntfy://ntfy.sh/{topic}")
-    assert body["subscribe_url"] == f"https://ntfy.sh/{topic}"
-
-
-@pytest.mark.parametrize(
-    ("server", "expected"),
-    [
-        # https is what the app assumes, so it needs no parameter.
-        ("https://ntfy.sh", "ntfy://ntfy.sh/t?display=Regenwarnung"),
-        ("https://push.example.org/", "ntfy://push.example.org/t?display=Regenwarnung"),
-        # A self-hosted server on plain http has to say so, or the app tries https and fails.
-        ("http://10.0.0.5:8080", "ntfy://10.0.0.5:8080/t?secure=false&display=Regenwarnung"),
-    ],
-)
-def test_the_deep_link_follows_ntfys_documented_forms(server, expected):
-    from rainalert.notify.ntfy import deep_link
-
-    assert deep_link(server, "t") == expected
-
-
-def test_the_deep_link_escapes_the_topic():
-    """The topic is generated by us, but the escaping is the difference between a URL and a
-    string that happens to look like one."""
-    from rainalert.notify.ntfy import deep_link
-
-    assert "a%2Fb" in deep_link("https://ntfy.sh", "a/b")
-
-
-def test_the_deep_link_refuses_a_server_it_cannot_parse():
-    from rainalert.notify.ntfy import deep_link
-
-    with pytest.raises(ValueError):
-        deep_link("", "topic")
-
-
-def test_the_app_link_leads_on_a_phone(client):
-    """Replaces a test that pinned one ordering for everyone. The app link still comes first
-    where it works - it is the only thing that subscribes in one tap - but the fallback under
-    it is the store now, not ntfy's web page, and the desktop branch has neither."""
-    page = client.get("/").text
-    steps = page.split("function phoneSteps(scan)")[1].split("function browserSteps()")[0]
-    # Install first, because neither the link nor the code does anything without the app.
-    assert steps.index("installRow(") < steps.index("data.app_url")
-    assert "In der ntfy-App öffnen und abonnieren" in page
-    # On the phone only that phone's store; on a desktop both, because the page cannot know
-    # what is in the reader's pocket.
-    assert "installRow(scan ? null : RainPlatform.name())" in steps
-
-
-def test_the_qr_encodes_the_app_link_not_the_web_one(client, settings, db):
-    """Reversed on purpose, and this test with it.
-
-    It is scanned by the phone that wants the warnings, and ntfy's own web page would subscribe
-    *that phone* to web push - which its docs say needs iOS 16.4 and the page on the home
-    screen, and which is the thing a native app was chosen to avoid. A custom scheme does
-    nothing without the app, so the page says so in the step above the code.
-
-    Checked by re-encoding both candidates and seeing which one matches, because an SVG that is
-    merely well formed would pass whatever URL went into it.
-    """
-    import io
-
-    import segno
-
-    def encoded(text):
-        buffer = io.BytesIO()
-        segno.make(text, error="m").save(
-            buffer, kind="svg", scale=4, xmldecl=False, omitsize=True, svgclass=None
-        )
-        return buffer.getvalue().decode("utf-8")
-
-    body = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": 50.11, "lon": 8.68}
-    ).json()
-
-    assert body["qr_svg"] == encoded(body["app_url"])
-    assert body["qr_svg"] != encoded(body["subscribe_url"])
-
-
 # --- the settings button on a notification -----------------------------------------------------
 
 
-def _ntfy_settings(**kwargs):
+def _push_settings(**kwargs):
     return Settings(
         database_url="postgresql+psycopg://unused",
         public_base_url="https://rain.example.invalid",
@@ -683,48 +622,33 @@ def _ntfy_settings(**kwargs):
     )
 
 
-def test_the_action_header_follows_ntfys_documented_short_form():
-    header = _actions_header(
-        (
-            MessageAction(
-                label="Einstellungen", url="https://rain.example.invalid/x", body='{"token":"a"}'
-            ),
-        )
-    )
-    assert header == (
-        "http, Einstellungen, https://rain.example.invalid/x, method=POST, "
-        'headers.Content-Type=application/json, body={"token":"a"}'
-    )
+def test_an_action_still_refuses_a_control_character():
+    """The comma, semicolon and leading-quote rules went with ntfy - they existed because ntfy
+    packed every action into one header whose separators those were, and forbidding a comma meant
+    no button could be labelled "Ja, abmelden". A newline is still refused: these values are ours,
+    so one here is a bug in our own message building."""
+    MessageAction(label="Ja, abmelden", url="https://rain.example.invalid/x")
+    for bad in ("a\nb", "a\rb", "a\x00b"):
+        with pytest.raises(ValueError, match="control character"):
+            MessageAction(label=bad, url="https://rain.example.invalid/x")
 
 
-@pytest.mark.parametrize("bad", ["a,b", "a;b", '"a', "'a", "a\nb"])
-def test_an_action_refuses_a_value_that_would_break_the_header(bad):
-    """The header's separators are the comma and the semicolon; a value carrying one would
-    silently become a second action, or a malformed one."""
-    with pytest.raises(ValueError):
-        MessageAction(label=bad, url="https://rain.example.invalid/x")
+def test_more_actions_than_a_notification_renders_is_refused_rather_than_silently_dropped():
+    """`Notification.maxActions` is 2 and anything past that index is discarded at display time."""
+    from rainalert.notify.webpush import payload_for
 
-
-def test_more_actions_than_ntfy_renders_is_refused_rather_than_silently_dropped():
     action = MessageAction(label="x", url="https://rain.example.invalid/x")
-    with pytest.raises(ValueError):
-        _actions_header((action,) * (MAX_ACTIONS + 1))
-
-
-def test_the_notifier_sends_the_action_header_only_when_there_is_an_action():
-    seen = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.headers)
-        return httpx.Response(200)
-
-    notifier = NtfyNotifier(transport=httpx.MockTransport(handler))
-    action = MessageAction(label="Einstellungen", url="https://rain.example.invalid/x", body="t=1")
-    notifier.send(OutboundMessage(to="topic", subject="s", text="t"))
-    notifier.send(OutboundMessage(to="topic", subject="s", text="t", actions=(action,)))
-
-    assert "Actions" not in seen[0]
-    assert seen[1]["Actions"].startswith("http, Einstellungen,")
+    message = OutboundMessage(
+        to="https://fcm.googleapis.com/fcm/send/x",
+        subject="s",
+        text="t",
+        channel="webpush",
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+        actions=(action,) * (MAX_ACTIONS + 1),
+    )
+    with pytest.raises(ValueError, match="at most"):
+        payload_for(message)
 
 
 def test_a_request_token_round_trips_and_is_not_interchangeable_with_a_session():
@@ -748,20 +672,26 @@ def test_a_request_token_stops_working_once_it_is_old():
     assert verify_manage_request_token(token, "secret", minted + timedelta(days=1)) is None
 
 
-def test_the_anchor_message_carries_the_button_and_a_fallback_in_the_fragment():
-    settings = _ntfy_settings()
-    token = manage_request_token(uuid.uuid4(), settings.secret_key, 365)
-    message = settings_anchor_message(settings, "rainalert-abc", token, uuid.uuid4())
+def test_the_settings_button_posts_its_token_and_never_puts_it_in_a_url():
+    """What is left of the anchor message.
 
-    (action,) = message.actions
+    `settings_anchor_message` is gone (D-45): it existed because an ntfy topic was an unmemorable
+    string the reader had to keep, so the notification itself was the bookmark - and a web push
+    notification cannot be one, because it is gone the moment it is swiped. The button it carried
+    lives on, on every warning and on the monthly liveness notification, and the property that
+    mattered is still the one worth pinning: the token is POSTed, never placed in a URL.
+    """
+    settings = _push_settings()
+    token = manage_request_token(uuid.uuid4(), settings.secret_key, 365)
+    from rainalert.api.mail import settings_action
+
+    action = settings_action(settings, token)
+
     assert action.url == "https://rain.example.invalid/api/v1/manage/request"
     assert json.loads(action.body) == {"token": token}
-    # A comma in the body would be read as the start of the next action parameter.
-    assert "," not in action.body
-    # The fallback for a client without buttons. In the fragment, never the query string, so it
-    # cannot reach a server log or a Referer header (F-4/F-8).
-    assert f"/manage#r={token}" in message.text
-    assert "?token=" not in message.text
+    # Not in a query string, where uvicorn and Cloud Run would both log it (D-26, F-4/F-8).
+    assert "?" not in action.url
+    assert token not in action.url
 
 
 # --- the map is how a place is chosen ----------------------------------------------------
@@ -847,46 +777,53 @@ def test_a_place_outside_germany_is_refused_next_to_the_map(client):
 # --- the signup result is different on each platform ---------------------------------------
 
 
-def test_the_platform_is_decided_in_the_browser_and_never_sent(client):
-    """Read from `navigator.userAgent`, not the request header, so the server never learns the
-    platform: nothing to store, nothing to log, nothing to leak."""
+def test_the_page_asks_for_permission_only_on_submit(client):
+    """Asking before anyone has said what they want is how a site trains people to hit Block, and a
+    blocked site cannot recover without the reader going into browser settings."""
     body = client.get("/").text
-    assert "navigator.userAgent" in body
-    # An iPad on iPadOS 13+ reports as a Macintosh; without the touch check a Mac user would be
-    # offered a phone app in the App Store.
-    assert "navigator.maxTouchPoints" in body
+    assert "Notification.requestPermission()" in body
+    # The prompt lives in pushSubscription(), which the submit handler awaits. What matters is that
+    # nothing calls it on load - a bare call at top level, or from a DOMContentLoaded handler, is
+    # the shape that trains people to hit Block.
+    handler = body.split("addEventListener('submit'")[1]
+    assert "await pushSubscription()" in handler
+    prologue = body.split("addEventListener('submit'")[0]
+    assert "requestPermission()" in prologue.split("async function pushSubscription()")[1], (
+        "requestPermission must be inside pushSubscription, not at module scope"
+    )
 
 
-def test_the_store_links_are_the_ones_ntfy_publishes(client):
-    """A custom scheme does nothing without the app, and the honest answer is the store - not
-    ntfy's web page, which is web push on a phone, the thing a native app was chosen to avoid."""
+def test_a_denied_permission_gets_its_own_wording(client):
+    """Chrome treats a second call after a denial as already-denied and shows nothing, so there is
+    no prompt left to answer - the reader has to undo it in the browser's own UI, and being told to
+    "allow notifications" again would be advice they cannot follow."""
     body = client.get("/").text
-    assert "play.google.com/store/apps/details?id=io.heckel.ntfy" in body
-    assert "f-droid.org/en/packages/io.heckel.ntfy/" in body
-    assert "apps.apple.com/app/ntfy/id1625396347" in body
+    # Two places check it now, and both must give the same instruction: `announceCapability()` at
+    # load time, so a reader who blocked us last week is told before filling the form in, and the
+    # submit path, for a denial that happens during this visit.
+    checks = body.count("permission === 'denied'")
+    assert checks >= 2, (
+        "expected the denied state to be handled both at load time and on submit, "
+        f"found {checks} check(s)"
+    )
+    # Every branch that mentions a denial must name the route out of it. Asserted per occurrence
+    # rather than over a fixed-size slice of the page: the window version broke the moment a second
+    # check was added above the first, which is a test reporting on its own brittleness rather than
+    # on the page.
+    for index, part in enumerate(body.split("permission === 'denied'")[1:], start=1):
+        assert "Website-Einstellungen" in part[:900], (
+            f"denied branch {index} does not tell the reader where to re-enable notifications"
+        )
+    # "Website-Einstellungen", not "Browser-Einstellungen (Schloss-Symbol)": the padlock is desktop
+    # Chrome, and on Android - the target - there is no padlock to look for.
+    assert "Schloss-Symbol" not in body, "the padlock does not exist on Android Chrome"
 
 
-def test_the_desktop_branch_offers_the_qr_and_not_the_app_scheme(client):
-    """A desktop browser has nothing registered for `ntfy://`, so offering it first - which is
-    what every platform used to get - put a dead link above the only thing that works."""
+def test_the_page_says_what_an_iphone_needs(client):
+    """Web push on iOS works only for a site added to the Home Screen, which is the one platform
+    caveat a reader cannot discover for themselves - the API simply is not there."""
     body = client.get("/").text
-    desktop = body.split("if (here === 'desktop')")[1].split("} else {")[0]
-    # Two routes, both closed, each naming the device it is about - the page cannot know where
-    # the reader wants to be warned, so it asks instead of guessing and putting one first.
-    assert desktop.count("'route'") == 2
-    assert "phoneSteps(true)" in desktop  # true: hand off by QR
-    assert "browserSteps()" in desktop
-
-    # The branch after the desktop one, not the first `} else {` in the file - there are
-    # earlier ones, and splitting on them silently slices the wrong code.
-    mobile = body.split("if (here === 'desktop')")[1].split("} else {")[1]
-    assert "phoneSteps(false)" in mobile  # false: tap the link, no QR to scan
-    assert "browserSteps()" not in mobile, "web push on the phone is the weaker version"
-
-    # And the switch means what it says: the QR is only built for the scanning case.
-    steps = body.split("function phoneSteps(scan)")[1].split("function browserSteps()")[0]
-    assert "if (scan) {" in steps
-    assert steps.index("qrCode()") < steps.index("data.app_url")
+    assert "Home-Bildschirm" in body
 
 
 def test_a_finished_signup_stops_being_a_form(client):
@@ -895,36 +832,18 @@ def test_a_finished_signup_stops_being_a_form(client):
     was the likely next move: the result began at y=868 of a 900-pixel viewport and the page did
     not scroll, so one press looked like nothing had happened."""
     body = client.get("/").text
-    assert "function settled()" in body
+    assert "function settled(pending)" in body
     assert "document.getElementById('signup').hidden = true;" in body
     assert "scrollIntoView" in body
     # Both channels finish, not just push.
-    assert body.count("settled();") >= 2
+    assert body.count("settled(") >= 3
     # And there is a way back, because hiding the form removes the only one.
     assert "Von vorn anfangen" in body
-
-
-def test_the_store_marks_need_no_third_party_request(client):
-    """The official badges are images on Apple's and Google's servers. `img-src` does not allow
-    them and should not: a request for a badge tells the store the visitor's IP on every signup.
-    Drawn inline instead - simplified marks for recognising the app, not the badge artwork."""
-    body = client.get("/").text
-    assert "play.google.com/store/apps/details" in body  # the link, which is fine
-    # but nothing is fetched from them to draw it
-    for host in ("play.google.com/intl", "apple.com/app-store", "developer.apple.com"):
-        assert host not in body
-    assert "createElementNS('http://www.w3.org/2000/svg'" in body
-
-
-def test_the_desktop_reader_is_asked_where_not_told(client):
-    """Where the warnings should land is the reader's choice, not a platform we can sniff: the
-    browser they are signing up in and the phone in their pocket are different devices."""
-    body = client.get("/").text
-    assert "wo willst du gewarnt werden?" in body
-    # Each route says in its own summary which device it is about, while still closed.
-    assert "Auf dem Handy" in body and "In diesem Browser" in body
-    # The honest cost of the browser route, said where it is chosen rather than discovered.
-    assert "Schläft der Rechner" in body
+    # The sentence after that link depends on whether anything is actually pending. It used to be
+    # unconditional, so an already-confirmed browser re-signing up was told its subscription would
+    # expire unless confirmed - and then sent back to the same branch by the link. A loop.
+    assert "deine Anmeldung bleibt dabei bestehen" in body
+    assert "settled(false)" in body
 
 
 # --- the way out is on every message that follows the confirmation --------------------------
@@ -941,12 +860,11 @@ def _every_message(settings):
         confirmation_message,
         deletion_receipt,
         manage_link_message,
-        settings_anchor_message,
     )
     from rainalert.db.models import Channel
 
     who = _uuid.uuid4()
-    subscriber = SimpleNamespace(id=who, address="rainalert-abc", channel=Channel.NTFY)
+    subscriber = SimpleNamespace(id=who, address="a@b.example", channel=Channel.EMAIL)
     subscription = SimpleNamespace(timezone="Europe/Berlin")
     payload = {
         "predicted_start_at": "2026-09-23T14:30:00+00:00",
@@ -955,11 +873,10 @@ def _every_message(settings):
         "peak_mm_5min": 0.4,
     }
     return {
-        "confirmation": (confirmation_message(settings, "rainalert-abc", "T"), False),
-        "anchor": (settings_anchor_message(settings, "rainalert-abc", "T", who), True),
-        "manage link": (manage_link_message(settings, "rainalert-abc", "T", who), True),
+        "confirmation": (confirmation_message(settings, "a@b.example", "T"), False),
+        "manage link": (manage_link_message(settings, "a@b.example", "T", who), True),
         "alert": (alert_message(None, settings, subscriber, subscription, payload), True),
-        "deletion receipt": (deletion_receipt(settings, "rainalert-abc", channel="ntfy"), False),
+        "deletion receipt": (deletion_receipt(settings, "a@b.example"), False),
     }
 
 
@@ -979,7 +896,10 @@ def test_the_confirmation_and_the_receipt_are_the_two_exceptions(client, setting
     assert messages["confirmation"][1] is False
     assert messages["deletion receipt"][1] is False
     # And the receipt says what *is* still to do on push - stop the app listening.
-    assert "abbestellen" in messages["deletion receipt"][0].text
+    # The push receipt no longer asks the reader to do anything: the page or the service
+    # worker releases the browser's own subscription, which only the subscriber could do while
+    # the channel was an ntfy topic living in a separate app.
+    assert "geloescht" in messages["deletion receipt"][0].text
 
 
 def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
@@ -1106,3 +1026,91 @@ def test_the_confirm_page_says_why_nothing_happens_without_script(client):
     assert "<noscript>" in body
     note = body[body.index("<noscript>") : body.index("</noscript>")]
     assert "JavaScript" in note
+
+
+def test_a_subscription_made_with_another_vapid_key_is_not_reused(client):
+    """A push subscription is bound to the `applicationServerKey` it was created with. Reuse one
+    made under a different key and every send is rejected 403 by the push service - permanently,
+    and invisibly from the reader's side, because their signup succeeded. So the page compares
+    before reusing, and replaces on a mismatch.
+
+    Asserted on the served page rather than in a unit test because there is no unit to test: this
+    is browser glue, and the last time glue like it broke (a reference to a deleted constant) every
+    Python test still passed while signup was dead. The behaviour itself is exercised by driving the
+    function - see the scratchpad harness in the notes for this change.
+    """
+    body = client.get("/").text
+    assert "function sameKey(" in body
+    # Reuse is conditional, and the mismatch path actually drops the old subscription.
+    assert "if (sameKey(existing, VAPID_KEY)) { return existing; }" in body
+    assert "existing.unsubscribe();" in body
+    # Compared as bytes, because options.applicationServerKey is an ArrayBuffer and the page holds
+    # base64url. Asserted on the conversion rather than on the exact expression: pinning
+    # `new Uint8Array(options.applicationServerKey)` failed when the value was hoisted into a local
+    # to add the ArrayBuffer guard, which is a rename rather than a regression. What the comparison
+    # actually decides, guard included, is asserted by running it - tests/js/page_test.mjs.
+    assert "new Uint8Array(" in body.split("function sameKey(")[1]
+
+
+# --- the manifest, which iOS web push does not work without ------------------------------------
+
+
+def test_every_page_links_the_manifest(client):
+    """Without a linked manifest iOS has no web push at all - `PushManager` simply is not there for
+    a page that is not an installed web app. The link was missing from `base.html` entirely, which
+    made the iPhone half of D-45 impossible, and nothing failed."""
+    for path in ("/", "/manage", "/privacy"):
+        body = client.get(path).text
+        assert 'rel="manifest"' in body, f"{path} does not link the manifest"
+
+
+def test_the_manifest_says_what_ios_requires(client):
+    """`display: standalone` is the field that makes iOS treat this as an installable web app, and
+    therefore the field web push on iOS depends on. Delete that one string and the iPhone flow dies
+    silently - so it is asserted by value, not by presence."""
+    response = client.get("/manifest.webmanifest")
+    assert response.status_code == 200
+    assert "application/manifest+json" in response.headers["content-type"]
+    manifest = response.json()
+    assert manifest["display"] == "standalone"
+    # Scope has to cover the worker's scope, or an installed instance opens outside it.
+    assert manifest["scope"] == "/"
+    assert manifest["start_url"]
+
+
+def test_the_manifest_is_named_in_german(client):
+    """`short_name` is what Android prints above every notification and what an installed icon is
+    labelled with. It was "RainAlert" - the repository's name, in English, on a German-only site, so
+    a reader who signed up at "Regenwarnung" would have got notifications from something else."""
+    manifest = client.get("/manifest.webmanifest").json()
+    assert "RainAlert" not in manifest["short_name"]
+    assert "RainAlert" not in manifest["name"]
+    assert "Regenwarnung" in manifest["short_name"]
+
+
+def test_every_icon_the_manifest_names_is_served(client):
+    """A manifest naming an icon that 404s is an install prompt with a broken image, and on Android
+    a notification with Chrome's default icon instead of ours."""
+    manifest = client.get("/manifest.webmanifest").json()
+    assert manifest["icons"], "the manifest must name at least one icon"
+    for icon in manifest["icons"]:
+        response = client.get(icon["src"])
+        assert response.status_code == 200, f"{icon['src']} is named by the manifest but 404s"
+        assert response.headers["content-type"].startswith("image/")
+    # A maskable icon is separate from the `any` one: Android crops a non-maskable icon into a
+    # circle and eats the edges of the artwork.
+    purposes = {icon.get("purpose") for icon in manifest["icons"]}
+    assert "maskable" in purposes
+
+
+def test_both_pages_check_the_vapid_key_before_reusing_a_subscription(client):
+    """A subscription is bound to the `applicationServerKey` it was made with, and a push signed
+    with any other key is refused 403 forever - invisibly, from the reader's side.
+
+    Both routes that read an existing subscription have to check: `/` before reusing one to sign up,
+    and `/manage` before offering to send a settings link to one. The signup page's comparison is
+    exercised by driving it (tests/js/page_test.mjs); this asserts that neither page has lost the
+    check, which is the failure mode that would otherwise be silent on both.
+    """
+    assert "function sameKey(" in client.get("/").text
+    assert "function usesOurKey(" in client.get("/manage").text

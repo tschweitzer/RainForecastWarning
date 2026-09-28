@@ -599,7 +599,16 @@ def _subscriber(db, settings, lat=48.1533, lon=11.5574):
     from rainalert.db.models import Channel
 
     with db() as session:
-        result = svc.subscribe(session, settings, lat=lat, lon=lon, channel=Channel.NTFY)
+        result = svc.subscribe(
+            session,
+            settings,
+            lat=lat,
+            lon=lon,
+            channel=Channel.WEBPUSH,
+            address="https://fcm.googleapis.com/fcm/send/timeline-test",
+            push_p256dh="k" * 87,
+            push_auth="a" * 22,
+        )
         subscriber = svc.confirm(session, settings, token=result.confirm_token)
     return subscriber.subscriber_id
 
@@ -614,7 +623,13 @@ def test_the_warning_carries_a_reference_and_never_the_coordinates(db, settings)
     from rainalert.db.models import Channel
 
     who = _subscriber(db, settings)
-    subscriber = SimpleNamespace(id=who, address="rainalert-abc", channel=Channel.NTFY)
+    subscriber = SimpleNamespace(
+        id=who,
+        address="https://fcm.googleapis.com/fcm/send/timeline-test",
+        channel=Channel.WEBPUSH,
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+    )
     subscription = SimpleNamespace(timezone="Europe/Berlin")
     message = alert_message(
         None,

@@ -6,7 +6,6 @@ a threshold that becomes a 500 in the database rather than a sentence on the for
 show up by clicking through the page once.
 """
 
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -74,10 +73,19 @@ def subscribed(client, notifier, email="friend@example.com", lat=MUNICH[0], lon=
 
 
 def link_token(notifier) -> str:
-    """The magic link puts its token in the fragment, not the query string."""
-    body = notifier.sent[-1].text
-    assert "/manage#t=" in body, "the token must ride in the fragment (F-4/F-8)"
-    return body.split("/manage#t=")[1].split()[0]
+    """The magic link puts its token in the fragment, not the query string.
+
+    Read from the body for email and from `click_url` for push, because the push branch no longer
+    prints a URL at all - a notification body is plain text nothing linkifies, and the mail version
+    of this message put two untappable URLs and a licence footer in a notification shade. The rule
+    being checked is unchanged and is the point of the helper: wherever the token is, it is behind a
+    `#` (F-4/F-8), never in a query string a log or a Referer header would keep.
+    """
+    message = notifier.sent[-1]
+    carrier = message.text if "/manage#t=" in message.text else (message.click_url or "")
+    assert "/manage#t=" in carrier, "the token must ride in the fragment (F-4/F-8)"
+    assert "?t=" not in carrier and "?token=" not in carrier
+    return carrier.split("/manage#t=")[1].split()[0]
 
 
 def signed_in(client, notifier, **kwargs) -> str:
@@ -517,18 +525,33 @@ def test_a_tampered_cookie_is_refused(client, notifier, settings):
         assert client.get("/api/v1/subscriptions/me").status_code == 401, label
 
 
-# --- getting in without copying the topic -------------------------------------------------
+# --- getting in without typing anything ---------------------------------------------------
 
 
-def ntfy_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1]):
-    """A confirmed push subscriber, still signed in - which is the behaviour under test."""
-    response = client.post(
-        "/api/v1/subscriptions", json={"channel": "ntfy", "lat": lat, "lon": lon}
+PUSH_ENDPOINT = "https://fcm.googleapis.com/fcm/send/manage-test-endpoint"
+
+
+def push_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1], endpoint=PUSH_ENDPOINT):
+    """A confirmed push subscriber, still signed in - which is the behaviour under test.
+
+    The endpoint is passed in rather than read back from the response: the subscribe endpoint no
+    longer echoes anything, because the browser already holds what it just gave us. Under ntfy it
+    had to return the topic, which is what this helper used to read.
+    """
+    client.post(
+        "/api/v1/subscriptions",
+        json={
+            "channel": "webpush",
+            "lat": lat,
+            "lon": lon,
+            "endpoint": endpoint,
+            "p256dh": "k" * 87,
+            "auth": "a" * 22,
+        },
     )
-    topic = response.json()["topic"]
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
+    token = notifier.sent[-1].click_url.split("/confirm#")[1].split("=", 1)[1]
     client.post("/confirm", data={"token": token})
-    return topic
+    return endpoint
 
 
 def test_confirming_leaves_a_working_session(client, notifier, db):
@@ -563,37 +586,59 @@ def test_the_session_from_confirming_can_write_and_is_not_open_ended(client, not
     assert state["seconds_until_deadline"] <= 120 * 60
 
 
-def test_confirming_a_topic_sends_the_anchor_message_with_the_button(client, notifier, db):
-    topic = ntfy_subscribed(client, notifier)
-    anchor = notifier.sent[-1]
+def test_confirming_sends_nothing_after_the_confirmation_on_either_channel(client, notifier, db):
+    """The anchor message is gone (D-45).
 
-    assert anchor.to == topic
-    (action,) = anchor.actions
-    assert action.url.endswith("/api/v1/manage/request")
-    # It only works if the reader keeps it, so it has to say so.
-    assert "Behalte diese Nachricht" in anchor.text
+    It existed because an ntfy topic was an unmemorable string the reader had to keep somewhere, so
+    the notification itself was the bookmark - "Behalte diese Nachricht". A web push notification
+    cannot be a bookmark: it is gone the moment it is swiped, and Android keeps no history by
+    default. What replaces it is the session cookie this confirmation sets, plus an Einstellungen
+    button on every warning.
+    """
+    before = len(notifier.sent)
+    push_subscribed(client, notifier)
+    # Exactly one: the confirmation. Nothing follows it.
+    assert len(notifier.sent) == before + 1
 
-
-def test_confirming_an_address_sends_no_anchor(client, notifier, db):
-    """Push only. A mailbox can be typed from memory, so the settings form already serves it;
-    a generated topic cannot, which is the whole asymmetry."""
     before = len(notifier.sent)
     subscribed(client, notifier)
-    assert len(notifier.sent) == before + 1  # the confirmation, and nothing after it
+    assert len(notifier.sent) == before + 1
 
 
-def request_token(notifier) -> str:
-    return json.loads(notifier.sent[-1].actions[0].body)["token"]
+def test_confirming_a_push_subscription_leaves_a_working_session(client, notifier, db):
+    """The replacement for the anchor message, and the reason it is not needed: confirming proves
+    the channel reached this browser, which is what a magic link proves, so the session starts
+    here."""
+    push_subscribed(client, notifier)
+    assert client.get("/api/v1/subscriptions/me").status_code == 200
 
 
-def test_the_button_sends_the_magic_link_to_the_topic(client, notifier, db):
-    topic = ntfy_subscribed(client, notifier)
-    token = request_token(notifier)
+def request_token(notifier, client=None, db=None) -> str:
+    """The durable token the Einstellungen button carries.
+
+    Minted here rather than read out of a message. It used to be read off the anchor notification,
+    which was the one message that reliably held one; now it rides on every warning, and a test that
+    wanted one had to provoke rain. `settings_action` is the same builder the notification uses, so
+    what is exercised downstream is unchanged.
+    """
+    from rainalert.db.models import Subscriber
+    from rainalert.tokens import manage_request_token
+
+    with db() as session:
+        subscriber = session.query(Subscriber).one()
+        return manage_request_token(subscriber.id, "test-secret", 365)
+
+
+def test_the_button_sends_the_magic_link_to_the_same_browser(client, notifier, db):
+    endpoint = push_subscribed(client, notifier)
+    token = request_token(notifier, client, db)
 
     response = client.post("/api/v1/manage/request", json={"token": token})
     assert response.status_code == 202
-    assert notifier.sent[-1].to == topic
-    assert "/manage#t=" in notifier.sent[-1].text
+    assert notifier.sent[-1].to == endpoint
+    # `click_url` on push, not the body: the push branch of `manage_link_message` is one line now,
+    # because the mail body put two untappable URLs and a licence footer in a notification shade.
+    assert "/manage#t=" in (notifier.sent[-1].click_url or "")
 
     # And that link is the ordinary one, so it still opens the ordinary session.
     client.cookies.delete(MANAGE_COOKIE)
@@ -603,8 +648,8 @@ def test_the_button_sends_the_magic_link_to_the_topic(client, notifier, db):
 
 def test_the_button_can_be_used_more_than_once(client, notifier, db):
     """The durable token is not spent by using it - the short-lived link it mints is."""
-    ntfy_subscribed(client, notifier)
-    token = request_token(notifier)
+    push_subscribed(client, notifier)
+    token = request_token(notifier, client, db)
 
     assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
     assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
@@ -613,8 +658,8 @@ def test_the_button_can_be_used_more_than_once(client, notifier, db):
 def test_the_request_token_cannot_itself_open_a_session(client, notifier, db):
     """The button asks; it does not admit. That split is what lets it be durable enough to sit
     in a notification the reader keeps."""
-    ntfy_subscribed(client, notifier)
-    token = request_token(notifier)
+    push_subscribed(client, notifier)
+    token = request_token(notifier, client, db)
     client.cookies.delete(MANAGE_COOKIE)
 
     assert client.post("/api/v1/manage/session", data={"token": token}).status_code == 401
@@ -627,7 +672,7 @@ def test_a_token_that_does_not_verify_is_answered_the_same_as_one_that_does(
 ):
     """Never "that token is invalid": the answer must not tell a holder whether the
     subscription behind an expired token still exists."""
-    ntfy_subscribed(client, notifier)
+    push_subscribed(client, notifier)
     before = len(notifier.sent)
 
     response = client.post("/api/v1/manage/request", json={"token": token})
@@ -636,8 +681,8 @@ def test_a_token_that_does_not_verify_is_answered_the_same_as_one_that_does(
 
 
 def test_a_token_for_a_deleted_subscriber_sends_nothing(client, notifier, db):
-    ntfy_subscribed(client, notifier)
-    token = request_token(notifier)
+    push_subscribed(client, notifier)
+    token = request_token(notifier, client, db)
     state = client.get("/api/v1/manage/csrf").json()
     assert write(client, state["csrf"], method="DELETE").status_code == 204
     before = len(notifier.sent)
@@ -649,8 +694,8 @@ def test_a_token_for_a_deleted_subscriber_sends_nothing(client, notifier, db):
 def test_the_button_is_capped_per_subscriber(client, notifier, db, settings):
     """Per subscriber, not only per IP: the button is tapped from whatever network the phone is
     on, so an IP counter alone would be counting the wrong thing."""
-    ntfy_subscribed(client, notifier)
-    token = request_token(notifier)
+    push_subscribed(client, notifier)
+    token = request_token(notifier, client, db)
 
     for _ in range(settings.manage_request_limit_per_hour):
         assert client.post("/api/v1/manage/request", json={"token": token}).status_code == 202
@@ -660,8 +705,10 @@ def test_the_button_is_capped_per_subscriber(client, notifier, db, settings):
 def test_a_valid_token_of_another_purpose_is_not_accepted_by_the_button(client, notifier, db):
     """Garbage is the easy half. The half that matters is a token that verifies perfectly -
     just as something else - which is why the purpose is inside the MAC and not a prefix."""
-    ntfy_subscribed(client, notifier)
-    who = verify_manage_request_token(request_token(notifier), "test-secret").subscriber_id
+    push_subscribed(client, notifier)
+    who = verify_manage_request_token(
+        request_token(notifier, client, db), "test-secret"
+    ).subscriber_id
     before = len(notifier.sent)
 
     for wrong in (
@@ -762,3 +809,71 @@ def test_the_settings_page_says_why_nothing_happens_without_script(client):
     body = client.get("/manage").text
     assert "<noscript>" in body
     assert "JavaScript" in body[body.index("<noscript>") : body.index("</noscript>")]
+
+
+@pytest.fixture()
+def behind_proxy(db, settings, notifier):
+    """A client whose `X-Forwarded-For` is trusted, so a test can rotate the apparent source IP.
+
+    The default `trusted_proxy_hops=0` ignores the header - correctly, since believing it unproven is
+    how a client spoofs its own identity (SECURITY_REVIEW.md F-5). Production runs behind Cloud Run,
+    which does set it, so this is the configuration the per-IP limiter actually faces.
+    """
+    proxied = settings.model_copy(update={"trusted_proxy_hops": 1})
+    return TestClient(
+        create_app(proxied, session_factory=db, notifier=notifier),
+        base_url=proxied.public_base_url,
+    )
+
+
+def test_a_settings_link_cannot_be_flooded_from_many_ips(behind_proxy, settings, notifier):
+    """The per-address half of the limiter, which was missing while the setting that configures it
+    described itself as "deliberately as tight as signing up".
+
+    It was not as tight: `POST /api/v1/subscriptions` limits per-IP *and* per-address, and this route
+    limited only per-IP - so the half that survives IP rotation was the half absent. Demonstrated
+    before the fix: 40 POSTs carrying 40 different `X-Forwarded-For` values, all 202, 40 messages
+    delivered to one subscriber.
+
+    The flood is the lesser harm. `issue_manage_token` deletes the subscriber's previous *unused*
+    token, so a stranger who knows an address could invalidate that person's real settings link as
+    fast as they could ask for one - and for a push subscriber the settings page is the only route to
+    "Abmelden und meine Daten löschen", so their deletion right could be held shut indefinitely.
+    """
+    email = subscribed(behind_proxy, notifier)
+    notifier.sent.clear()
+
+    codes = [
+        behind_proxy.post(
+            "/api/v1/manage/link",
+            json={"channel": "email", "address": email},
+            headers={"X-Forwarded-For": f"203.0.113.{i}"},
+        ).status_code
+        for i in range(settings.manage_link_limit_per_hour * 4)
+    ]
+
+    assert codes.count(202) == settings.manage_link_limit_per_hour, (
+        "rotating the client IP must not buy more settings links for one address"
+    )
+    assert 429 in codes
+    assert len(notifier.sent) == settings.manage_link_limit_per_hour
+
+
+def test_the_address_limiter_is_not_an_existence_oracle(behind_proxy, settings, notifier):
+    """An address nobody has ever used must be counted and refused exactly like a real one.
+
+    Otherwise the limiter itself answers the question the route is careful not to: this endpoint
+    returns 202 whether or not the address is known, and a 429 that only ever appeared for real
+    subscribers would undo that.
+    """
+    codes = [
+        behind_proxy.post(
+            "/api/v1/manage/link",
+            json={"channel": "email", "address": "nobody@example.invalid"},
+            headers={"X-Forwarded-For": f"198.51.100.{i}"},
+        ).status_code
+        for i in range(settings.manage_link_limit_per_hour * 2)
+    ]
+    assert codes.count(202) == settings.manage_link_limit_per_hour
+    assert 429 in codes
+    assert notifier.sent == [], "nothing may be sent for an address nobody subscribed"

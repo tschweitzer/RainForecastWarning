@@ -231,48 +231,62 @@ actually browse or the link will send you to your own laptop.
 
 ### Testing warnings without any mail at all
 
-`NOTIFIER=ntfy` sends the warning to your phone instead of to a file. No domain, no provider, no
-credentials - which is why it works today while the mail questions are still open, and why it is
-the quickest way to close M5.
+Web push sends the warning to your browser instead of to a file. No domain, no provider, no mail
+credentials - which is why it works today while the mail questions are still open.
 
-```ini
-NOTIFIER=ntfy
-# NTFY_SERVER=https://ntfy.sh      # the default; see the warning below
+One thing to generate first, once:
+
+```sh
+make dev                       # if you have not already
+.venv/bin/python -m rainalert.cli vapid-keys
 ```
 
-`NOTIFIER=ntfy` is a single transport for everything, so **do not sign up on the email channel
-while it is set**: the address would be published as a topic name on the ntfy server, with the
-confirmation link as its contents. Either stay on push, or use `NOTIFIER=auto`, which routes each
-message by its channel and sends addresses to SMTP instead (D-39).
+Put the private key in `.env`. It is multi-line PEM, so it needs quoting - or keep it in a file and
+export it:
 
-Install the ntfy app, sign up with "Push aufs Handy" selected, and the page hands you a topic.
+```ini
+NOTIFIER=auto
+VAPID_SUBJECT=mailto:you@example.org
+VAPID_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGH...\n-----END PRIVATE KEY-----\n"
+```
 
-**On the phone you want warned** - the normal case - tap **„In der ntfy-App öffnen und
-abonnieren"**. That is an `ntfy://` deep link, which ntfy's documentation says "subscribes to the
-topic if not already subscribed", so it is one tap rather than a copy and paste. It also carries
-`?display=Regenwarnung`, so the app lists it under a readable name instead of the generated
-topic.
+`NOTIFIER=auto` routes each message by its channel: push endpoints to the web push transport,
+addresses to SMTP (D-39). Unlike the old single-transport `NOTIFIER=ntfy`, there is no way for an
+email address to end up on the push transport by accident.
 
-Two things it cannot do. A custom scheme does **nothing at all** when the app is not installed -
-no error, no fallback - which is why the line under it offers the web page, and why the topic and
-its copy button stay above both. And the documented behaviour is for the **Android** app; on iOS
-it is worth trying before relying on it.
+**Two things will stop this working on localhost, and both are the browser's rules rather than
+ours.**
 
-Copying the topic into the app's "subscribe to topic" field still works everywhere and is the
-thing to fall back on.
+First, a service worker needs a secure context. `http://localhost` counts as one - Chrome and
+Firefox both treat it as trustworthy - but `http://192.168.x.x` does not, so testing from your
+phone against a laptop on the LAN will fail at `navigator.serviceWorker.register` with no obvious
+reason. Use a tunnel with a real certificate for that, or test push in the desktop browser and the
+map on the phone.
 
-**Signing up on a desktop instead?** Open "Auf einem anderen Gerät abonnieren" and scan the QR
-with the phone. It encodes the `https://` subscribe URL, not the `ntfy://` one - a phone camera
-will not open a custom scheme - and it arrives inline in the signup response rather than from a
-`/qr` endpoint, so the topic never lands in a query string (DESIGN.md D-31).
+Second, a real push service has to be reachable. The notification goes out through
+`fcm.googleapis.com` or Mozilla's equivalent, so a machine with no outbound HTTPS will subscribe
+fine and then fail at send time with a connection error in the ingest log.
 
-Either way the last step is the same: a test notification arrives, and tapping it confirms the
-subscription. That tap replaces opening an inbox - and if nothing arrives, the warnings would not
-have reached you either, which is the whole point of sending it.
+Then: open the site, leave "Push auf dieses Gerät" selected, drop a pin, and submit. The browser
+asks for notification permission at that point - not on page load, deliberately (D-45) - and a test
+notification arrives a moment later. Tapping it confirms the subscription. That tap replaces opening
+an inbox, and if nothing arrives the warnings would not have reached you either, which is the whole
+point of sending it.
 
-**The public ntfy.sh sees your message text and topic name**, and a rain warning names a place
-and a time. Fine for a throwaway topic during development; self-host it (`NTFY_SERVER`) for
-anything else.
+**To see what is actually being sent**, `NOTIFIER=file` still writes every message to
+`MAIL_OUTBOX_DIR` as a `.eml`, including the ones bound for push - the body and the action buttons
+are visible there without a browser or a push service in the loop. `make outbox` prints the links
+decoded.
+
+**Testing the liveness notification** (D-46) without waiting for the schedule:
+
+```sh
+.venv/bin/python -m rainalert.cli liveness --dry-run   # who is due, and nothing sent
+.venv/bin/python -m rainalert.cli liveness             # send, and delete whoever has gone
+```
+
+`--dry-run` lists the subscribers a real run would notify. Lower `WEBPUSH_LIVENESS_DAYS` to `0` in
+`.env` to make everybody due.
 
 If you would rather exercise the real mail path, point the SMTP notifier at a local catcher -
 this runs the same code that will run in production, which the `.eml` file never does:
@@ -378,27 +392,36 @@ needs a link at all.
 
 **The "Einstellungen" button on a notification** (push only). The message sent right after
 confirming carries it and says to keep that message; every rain alert carries it too, because
-alerts are the ones that reliably arrive again. Tapping it POSTs a long-lived token back to
-`/api/v1/manage/request`, and we send the ordinary magic link to the same topic. Two taps, both
-inside the app, and the generated topic never has to be copied out of it.
+alerts are the ones that reliably arrive again - and since D-45 they are the *only* thing that
+does, because a web push notification is gone the moment it is swiped and there is no earlier one to
+scroll back to. Tapping it POSTs a long-lived token to `/api/v1/manage/request` from the service
+worker, and we send the ordinary magic link to the same browser. Two taps, and nothing is navigated:
+the worker fetches in the background, so the token never reaches a URL bar or a history entry.
 
-That token is durable on purpose, and it is safe to leave sitting in a kept notification because
-of what it cannot do: it **asks** for a link, it does not admit anyone, and the link it triggers
-goes to the subscriber's own channel. A forwarded screenshot of an alert is therefore not a key
-to somebody's home coordinates - whoever can read the notification could already read the topic.
-Taps are capped per subscriber (`MANAGE_REQUEST_LIMIT_PER_HOUR`, default 5/h) so a copied token
-cannot be used to buzz its owner's phone either. For a client that renders no buttons, the anchor
-message also carries `…/manage#r=<token>`, which does the same thing from the browser.
+That token is durable on purpose, and it is safe to leave sitting in a notification because of what
+it cannot do: it **asks** for a link, it does not admit anyone, and the link it triggers goes to the
+subscriber's own channel. A forwarded screenshot of an alert is therefore not a key to somebody's
+home coordinates. Taps are capped per subscriber (`MANAGE_REQUEST_LIMIT_PER_HOUR`, default 5/h) so a
+copied token cannot be used to buzz its owner's phone either.
 
-**The form on `/manage`**, for a new device or a cleared history: give the topic or the address
-and the link is sent.
+**The form on `/manage`**, for a new device or a cleared history: on email, give the address and
+the link is sent. On push there is nothing to give - the endpoint is 200-odd characters the reader
+has never seen - so the page reads the browser's own subscription instead and offers one button,
+"Link an diesen Browser schicken". A browser with neither a subscription nor the email channel is
+told plainly that it cannot be helped from there, because it cannot.
 
-#### If you think the topic has leaked
+#### If the browser's site data is gone
 
-A push topic is the whole credential. Anyone who has one can subscribe to it on the ntfy server,
-ask for a settings link on it, and read the location - so treat a leaked topic as a leaked
-password, not as a leaked username. There is no rotate button, on purpose (DESIGN.md D-32);
-the recovery is:
+There is no recovery, and the page says so before anyone signs up (D-47). The push subscription and
+the settings cookie live in the same site-data bucket, and Chrome clears them together: "Cookies und
+andere Websitedaten" unregisters the service worker, which deactivates the subscription. Nothing is
+left in that browser to identify anyone with.
+
+What happens next is automatic on both sides. The reader signs up again, which takes under a minute
+and gives them a fresh row with default settings. Their old row is deleted the first time something
+is sent to the dead endpoint and the push service answers 410 - within days if it rains, and
+otherwise at the next weekly liveness run (D-46).
+
 
 1. Open `/manage` and delete the subscription.
 2. Sign up again.

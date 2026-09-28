@@ -9,6 +9,11 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    # Generates the VAPID keypair. `random` cannot: VAPID needs a P-256 keypair, not random bytes.
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
   # Terraform state contains generated database passwords. Keep it in a bucket with versioning,
   # not on a laptop. Create the bucket by hand once, then uncomment.

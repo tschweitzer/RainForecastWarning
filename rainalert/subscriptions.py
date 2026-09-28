@@ -7,7 +7,6 @@ web server and reused by the future mobile app unchanged.
 from __future__ import annotations
 
 import math
-import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,6 +24,7 @@ from rainalert.db.models import (
     SubscriptionStatus,
     TokenPurpose,
 )
+from rainalert.notify.webpush import EndpointRefused, check_endpoint
 from rainalert.radar.grid import OutsideGrid, cell_of
 from rainalert.tokens import (
     expiry,
@@ -32,6 +32,7 @@ from rainalert.tokens import (
     hash_ip,
     hash_token,
     new_token,
+    same_secret,
     unsubscribe_token,
 )
 
@@ -58,9 +59,9 @@ class SubscribeResult:
     confirm_token: str | None
     subscriber_id: uuid.UUID | None
     already_active: bool
-    #: The address the confirmation goes to. For email it is what the caller supplied; for ntfy
-    #: it is the topic generated here, which the caller has to show the subscriber because
-    #: nothing can reach them until their app is subscribed to it.
+    #: The address the confirmation goes to: the mailbox for email, the push endpoint for web
+    #: push. Echoed back rather than re-derived so the caller sends the confirmation to exactly
+    #: what was stored - a normalised mailbox, or an endpoint that passed the host check.
     address: str | None = None
 
 
@@ -87,22 +88,6 @@ def validate_timezone(name: str) -> str:
     return name
 
 
-#: 128 bits, url-safe. Enough that an ntfy topic cannot be found by trying.
-NTFY_TOPIC_BYTES = 16
-
-
-def new_ntfy_topic(prefix: str = "rainalert") -> str:
-    """A push topic nobody can guess.
-
-    Topics on a public ntfy server are a flat, unauthenticated namespace: anyone who knows a
-    topic can subscribe to it, and a rain warning says where and when it will rain for the person
-    who gets it. A topic anyone can guess is therefore a location leak, which is why this is
-    generated rather than chosen - `rainalert-muenchen` would be readable, memorable, and someone
-    else's within a week.
-    """
-    return f"{prefix}-{secrets.token_urlsafe(NTFY_TOPIC_BYTES)}"
-
-
 def subscribe(
     session: Session,
     settings: Settings,
@@ -111,6 +96,8 @@ def subscribe(
     lon: float,
     channel: Channel = Channel.EMAIL,
     address: str | None = None,
+    push_p256dh: str | None = None,
+    push_auth: str | None = None,
     client_ip: str | None = None,
     user_agent: str | None = None,
     now: datetime | None = None,
@@ -118,12 +105,16 @@ def subscribe(
     """Start a double opt-in. Returns the confirmation token for the caller to deliver.
 
     Nothing is ever sent to an address that has not confirmed. For email that is what stops this
-    endpoint being usable as a mail relay or to bomb a third party. For a push topic there is no
-    third party to protect - the topic did not exist until now - but the confirmation earns its
-    place for a different reason: it proves the channel actually reaches the subscriber. A rain
+    endpoint being usable as a mail relay or to bomb a third party. For web push there is no third
+    party to protect - the browser handed us its own endpoint - but the confirmation keeps its
+    place for the other reason: it proves the channel actually reaches the subscriber. Under web
+    push there is more of that chain to get wrong, not less. A service worker that fails to
+    install, a payload the browser refuses, a permission granted and then revoked before the first
+    send: each leaves a subscription that looks healthy from here and shows nothing there. A rain
     warning that silently goes nowhere is worse than none, because they stop watching the sky.
 
-    ``address`` is required for email and ignored for ntfy, where the topic is generated here.
+    ``address`` is the mailbox for email and the push endpoint for web push; ``push_p256dh`` and
+    ``push_auth`` are required with the latter and ignored otherwise.
     """
     now = now or datetime.now(UTC)
     lat, lon = validate_location(lat, lon)
@@ -133,8 +124,19 @@ def subscribe(
             raise ValidationError("an email address is required")
         address = address.strip().lower()
     else:
-        # Never taken from the request: see new_ntfy_topic.
-        address = new_ntfy_topic(settings.ntfy_topic_prefix)
+        if not address:
+            raise ValidationError("a push endpoint is required")
+        if not (push_p256dh and push_auth):
+            # Without both, nothing can ever be encrypted for this subscriber, so the row would be
+            # dead the moment it was written. Refuse rather than store something unreachable.
+            raise ValidationError("a push subscription needs its p256dh and auth keys")
+        try:
+            # SSRF: this endpoint is a URL chosen by whoever is calling, and the notifier will POST
+            # to it. Checked here so the row never exists, and again in the notifier so a row that
+            # arrived another way still cannot become a request to anywhere it likes.
+            address = check_endpoint(address.strip())
+        except EndpointRefused as exc:
+            raise ValidationError(str(exc)) from exc
 
     digest = hash_address(channel.value, address)
     subscriber = session.execute(
@@ -142,7 +144,66 @@ def subscribe(
     ).scalar_one_or_none()
 
     if subscriber and subscriber.confirmed_at:
-        # Already confirmed. Do not re-issue a token and do not tell the caller anything.
+        # Already confirmed. No second confirmation token, and - for email - nothing else either:
+        # the caller only proved they can type an address, so acting on the request would let a
+        # stranger move somebody else's location.
+        #
+        # Web push looks like the opposite case and *nearly* got the opposite treatment. It is
+        # tempting to say the caller must be the browser that owns this endpoint, because that is
+        # where an endpoint comes from. It is not true, and believing it reopens the hole that
+        # `POST /api/v1/push/resubscribe` was deleted for on the same day (see the security table
+        # and the long comment in static/sw.js): an endpoint is not a secret. It is not published,
+        # but it proves nothing, because a push service will not deliver to it for anyone who lacks
+        # our VAPID key. Anyone who learns one and re-POSTs it here could, for one unauthenticated
+        # request:
+        #   - overwrite the stored keys with their own, so every later warning is encrypted to keys
+        #     the reader's browser cannot decrypt while the push service still answers 201 and this
+        #     service believes it delivered - silence that neither side can see, and which the
+        #     liveness job cannot catch because it measures *successful* sends;
+        #   - or store an off-curve key, so the next send raises, reports `gone`, and deletes the
+        #     subscriber outright;
+        #   - or move the stored home coordinates.
+        #
+        # What actually authenticates the owning browser is the pair it already holds. `auth` is a
+        # 16-byte secret the browser generated, `p256dh` its public key, and neither is published or
+        # echoed anywhere - we hold them only because that browser sent them over TLS. A browser
+        # re-subscribing presents the same pair, because `pushManager.subscribe()` with the same
+        # applicationServerKey returns the existing subscription rather than minting a new one. An
+        # attacker holding only the endpoint cannot produce them.
+        #
+        # So: the keys are never overwritten, and the location moves only for a caller that can
+        # present them. `compare_digest` because a plain `==` on a secret is a timing oracle.
+        if channel != Channel.EMAIL:
+            if not (push_p256dh and push_auth):
+                return SubscribeResult(None, None, already_active=False)
+            # `same_secret`, not `secrets.compare_digest`: the latter raises TypeError on a
+            # non-ASCII str, and these two values come straight out of a JSON body. A caller who
+            # knew a confirmed endpoint and sent one umlaut in `p256dh` got an unhandled 500 out of
+            # this line - the takeover fix's own contribution to the bug class it was reviewed
+            # alongside. The keys are also charset-checked in `SubscribeRequest` now; this is the
+            # half that holds for a row arriving by any other route.
+            owner = same_secret(push_p256dh, subscriber.push_p256dh or "") and same_secret(
+                push_auth, subscriber.push_auth or ""
+            )
+            if not owner:
+                # Answered exactly as a brand-new endpoint would be, and nothing is stored or sent.
+                # Identical on purpose: a different answer here would make this endpoint an oracle
+                # for "is this push subscription registered?", which the rest of this module is
+                # careful not to be.
+                #
+                # The one legitimate caller this refuses is a browser that rotated its keys while
+                # keeping the same endpoint. That is not a thing browsers do - a rotation produces a
+                # new subscription, so a new endpoint and a new row - and if it ever happened the
+                # 410 pruning would clean up and the reader would sign up again, which is the cost
+                # D-47 already states.
+                return SubscribeResult(None, None, already_active=False)
+            subscription = session.execute(
+                select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+            ).scalar_one_or_none()
+            if subscription is not None and (subscription.lat, subscription.lon) != (lat, lon):
+                # D-17 applies: a move invalidates what the alert state believed about the old
+                # place, and `update_location` is what knows that - not this function.
+                update_location(session, subscriber, lat=lat, lon=lon, now=now)
         return SubscribeResult(None, None, already_active=True)
 
     if subscriber is None:
@@ -150,6 +211,8 @@ def subscribe(
             channel=channel,
             address=address,
             address_hash=digest,
+            push_p256dh=push_p256dh if channel != Channel.EMAIL else None,
+            push_auth=push_auth if channel != Channel.EMAIL else None,
             created_at=now,
             consent_ip_hash=hash_ip(client_ip, settings.secret_key) if client_ip else None,
             consent_user_agent=(user_agent or "")[:256] or None,
@@ -157,6 +220,12 @@ def subscribe(
         )
         session.add(subscriber)
         session.flush()
+    # Deliberately no `elif` overwriting the keys of an existing unconfirmed row. A retry from the
+    # same browser presents the same pair, so there is nothing to update; a request presenting a
+    # different pair is someone who knows the endpoint and not the keys, and letting them replace
+    # them would mean the confirmation goes out encrypted to keys the real owner cannot read - a
+    # signup nobody can complete. The row keeps whatever the first request stored, and a fresh
+    # confirm token is issued below to whoever can actually decrypt it.
 
     subscription = session.execute(
         select(Subscription).where(Subscription.subscriber_id == subscriber.id)
