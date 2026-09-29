@@ -45,6 +45,7 @@ from rainalert.notify.webpush import (
     payload_for,
     unb64url,
 )
+from tests.helpers import page_source
 
 SW = Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "sw.js"
 ENDPOINT = "https://fcm.googleapis.com/fcm/send/abc123"
@@ -917,20 +918,39 @@ def test_half_the_pair_is_not_enough(db, settings):
 
 def test_the_page_does_not_offer_push_without_a_vapid_key(db, settings):
     """A button that cannot work is worse than an absent one. With no key configured the page says
-    so instead."""
+    so instead.
+
+    Two assertions, because the key travels in two hops now. It used to be interpolated straight
+    into the inline script as `var VAPID_KEY = "..."`, so one grep covered it; the script is a
+    static file since the extraction, and the key reaches it through a `data-` attribute on
+    `<body>`. Asserting only the empty attribute would pass on a page whose script had stopped
+    reading that attribute, and asserting only the wiring would pass on a page that rendered a key
+    it does not have. Neither half is worth anything alone.
+    """
     from fastapi.testclient import TestClient
 
     from rainalert.api.app import create_app
     from rainalert.notify import ConsoleNotifier
 
     client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
-    body = client.get("/").text
-    assert "var VAPID_KEY = " in body
-    assert re.search(r'var VAPID_KEY = ""', body), "expected an empty key with none configured"
+
+    html = client.get("/").text
+    assert 'data-vapid-key=""' in html, "expected an empty key with none configured"
+
+    script = client.get("/static/signup.js").text
+    # Anchored at the end, because a plain substring check passes on `d.vapidKeyX` - which is a
+    # different attribute (`data-vapid-key-x`), i.e. exactly the rename this is meant to catch.
+    assert re.search(r"vapidKey: d\.vapidKey\b", script), (
+        "the config has to come off the body's dataset"
+    )
+    assert re.search(r"var VAPID_KEY = CONFIG\.vapidKey\b", script), (
+        "and the script has to read that config"
+    )
+
     # And the message it would show must not tell the reader to pick an option that is absent: on a
     # push-only deployment there is no email radio to choose, which is the intended first shape.
-    assert "nicht verfügbar" in body
-    assert "EMAIL_AVAILABLE" in body, "the fallback suggestion has to be conditional"
+    assert "nicht verfügbar" in script
+    assert "EMAIL_AVAILABLE" in script, "the fallback suggestion has to be conditional"
 
 
 def test_the_page_warns_that_clearing_browser_data_ends_the_subscription(db, settings):
@@ -945,7 +965,7 @@ def test_the_page_warns_that_clearing_browser_data_ends_the_subscription(db, set
     client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
     # Whitespace-collapsed: the sentence wraps in the template, so a literal match would be
     # asserting on Jinja's indentation rather than on what the reader sees.
-    body = " ".join(client.get("/").text.split())
+    body = " ".join(page_source(client).split())
     assert "Websitedaten löschst" in body
     assert "musst du dich neu anmelden" in body
     assert "Standort" in body and "löschen wir" in body
@@ -1006,7 +1026,7 @@ def test_the_settings_page_offers_a_way_out(db, settings):
     from rainalert.notify import ConsoleNotifier
 
     client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
-    body = client.get("/manage").text
+    body = page_source(client, "/manage")
     assert 'id="delete"' in body
     assert 'id="delete-yes"' in body
     # Two steps: a single mis-tap next to "Sitzung beenden" must not delete an account.

@@ -24,9 +24,44 @@ resource "google_logging_metric" "ingestion_halted" {
   }
 }
 
+# A log-based metric does not exist for Cloud Monitoring the moment the Logging API returns. The
+# metric descriptor is published asynchronously, and an alert policy that names a descriptor which
+# has not appeared yet is refused outright:
+#
+#   Error 404: Cannot find metric(s) that match type =
+#   "logging.googleapis.com/user/rainalert_unknown_push_service". If a metric was created
+#   recently, it could take up to 10 minutes to become available.
+#
+# Terraform's own graph cannot see this: the metric resource is complete, so the policy starts
+# immediately and fails. The apply is then half-done - metric created, policy missing - and the
+# only recovery is to notice the error and re-run.
+#
+# `time_sleep` makes the wait part of the graph. It only sleeps when it is created, which happens
+# when a metric it depends on is created, so this costs five minutes once on a new project and
+# nothing on every apply after. Five, not ten: the observed delay is well under a minute, and the
+# re-run is still there if a project is unlucky.
+resource "time_sleep" "metric_descriptors" {
+  depends_on = [
+    google_logging_metric.ingestion_halted,
+    google_logging_metric.unknown_push_service,
+  ]
+  create_duration = "300s"
+
+  # Without this the sleep is created once and never again - adding a third metric later would
+  # reintroduce the race for that metric. Keying it on the set of metric names means a new metric
+  # replaces the sleep, and the wait happens again.
+  triggers = {
+    metrics = join(",", [
+      google_logging_metric.ingestion_halted.name,
+      google_logging_metric.unknown_push_service.name,
+    ])
+  }
+}
+
 resource "google_monitoring_alert_policy" "ingestion_halted" {
   display_name = "RainAlert: ingestion halted or blast radius tripped"
   combiner     = "OR"
+  depends_on   = [time_sleep.metric_descriptors]
 
   conditions {
     display_name = "halt logged"
@@ -106,6 +141,7 @@ resource "google_logging_metric" "unknown_push_service" {
 resource "google_monitoring_alert_policy" "unknown_push_service" {
   display_name = "RainAlert: a browser used a push service we do not allow"
   combiner     = "OR"
+  depends_on   = [time_sleep.metric_descriptors]
 
   conditions {
     display_name = "unknown push host refused"

@@ -80,7 +80,11 @@
   .locate-control a.on { color:var(--accent); }
 </style>
 </head>
-<body><main>
+{# `body_attrs` is how a page hands configuration to a *static* script file. The signup page's
+   JavaScript used to be interpolated by Jinja, which is what forced it to be inline - and inline
+   meant unlintable, uncacheable, and testable only by pulling functions out of rendered HTML. See
+   static/signup.js. #}
+<body{% block body_attrs %}{% endblock %}><main>
 {% block body %}{% endblock %}
 
 {# The same three destinations on every page, in the same place, under the same rule.

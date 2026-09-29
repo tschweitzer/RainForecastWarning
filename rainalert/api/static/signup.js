@@ -1,0 +1,593 @@
+/* The signup page's own JavaScript.
+ *
+ * A file rather than an inline block, and the reason is the bug history. As a nonce-inline script
+ * it could not be linted, could not be cached, and could only be tested by pulling functions out of
+ * rendered HTML with a brace matcher. Three bugs reached production through that gap: a reference to
+ * a deleted constant that killed signup outright, a `var` read before its assignment that told every
+ * visitor their browser could not do push, and a block that was copied instead of moved so the page
+ * shipped two of everything. None of them was visible to a Python test, and the first two would have
+ * been visible to a linter.
+ *
+ * Configuration arrives as data attributes on <body> rather than as Jinja interpolated into the
+ * source, which is what lets this be a static file at all. See `config()` below.
+ */
+
+/* Everything the template used to interpolate. Read once, so a typo in an attribute name fails
+   here rather than at the point of use. */
+function config() {
+  var d = document.body.dataset;
+  return {
+    hasOverlay: d.hasOverlay === 'true',
+    tileUrl: d.tileUrl || '',
+    tileAttribution: d.tileAttribution || '',
+    radius: parseInt(d.radius, 10) || 2000,
+    layerOpacity: parseFloat(d.layerOpacity),
+    vapidKey: d.vapidKey || '',
+    emailAvailable: d.emailAvailable === 'true'
+  };
+}
+var CONFIG = config();
+
+
+/* A signup that has gone through is not a form any more.
+ *
+ * Left as it was, the button stayed live directly above the result - and pressing it again
+ * mints a second subscription with a second topic, silently replacing the one on screen. On a
+ * desktop that was the likely next move rather than an unlucky one: the result began at y=868
+ * of a 900-pixel viewport and the page did not scroll, so one press looked like nothing had
+ * happened.
+ */
+function settled(pending) {
+  document.getElementById('signup').hidden = true;
+  // Says what will happen when you sign up; you have, and the steps above now say it better.
+  var standing = document.getElementById('what-happens');
+  if (standing) { standing.hidden = true; }
+
+  var again = document.createElement('p');
+  again.className = 'alt';
+  var restart = document.createElement('a');
+  restart.href = '/';
+  restart.textContent = 'Von vorn anfangen';
+  again.appendChild(document.createTextNode('Etwas falsch gemacht? '));
+  again.appendChild(restart);
+  /* `pending` decides the rest of the sentence, and it used to be unconditional. An
+     already-confirmed browser re-signing up - the "I moved" case, which is the usual way anyone
+     reaches that branch - was told "diese Anmeldung verfällt von selbst, wenn du sie nicht
+     bestätigst". There is nothing to confirm and nothing expires, so the reader waited for a
+     notification that was never coming and then followed "Von vorn anfangen" back into the same
+     branch. A loop, built out of one sentence that was true for only one of the two outcomes. */
+  again.appendChild(document.createTextNode(
+    pending === false
+      ? ' – deine Anmeldung bleibt dabei bestehen.'
+      : ' – diese Anmeldung verfällt von selbst, wenn du sie nicht bestätigst.'
+  ));
+  document.getElementById('result').appendChild(again);
+
+  document.getElementById('result').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+var pick = null, map = null;
+
+function setPlace(lat, lon, fromMap) {
+  // The hidden fields stay the one place the coordinates live, so the submit handler does not
+  // have to know whether they came from the map, the locate button or the fallback inputs.
+  document.getElementById('lat').value = lat.toFixed(4);
+  document.getElementById('lon').value = lon.toFixed(4);
+  if (pick && !fromMap) { pick.set(lat, lon, true); }
+  var hint = document.getElementById('map-hint');
+  hint.textContent = 'Ort gesetzt. Zum Verschieben antippen oder den Pin ziehen.';
+  // Clears the error styling a failed submit may have left on it, or "Ort gesetzt" arrives in
+  // red and reads as another complaint.
+  hint.className = 'hint';
+}
+
+(function () {
+  // `has_map` says whether there is radar imagery to lay over the map. Picking a place does
+  // not need any: the basemap - tiles, or the graticule and city dots - is what you aim with.
+  // Only the loop below is conditional.
+  var hasOverlay = CONFIG.hasOverlay;
+  if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
+    // No Leaflet: the map area would be an empty box, so take it away and offer the fields.
+    document.getElementById('map').hidden = true;
+    document.getElementById('map-hint').hidden = true;
+    document.getElementById('where-label').textContent = 'Wo soll gewarnt werden? (Koordinaten)';
+    document.getElementById('coord-fallback').hidden = false;
+    return;
+  }
+
+  // Opens on the whole country: a new visitor has not told us anything yet, so any closer view
+  // would be a guess, and a guess here is a wrong location nobody notices.
+  map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 5);
+  RainRadar.basemap(map, {
+    tileUrl: CONFIG.tileUrl,
+    tileAttribution: CONFIG.tileAttribution,
+    graticule: true
+  });
+
+  pick = RainRadar.picker(map, {
+    radius: CONFIG.radius,
+    onChange: function (lat, lon) { setPlace(lat, lon, true); }
+  });
+
+  // On the map rather than under it: this is a map control, it belongs where a map keeps them,
+  // and here it sets the pin rather than merely showing where the device is.
+  map.addControl(RainRadar.locateControl({
+    onStatus: function (text, kind) {
+      if (kind === 'error' && text) {
+        var hint = document.getElementById('map-hint');
+        hint.textContent = text;
+        hint.className = 'hint error';
+      }
+    },
+    onFound: function (lat, lon) {
+      setPlace(lat, lon, false);
+      // 12 rather than the opening 5: having just asked to be found, you want to see the
+      // street, and 12 is as far as 1 km radar lets the tile layer go.
+      map.setView([lat, lon], 12);
+    }
+  }));
+
+  if (!hasOverlay) { return; }
+
+  // The same twelve-hour window the radar page opens on, and deliberately without the range
+  // picker: the loop is here to show what the weather has been doing where you are about to
+  // put the pin, not to be tuned.
+  document.getElementById('radar-controls').hidden = false;
+  RainRadar.timeline(map, {
+    pastHours: 12,
+    layerOpacity: CONFIG.layerOpacity,
+    slider: document.getElementById('slider'),
+    play: document.getElementById('play'),
+    stamp: document.getElementById('frame-stamp'),
+    behindMarkers: true,
+    onEmpty: function () { document.getElementById('radar-controls').hidden = true; }
+  });
+})();
+
+// The button beside the coordinate fields, which are only on screen when Leaflet failed to
+// load. With a map there is a control on it; without one, this is the only way to avoid typing
+// decimal degrees, so it does not disappear with the map - it appears with the fields.
+(function () {
+  var button = document.getElementById('locate');
+  var status = document.getElementById('locate-status');
+  button.addEventListener('click', function () {
+    RainGeo.locate({
+      onBusy: function (busy) { button.disabled = busy; },
+      onStatus: function (text, kind) {
+        status.textContent = text;
+        status.className = kind === 'error' ? 'hint error' : 'hint';
+      },
+      onFound: function (lat, lon) {
+        // Four decimals because that is what the server keeps; showing seven would change
+        // under them on submit.
+        setPlace(lat, lon, false);
+      }
+    });
+  });
+})();
+function chosenChannel() {
+  var picked = document.querySelector('input[name=channel]:checked');
+  return picked ? picked.value : 'webpush';
+}
+
+function syncChannelFields() {
+  var isEmail = chosenChannel() === 'email';
+  var field = document.getElementById('email-field');
+  field.hidden = !isEmail;
+  // required only when it is the channel, or the browser refuses to submit a hidden empty field
+  document.getElementById('email').required = isEmail;
+  // The consent text and the "what happens next" note name what is actually stored and how the
+  // confirmation arrives, both of which differ by channel. An email subscriber is told about an
+  // address and a mail; a push subscriber has no address and gets a notification.
+  Array.prototype.forEach.call(document.querySelectorAll('.for-email'), function (node) {
+    node.hidden = !isEmail;
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.for-push'), function (node) {
+    node.hidden = isEmail;
+  });
+}
+Array.prototype.forEach.call(
+  document.querySelectorAll('input[name=channel]'),
+  function (radio) { radio.addEventListener('change', syncChannelFields); }
+);
+syncChannelFields();
+
+function isApplePhone() {
+  /* iPadOS reports itself as Macintosh, hence the touch-points test. */
+  return /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+/* Says up front when push cannot work here, instead of letting the reader find out after filling in
+   the form. Three states are worth naming and the rest are not: this is a note, not a diagnosis. */
+function announceCapability() {
+  var note = document.getElementById('capability-note');
+  var message = null;
+  /* Push cannot work in this browser at all. The only way forward is another channel, or - on an
+     iPhone - another way of opening the same page, so say which and move the reader off push. */
+  var impossible = !pushSupported() || !VAPID_KEY;
+  if (impossible) {
+    /* Four different messages, because the right next step differs in all four cases and a
+       concatenated one contradicted itself. The old iPhone text stated the Home Screen detour at
+       length and then withdrew it with "Wir haben E-Mail für dich ausgewählt", and said "hier
+       anmelden" when the Home Screen opens a fresh page with an empty form - so the one word naming
+       where to act pointed at the wrong place in both configurations. */
+    if (isApplePhone()) {
+      message = EMAIL_AVAILABLE
+        ? 'Wir haben E-Mail für dich ausgewählt – so bekommst du die Warnungen auch auf dem '
+          + 'iPhone. Push geht dort nur als Web-App: füge die Seite über „Teilen → Zum '
+          + 'Home-Bildschirm“ hinzu und melde dich dort an.'
+        : 'Auf dem iPhone geht Push nur als Web-App: füge die Seite über „Teilen → Zum '
+          + 'Home-Bildschirm“ hinzu und öffne sie von dort. Dort kannst du dich dann anmelden.';
+    } else {
+      message = EMAIL_AVAILABLE
+        ? 'Dieser Browser kann keine Push-Benachrichtigungen empfangen. Wir haben E-Mail für dich '
+          + 'ausgewählt.'
+        /* The intended first deployment, and the only true dead end on this page: no push here and
+           no second channel. It used to stop after the first sentence, leaving a map, a consent box
+           and a live Anmelden that could only ever repeat the same sentence into #result. Says what
+           would work, and the button goes below. */
+        : 'Dieser Browser kann keine Push-Benachrichtigungen empfangen – hier kannst du dich nicht '
+          + 'anmelden. In einem aktuellen Chrome oder Firefox funktioniert es.';
+    }
+  } else if (Notification.permission === 'denied') {
+    /* Blocked, not impossible - so the channel is left alone. Chrome shows no prompt at all on a
+       second request after a denial, which is why this has to be said before the button rather than
+       after it, but it is two taps to undo and the reader chose push. Switching channels for them
+       here would take away the thing they asked for to solve a problem they can fix. */
+    message = 'Benachrichtigungen sind für diese Seite blockiert. Erlaube sie in den '
+      + 'Website-Einstellungen deines Browsers (Symbol links neben der Adresse) – sonst können wir '
+      + 'dich nicht warnen.';
+  }
+  if (!message) { return; }
+  note.textContent = message;
+  note.hidden = false;
+  /* The bold "your browser will ask" sentence is false in both branches: there is no prompt coming
+     when push is unsupported, and none coming after a denial either. */
+  var prompt = document.getElementById('permission-prompt-note');
+  if (prompt) { prompt.hidden = true; }
+  if (impossible && EMAIL_AVAILABLE) {
+    var email = document.querySelector('input[name=channel][value=email]');
+    if (email) { email.checked = true; syncChannelFields(); }
+  }
+  if (impossible && !EMAIL_AVAILABLE) {
+    /* Nothing on this page can succeed, so the button stops inviting the attempt. Only this branch:
+       a *denied* permission is two taps to undo and the reader may well come back and press, so that
+       button stays live - the same judgement as not switching their channel for them. */
+    var submit = document.querySelector('#signup button[type=submit]');
+    if (submit) { submit.disabled = true; }
+  }
+}
+/* Called at the very bottom of this script, not here. `var VAPID_KEY` is declared further down, and
+   `var` hoists the declaration without the assignment - so calling this during parse read VAPID_KEY
+   as undefined and announced "this browser cannot receive push notifications" to every visitor on a
+   perfectly capable browser. Found by driving Chromium; nothing in the Python suite could see it,
+   and it is the second time an ordering mistake in this script has produced a confident, wrong
+   page. */
+
+function el(tag, cls, text) {
+  var node = document.createElement(tag);
+  if (cls) { node.className = cls; }
+  if (text) { node.textContent = text; }
+  return node;
+}
+
+/* The VAPID public key, from the server. Empty when none is configured, which is the signal that
+   this deployment cannot do push at all - rendered as JSON so an empty value is an empty string
+   rather than a syntax error. */
+var VAPID_KEY = CONFIG.vapidKey;
+/* Whether there is a second channel to fall back to, which decides what a push failure may suggest. */
+var EMAIL_AVAILABLE = CONFIG.emailAvailable;
+
+/* base64url -> Uint8Array. `applicationServerKey` will not take the base64 string, only bytes,
+   and atob does not know base64url - so the two substitutions and the padding are both needed.
+   Getting this wrong produces an InvalidCharacterError at subscribe time and nothing else. */
+function keyBytes(base64url) {
+  var padded = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  padded += '='.repeat((4 - (padded.length % 4)) % 4);
+  var raw = atob(padded);
+  var bytes = new Uint8Array(raw.length);
+  for (var i = 0; i < raw.length; i++) { bytes[i] = raw.charCodeAt(i); }
+  return bytes;
+}
+
+function pushSupported() {
+  return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+}
+
+/* Everything between "Anmelden" and having something to POST. Returns the subscription, or throws
+   with a message already worded for the reader - the caller has no way to improve on it and each
+   failure here needs a different next step. */
+async function pushSubscription() {
+  if (!VAPID_KEY) {
+    /* Conditional, because the intended first deployment has email off - and then "Bitte E-Mail
+       wählen" points at an option that is not on the page. "Server" also blames machinery the
+       reader cannot see or fix. */
+    throw new Error(EMAIL_AVAILABLE
+      ? 'Push ist hier gerade nicht verfügbar. Bitte E-Mail wählen.'
+      : 'Push ist hier gerade nicht verfügbar. Das liegt nicht an dir – bitte später noch '
+        + 'einmal probieren.');
+  }
+  if (!pushSupported()) {
+    /* The iPhone instruction is the answer on iOS and noise anywhere else, so it is only given
+       there. Everywhere else, offer the channel that does work if there is one. */
+    if (/iPhone|iPad|iPod/.test(navigator.userAgent)
+        || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) {
+      throw new Error('Auf dem iPhone geht das nur, wenn du die Seite über „Teilen → Zum '
+        + 'Home-Bildschirm“ hinzufügst und sie von dort öffnest.');
+    }
+    throw new Error('Dieser Browser kann keine Push-Benachrichtigungen empfangen.'
+      + (EMAIL_AVAILABLE ? ' Du kannst dich stattdessen per E-Mail anmelden.' : ''));
+  }
+  /* Permission first, before any await. Transient user activation does not survive an arbitrarily
+     long await, and `serviceWorker.ready` on a first-ever registration waits for install and
+     activate - so asking afterwards spends the gesture and then asks. Chrome does not enforce
+     activation for requestPermission(), which is why Android-first hid this; Firefox and Safari do,
+     and iOS-on-the-Home-Screen is the one platform D-45 still explicitly claims. There is nothing
+     to lose by asking first: a reader who says no should not have a worker registered for them.
+
+     Chrome treats a second call after a denial as already-denied and shows nothing, so "denied"
+     needs its own wording - there is no prompt left to answer and it has to be undone in the
+     browser's own UI. */
+  var permission = await Notification.requestPermission();
+  if (permission === 'denied') {
+    /* The sliders icon left of the URL, not the padlock: the padlock is desktop Chrome, and on
+       Android - the target - there is nothing there to look for. */
+    throw new Error('Benachrichtigungen sind für diese Seite blockiert. Erlaube sie in den '
+      + 'Website-Einstellungen deines Browsers (Symbol links neben der Adresse), dann hier noch '
+      + 'einmal anmelden.');
+  }
+  if (permission !== 'granted') {
+    /* Dismissed rather than denied: the prompt can still be shown again, so say how. */
+    throw new Error('Ohne erlaubte Benachrichtigungen können wir dich nicht warnen. Tippe noch '
+      + 'einmal auf „Anmelden“ und wähle „Zulassen“.');
+  }
+
+  /* Registered at the root scope, which is why app.py serves it from / and not from /static.
+
+     Wrapped because this function promises its caller a message already worded for the reader, and
+     the submit handler shows `error.message` verbatim on that promise. `register`, `ready` and
+     `subscribe` all reject with raw DOMExceptions - and `subscribe` failing is routine on Android,
+     where Play Services trouble gives "AbortError: Registration failed - push service error". A
+     German page was showing an English internal string with no next step. */
+  var registration;
+  try {
+    registration = await navigator.serviceWorker.register('/sw.js');
+    /* `register` resolves before the worker is usable; `ready` is the one that waits for active. */
+    await navigator.serviceWorker.ready;
+  } catch (error) {
+    throw new Error('Der Hintergrunddienst deines Browsers lässt sich nicht starten. Lade die '
+      + 'Seite neu; im privaten Modus funktionieren Benachrichtigungen meist nicht.');
+  }
+
+  /* An existing subscription is reused rather than replaced: subscribe() with the same key returns
+     the same endpoint, so this is idempotent, and reusing it means a second signup from the same
+     browser presents the keys the server already has rather than a new pair it would refuse.
+
+     (It is not a way back in after clearing browser data. Clearing site data unregisters the
+     worker, so getSubscription() returns null and there is nothing here to reuse - which is what
+     the page says on the tin and what D-47 accepts.)
+
+     But only if it was made with the key we are signing with now. A subscription is bound to the
+     applicationServerKey it was created with, and a push signed with any other key is rejected by
+     the push service with a 403 - forever, silently, from the reader's side: they see a successful
+     signup and are never warned. So a mismatch is replaced rather than reused. `options` is not
+     populated on every browser; when we cannot tell, reuse is the safer guess, because dropping a
+     working subscription costs the reader their settings. */
+  var existing = await registration.pushManager.getSubscription();
+  if (existing) {
+    if (sameKey(existing, VAPID_KEY)) { return existing; }
+    /* Best-effort: if the old subscription will not go away, subscribing again below is still the
+       right move, and failing here would stop the reader for a reason they cannot act on. */
+    try { await existing.unsubscribe(); } catch (error) { /* keep going */ }
+  }
+  try {
+    return await registration.pushManager.subscribe({
+      /* Required by Chrome. It is a promise that every push shows a notification, which sw.js keeps
+         on every path including its failure paths. */
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes(VAPID_KEY)
+    });
+  } catch (error) {
+    throw new Error('Dein Browser konnte die Benachrichtigungen nicht einrichten. Versuche es '
+      + 'später noch einmal – oft hilft es, den Browser neu zu starten.');
+  }
+}
+
+function sameKey(subscription, expected) {
+  /* Compares the bytes, not the encoding: `options.applicationServerKey` comes back as an
+     ArrayBuffer and the page holds base64url. Returns true when the browser does not tell us
+     (no `options`, or a null key) - see the caller for why that way round. */
+  var options = subscription.options || {};
+  var key = options.applicationServerKey;
+  /* "Cannot tell" has to include more than null. `!key` catches null and undefined, and an empty
+     ArrayBuffer is a truthy object - so a browser populating `options` with a zero-length or
+     non-ArrayBuffer key compared 0 bytes against 65, called it a mismatch, and unsubscribed a
+     working subscription on every single signup attempt: new endpoint, new pending row, the
+     confirmed one orphaned, settings lost each time. No shipping browser does this, but the whole
+     point of the fallback was to prefer keeping a subscription when we are not sure, and that is
+     exactly what this case is. */
+  if (!(key instanceof ArrayBuffer) || key.byteLength === 0) { return true; }
+  var actual = new Uint8Array(key);
+  var wanted = keyBytes(expected);
+  if (actual.length !== wanted.length) { return false; }
+  for (var i = 0; i < actual.length; i++) {
+    if (actual[i] !== wanted[i]) { return false; }
+  }
+  return true;
+}
+
+/* Everything it reads - VAPID_KEY, pushSupported, EMAIL_AVAILABLE - is defined above by here. */
+announceCapability();
+
+document.getElementById('signup').addEventListener('submit', async function (event) {
+  event.preventDefault();
+  var out = document.getElementById('result');
+  var channel = chosenChannel();
+
+  // The coordinate fields are no longer visible, so `required` on them would refuse the submit
+  // with a browser message pointing at a hidden field - which reads as the form being broken.
+  // Say what is missing, next to the map where it is fixed.
+  var lat = parseFloat(document.getElementById('lat').value);
+  var lon = parseFloat(document.getElementById('lon').value);
+  function refuse(message) {
+    var hint = document.getElementById('map-hint');
+    hint.textContent = message;
+    hint.className = 'hint error';
+    hint.hidden = false;
+    hint.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  if (isNaN(lat) || isNaN(lon)) {
+    refuse('Bitte setze zuerst deinen Ort – tippe dazu in die Karte.');
+    return;
+  }
+  // The map lets you drop a pin anywhere, and the radar only covers Germany. Said here, next to
+  // the pin, rather than left to the server: "Das hat nicht geklappt, prüfe die Eingaben" under
+  // the button does not tell anyone that the problem is *where* they pointed.
+  if (lat < 47 || lat > 56 || lon < 5 || lon > 16) {
+    refuse('Dieser Ort liegt außerhalb Deutschlands – nur dort reicht das Radar des DWD.');
+    return;
+  }
+  out.textContent = 'Wird gesendet …';
+  /* Disabled for the duration. `settled()` closes the "press it again after it finished" hole; this
+     closes "double-tap before it answers", which on a slow connection is the likelier of the two.
+     Re-enabled on every path that leaves the form on screen - `finish()` below - because a button
+     stuck disabled after an error is worse than the double-tap it prevented. */
+  var submit = event.target.querySelector('button[type=submit]');
+  if (submit) { submit.disabled = true; }
+  function finish(message) {
+    out.textContent = message;
+    if (submit) { submit.disabled = false; }
+  }
+
+  var body = { channel: channel, lat: lat, lon: lon };
+  if (channel === 'email') {
+    body.email = document.getElementById('email').value;
+  } else {
+    /* The permission prompt happens here, not on page load. Asking before anyone has said what
+       they want is how a site trains people to hit Block, and a blocked site cannot recover
+       without the reader going into browser settings. */
+    var subscription;
+    try {
+      subscription = await pushSubscription();
+    } catch (error) {
+      finish(error.message);
+      return;
+    }
+    var keys = subscription.toJSON().keys || {};
+    body.endpoint = subscription.endpoint;
+    body.p256dh = keys.p256dh;
+    body.auth = keys.auth;
+  }
+
+  var response;
+  try {
+    response = await fetch('/api/v1/subscriptions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    /* A dropped connection rejects rather than returning a status. Until the submit button started
+       being disabled during the request this merely showed nothing; now it would leave a dead form,
+       so the change that made the page safer against double-taps made it worse against a flaky
+       link. This is the worse of the two pages for it: on the push channel the permission has been
+       granted and the browser is already holding a subscription the server never heard about. */
+    finish('Keine Verbindung. Bitte versuch es noch einmal – deine Anmeldung ist noch nicht '
+      + 'abgeschickt.');
+    return;
+  }
+
+  if (!response.ok) {
+    // One message for every failure told people to check their input even when the input was
+    // fine and the limiter had simply run out - which sends them round the form again, using
+    // up the attempts they did not know they were short of.
+    if (response.status === 429) {
+      // Same correction as the settings page: subscribe limits per IP *and* per address, so
+      // naming the connection as the cause is wrong whenever the address half is what tripped.
+      // (Worded without quoting the old string: a test forbids it anywhere in the served page, and
+      // a comment in an inline script is part of the served page. Third time on this file.)
+      finish('Zu viele Anmeldeversuche in der letzten Stunde. Bitte in etwa einer '
+        + 'Stunde noch einmal versuchen – an deinen Eingaben liegt es nicht.');
+    } else if (response.status === 422 || response.status === 400) {
+      /* One 422 is not the reader's fault and must not be blamed on them: the endpoint check can
+         refuse a push service we have not listed, and then the browser did everything right, the
+         subscription exists in their browser's own settings, and "prüfe die Eingaben" sends them
+         round a form where there is nothing to correct. It happened - a real Chrome install handed
+         out `jmt17.google.com`, which was missing from the allowlist, and the page told the reader
+         to check input that was already fine.
+
+         Our service-level refusals answer with `detail` as a string; pydantic's answer with a list.
+         That is the only distinction needed here, and no server text is shown to the reader. */
+      var refusal = null;
+      try { refusal = (await response.clone().json()).detail; } catch (error) { refusal = null; }
+      if (typeof refusal === 'string' && refusal.indexOf('push service') !== -1) {
+        finish('Dein Browser nutzt einen Push-Dienst, den wir noch nicht unterstützen. Das liegt '
+          + 'nicht an dir. Bitte melde uns, welchen Browser du benutzt – oder nimm so lange einen '
+          + 'anderen Browser.');
+      } else {
+        finish('Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.');
+      }
+    } else {
+      finish('Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.');
+    }
+    return;
+  }
+  if (channel === 'email') {
+    out.textContent = 'Fast fertig – schau in dein Postfach und bestätige die Anmeldung.';
+    settled();
+    return;
+  }
+
+  // Push: the browser already holds the subscription it gave us a moment ago, and the test
+  // notification is on its way to it. There is nothing to display and nothing to copy - which is
+  // the whole of what changed with D-45. Under ntfy this is where the topic, the QR code, the two
+  // subscribe links and a three-step explainer lived, because none of it could be skipped.
+  //
+  // What is left is a wait. It is a real wait: the push service has to reach the device, which is
+  // usually under a second and occasionally several, so saying so beats an empty pause.
+  /* Guarded for the same reason as the fetch above: a truncated or non-JSON body rejects here, and
+     everything after this line - including `settled()` - would never run, leaving the button
+     disabled on a signup the server has in fact accepted. Falling back to an empty object takes the
+     normal path, which is the right guess: a 2xx means the subscription exists. */
+  var data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = {};
+  }
+  if (data.already_active) {
+    /* This browser was already subscribed, so no test notification is on its way and a spinner
+       waiting for one would never resolve. The location has been updated, which is what signing up
+       again from this page almost always means - somebody moved, or picked a better spot. */
+    out.innerHTML = '';
+    out.appendChild(el('p', 'done', 'Dieser Browser war schon angemeldet \u2013 der Ort ist jetzt aktualisiert.'));
+    var toSettings = el('p', 'alt');
+    var link = document.createElement('a');
+    link.href = '/manage';
+    link.textContent = 'Einstellungen \u00f6ffnen';
+    toSettings.appendChild(link);
+    out.appendChild(toSettings);
+    settled(false);
+    return;
+  }
+
+  out.innerHTML = '';
+  var waiting = el('p', 'waiting');
+  waiting.appendChild(el('span', 'spinner'));
+  waiting.appendChild(el('span', null, 'Wir schicken dir gerade eine Benachrichtigung zum Best\u00e4tigen \u2013 tippe sie an, dann bist du angemeldet.'));
+  out.appendChild(waiting);
+  // No auto-refresh and no polling. Confirming happens on the device, in the notification, and
+  // this page has no way to learn that it happened - the confirm link opens /confirm, which is
+  // where the reader ends up. A "waiting..." that never resolves is honest; a spinner that spins
+  // forever after a successful confirmation elsewhere would not be, so it says what to do rather
+  // than promising to update itself.
+  // Ends at the browser settings, not at "melde dich noch einmal an": `settled()` hides the form
+  // on the next line, so that instruction named a control no longer on the page - and the reader
+  // whose notification did not arrive is exactly the one who scrolls looking for it. The restart
+  // affordance is `settled()`'s own "Von vorn anfangen" link, and there is now only one of them.
+  out.appendChild(el('p', 'alt', 'Kommt nichts an? Dann erreichen dich die Warnungen auch nicht. '
+    + 'Pr\u00fcfe die Benachrichtigungen f\u00fcr diese Seite in den Browser-Einstellungen und fang '
+    + 'dann von vorn an.'));
+  settled();
+});

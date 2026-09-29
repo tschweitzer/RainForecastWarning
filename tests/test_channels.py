@@ -25,6 +25,7 @@ from rainalert.db.models import Channel, Subscriber, SubscriptionStatus
 from rainalert.notify.base import DeliveryResult, OutboundMessage
 from rainalert.notify.routing import RoutingNotifier
 from rainalert.tokens import hash_address
+from tests.helpers import page_source
 
 FRANKFURT = (50.1109, 8.6821)
 
@@ -528,7 +529,7 @@ def test_the_page_does_not_blame_a_rate_limited_signup_on_the_input(client):
     # failed because an explanatory comment either contained the forbidden phrase or grew long
     # enough to push the real text out of a fixed-size window. A comment is not user-facing copy, so
     # it has no business being matched against.
-    body = strip_js_comments(client.get("/").text)
+    body = strip_js_comments(page_source(client))
     assert "response.status === 429" in body
     limiter_branch = body.split("response.status === 429")[1][:400]
     # Matched on the claim, not the exact phrasing: this failed once for "an den" becoming
@@ -583,6 +584,8 @@ def test_push_still_works_when_email_is_off(push_only_client, db):
 
 
 def test_the_page_stops_offering_a_choice_it_would_reject(push_only_client):
+    # The rendered page, not `page_source`: both assertions are about markup the template emits,
+    # so pulling the scripts in would only widen what could accidentally satisfy them.
     body = push_only_client.get("/").text
     assert 'value="webpush"' in body
     # The fieldset is hidden rather than dropped: the push radio stays checked and in the DOM,

@@ -69,10 +69,12 @@ def test_the_worker_only_references_assets_that_exist():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_pages_own_javascript_behaves(tmp_path, capsys):
-    """The same treatment for the signup page's inline script.
+    """The same treatment for the signup page's own script.
 
-    Renders the page and runs `tests/js/page_test.mjs` against it. The page is rendered rather than
-    read from the template so the test covers what a browser is actually served, Jinja included.
+    Fetches `/static/signup.js` and runs `tests/js/page_test.mjs` against it. Fetched through the
+    app rather than read off disk for the same reason the page used to be rendered rather than read
+    from the template: the test should cover what a browser is actually handed, so a route that
+    stops serving the script fails here.
     """
     from fastapi.testclient import TestClient
 
@@ -95,20 +97,28 @@ def test_the_pages_own_javascript_behaves(tmp_path, capsys):
         vapid_subject="mailto:ops@rain.example.invalid",
         _env_file=None,
     )
-    page = tmp_path / "index.html"
-    rendered = TestClient(create_app(settings)).get("/").text
+    client = TestClient(create_app(settings))
+
     # Guards the setup itself, which is how the wrong-field bug survived: a page rendered with push
     # disabled still passes every assertion in page_test.mjs, because that file carries its own key.
-    assert 'var VAPID_KEY = ""' not in rendered, (
+    # The key used to be interpolated into the script as `var VAPID_KEY = ""`; since the extraction
+    # it reaches the script through this attribute, so this is where an unconfigured key now shows.
+    rendered = client.get("/").text
+    assert 'data-vapid-key=""' not in rendered, (
         "the page was rendered with push disabled - the harness would be testing nothing"
     )
-    page.write_text(rendered)
 
+    script = tmp_path / "signup.js"
+    response = client.get("/static/signup.js")
+    assert response.status_code == 200, "the page's script is not being served"
+    script.write_text(response.text)
+
+    # Still the rendered page: manage.html carries its script inline.
     manage = tmp_path / "manage.html"
-    manage.write_text(TestClient(create_app(settings)).get("/manage").text)
+    manage.write_text(client.get("/manage").text)
 
     result = subprocess.run(
-        ["node", str(REPO / "tests" / "js" / "page_test.mjs"), str(page), str(manage)],
+        ["node", str(REPO / "tests" / "js" / "page_test.mjs"), str(script), str(manage)],
         cwd=REPO,
         capture_output=True,
         text=True,

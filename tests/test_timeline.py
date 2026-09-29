@@ -17,6 +17,7 @@ from rainalert.radar.decoder import read_frames
 from rainalert.radar.overlay import BOUNDS, build_projection, colorize, render_frame
 from rainalert.storage import LocalOverlayStore
 from rainalert.timeline import build_timeline
+from tests.helpers import page_source
 
 T0 = datetime(2026, 9, 16, 14, 0, tzinfo=UTC)
 
@@ -529,7 +530,7 @@ def test_the_picker_pages_show_the_same_window_without_offering_to_change_it(cli
     """The signup and settings maps carry the loop so you can see what the weather is doing
     where you are about to put the pin - not so it can be tuned. That is what /map is for."""
     for path in ("/", "/manage"):
-        body = client.get(path).text
+        body = page_source(client, path)
         assert "pastHours: 12" in body
         # No range picker: the choice belongs on the page built around it.
         assert "/map?hours=" not in body

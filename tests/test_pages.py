@@ -25,6 +25,7 @@ from rainalert.tokens import (
     verify_manage_request_token,
     verify_session_token,
 )
+from tests.helpers import page_source
 
 
 @pytest.fixture()
@@ -82,7 +83,7 @@ def test_every_map_has_an_on_map_locate_control(client, db):
     assert "L.DomEvent.disableClickPropagation" in module
 
     for path in ("/map", "/", "/manage"):
-        assert "RainRadar.locateControl(" in client.get(path).text, path
+        assert "RainRadar.locateControl(" in page_source(client, path), path
 
 
 def enclosing_ids(markup: str, element_id: str) -> list[str]:
@@ -245,7 +246,7 @@ def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
     """
     from rainalert.radar.overlay import INTENSITY_BANDS, legend
 
-    page = client.get("/manage").text
+    page = page_source(client, "/manage")
     for threshold, rgba, label in INTENSITY_BANDS:
         assert f'value="{threshold}"' in page, f"{label} missing from the dropdown"
         assert f"rgba({rgba[0]},{rgba[1]},{rgba[2]}," in page
@@ -253,7 +254,10 @@ def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
     # Kept short: the option is a name and a threshold. The hourly equivalent is an
     # extrapolation that needs a sentence to be honest, and there is no room for one in a
     # dropdown - it stays on the map legend, where it is a tooltip.
-    assert "mm/h" not in page
+    # The rendered page only: `page_source` would pull in radar.js, which contains "mm/h" in a
+    # code path that formats a tooltip - a true statement about the source and a false one about
+    # what the reader is shown. This assertion is about the reader.
+    assert "mm/h" not in client.get("/manage").text
     # The same list the map draws its legend from.
     assert [b["from_mm_5min"] for b in legend()] == [t for t, _, _ in INTENSITY_BANDS]
 
@@ -333,7 +337,7 @@ def test_there_is_only_one_opacity(client):
     assert "opacity: 0.75" not in module
     # And every page must hand it the real value rather than typing one of its own.
     for path in ("/", "/map", "/manage"):
-        page = client.get(path).text
+        page = page_source(client, path)
         assert "layerOpacity" in page
         assert "opacity: 0.75" not in page
         assert "opacity: 0.6}" not in page
@@ -360,7 +364,7 @@ def test_the_bands_get_more_opaque_as_the_rain_gets_heavier():
 
 def test_the_consent_text_has_a_wording_for_each_channel(client):
     """Push subscribers have no email address; telling them one is stored is simply false."""
-    page = " ".join(client.get("/").text.split())  # the template wraps; the sentence does not
+    page = " ".join(page_source(client).split())  # the template wraps; the sentence does not
     assert (
         "Ich bin einverstanden, dass die Push-Adresse dieses Browsers und mein Standort "
         "gespeichert werden" in page
@@ -374,14 +378,14 @@ def test_the_signup_note_does_not_claim_nothing_is_stored(client):
     The privacy page always said unconfirmed signups are deleted after a while, so the front
     page was contradicting it - in a consent notice, which is the worst place for it.
     """
-    page = client.get("/").text
+    page = page_source(client)
     assert "Ohne Bestätigung wird nichts gespeichert" not in page
     assert "Stunden gelöscht" in page
 
 
 def test_both_channel_wordings_are_in_the_page_source(client):
     """Rendered, not assembled by script - consent should be readable in the page itself."""
-    page = client.get("/").text
+    page = page_source(client)
     assert page.count('class="for-push"') >= 2
     assert page.count('class="for-email"') >= 2
 
@@ -418,7 +422,7 @@ def test_the_privacy_page_covers_both_channels(client):
 
 def test_the_session_control_is_outside_the_settings_form(client):
     """Next to Save, anything button-shaped reads as Cancel."""
-    page = client.get("/manage").text
+    page = page_source(client, "/manage")
     form = page.split('id="settings-form"')[1].split("</form>")[0]
     assert 'id="logout"' not in form
     assert "Sitzung auf diesem Gerät beenden" in page
@@ -429,7 +433,7 @@ def test_the_session_control_is_outside_the_settings_form(client):
 
 def test_the_subscribe_page_links_to_the_settings_page(client):
     """Someone already subscribed lands on / looking for their settings."""
-    assert 'href="/manage"' in client.get("/").text
+    assert 'href="/manage"' in page_source(client)
 
 
 @pytest.mark.parametrize("path", ["/map", "/manage"])
@@ -713,14 +717,14 @@ def test_both_picker_pages_offer_a_map_and_no_coordinate_fields(client):
 def test_hidden_survives_the_row_layout(client):
     """`hidden` is only `display:none` in the UA stylesheet, so `.row { display:flex }` beat it
     and the coordinate fallback was on screen while marked hidden. Found in Chromium."""
-    assert "[hidden] { display: none !important; }" in client.get("/").text
+    assert "[hidden] { display: none !important; }" in page_source(client)
 
 
 def test_the_picker_map_does_not_depend_on_the_radar(client):
     """`has_map` says whether there is imagery to lay over the map. Picking a place needs the
     basemap, not the radar - gating the whole map on it left the signup page with no way to
     choose a location at all on a fresh install."""
-    body = client.get("/").text
+    body = page_source(client)
     assert "L.map(" in body and "RainRadar.picker(" in body
 
     # The precise invariant: whatever decides to hide the map must not consult the radar flag.
@@ -736,7 +740,7 @@ def test_the_picker_map_does_not_depend_on_the_radar(client):
 def test_lead_and_radius_are_sliders_with_a_readable_value(client):
     """Both have a step and a range the number field never expressed, and both are judgements
     rather than figures anyone knows - a slider shows the whole scale you are choosing on."""
-    body = client.get("/manage").text
+    body = page_source(client, "/manage")
     for field in ("lead", "radius"):
         row = body.split(f'id="{field}"')[0].rsplit("<input", 1)[-1] + f'id="{field}"'
         assert 'type="range"' in row, f"{field} is not a slider"
@@ -765,7 +769,7 @@ def test_the_hidden_coordinate_fields_carry_no_validation_constraints(client):
 def test_a_place_outside_germany_is_refused_next_to_the_map(client):
     """The map lets you drop a pin anywhere; the radar covers Germany. "Prüfe die Eingaben"
     under the button does not tell anyone the problem is *where* they pointed."""
-    body = client.get("/").text
+    body = page_source(client)
     assert "außerhalb Deutschlands" in body
     # The same bounds the server enforces, so the page cannot drift from it.
     from rainalert.subscriptions import LAT_RANGE, LON_RANGE
@@ -780,7 +784,7 @@ def test_a_place_outside_germany_is_refused_next_to_the_map(client):
 def test_the_page_asks_for_permission_only_on_submit(client):
     """Asking before anyone has said what they want is how a site trains people to hit Block, and a
     blocked site cannot recover without the reader going into browser settings."""
-    body = client.get("/").text
+    body = page_source(client)
     assert "Notification.requestPermission()" in body
     # The prompt lives in pushSubscription(), which the submit handler awaits. What matters is that
     # nothing calls it on load - a bare call at top level, or from a DOMContentLoaded handler, is
@@ -797,7 +801,7 @@ def test_a_denied_permission_gets_its_own_wording(client):
     """Chrome treats a second call after a denial as already-denied and shows nothing, so there is
     no prompt left to answer - the reader has to undo it in the browser's own UI, and being told to
     "allow notifications" again would be advice they cannot follow."""
-    body = client.get("/").text
+    body = page_source(client)
     # Two places check it now, and both must give the same instruction: `announceCapability()` at
     # load time, so a reader who blocked us last week is told before filling the form in, and the
     # submit path, for a denial that happens during this visit.
@@ -822,7 +826,7 @@ def test_a_denied_permission_gets_its_own_wording(client):
 def test_the_page_says_what_an_iphone_needs(client):
     """Web push on iOS works only for a site added to the Home Screen, which is the one platform
     caveat a reader cannot discover for themselves - the API simply is not there."""
-    body = client.get("/").text
+    body = page_source(client)
     assert "Home-Bildschirm" in body
 
 
@@ -831,7 +835,7 @@ def test_a_finished_signup_stops_being_a_form(client):
     subscription with a second topic, silently replacing the one on screen. On a desktop that
     was the likely next move: the result began at y=868 of a 900-pixel viewport and the page did
     not scroll, so one press looked like nothing had happened."""
-    body = client.get("/").text
+    body = page_source(client)
     assert "function settled(pending)" in body
     assert "document.getElementById('signup').hidden = true;" in body
     assert "scrollIntoView" in body
@@ -1039,7 +1043,7 @@ def test_a_subscription_made_with_another_vapid_key_is_not_reused(client):
     Python test still passed while signup was dead. The behaviour itself is exercised by driving the
     function - see the scratchpad harness in the notes for this change.
     """
-    body = client.get("/").text
+    body = page_source(client)
     assert "function sameKey(" in body
     # Reuse is conditional, and the mismatch path actually drops the old subscription.
     assert "if (sameKey(existing, VAPID_KEY)) { return existing; }" in body
@@ -1112,5 +1116,5 @@ def test_both_pages_check_the_vapid_key_before_reusing_a_subscription(client):
     exercised by driving it (tests/js/page_test.mjs); this asserts that neither page has lost the
     check, which is the failure mode that would otherwise be silent on both.
     """
-    assert "function sameKey(" in client.get("/").text
-    assert "function usesOurKey(" in client.get("/manage").text
+    assert "function sameKey(" in page_source(client)
+    assert "function usesOurKey(" in page_source(client, "/manage")

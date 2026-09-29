@@ -155,19 +155,29 @@ class GCSOverlayStore:
         self._bucket = storage.Client().bucket(bucket)
         self._base = public_base_url.rstrip("/")
 
-    def _upload(self, name: str, png: bytes) -> str:
+    #: An observation frame is immutable *and* still wanted hours later: the timeline reaches
+    #: `timeline_past_hours` back, so somebody scrubbing 30 hours of history wants frames they may
+    #: have loaded this morning. At `max-age=3600` they were re-fetched after an hour, which is why
+    #: scrubbing a long range felt slow - the browser had them on disk and threw them away. Two days
+    #: matches `overlay_obs_retention_hours` (50), and a cached copy of a frame we have since pruned
+    #: is harmless: it is a historical picture that can never change.
+    OBSERVED_CACHE_CONTROL = "public, max-age=172800, immutable"
+    #: Forecast frames are immutable by URL too - the name carries the cycle and the lead - but only
+    #: the newest cycle's forecast is ever shown (D-7) and they are pruned after an hour. Telling a
+    #: browser to keep them for two days would just be somebody else's disk.
+    FORECAST_CACHE_CONTROL = "public, max-age=3600, immutable"
+
+    def _upload(self, name: str, png: bytes, cache_control: str) -> str:
         blob = self._bucket.blob(name)
-        # Overlays are immutable once written - a cycle's frame never changes - so they can be
-        # cached hard. The manifest is what expires.
-        blob.cache_control = "public, max-age=3600, immutable"
+        blob.cache_control = cache_control
         blob.upload_from_string(png, content_type="image/png")
         return f"{self._base}/{name}"
 
     def put_observed(self, nominal_time: datetime, png: bytes) -> str:
-        return self._upload(_obs_name(nominal_time), png)
+        return self._upload(_obs_name(nominal_time), png, self.OBSERVED_CACHE_CONTROL)
 
     def put_forecast(self, nominal_time: datetime, lead_minutes: int, png: bytes) -> str:
-        return self._upload(_fc_name(nominal_time, lead_minutes), png)
+        return self._upload(_fc_name(nominal_time, lead_minutes), png, self.FORECAST_CACHE_CONTROL)
 
     def url_for_observed(self, nominal_time: datetime) -> str:
         return f"{self._base}/{_obs_name(nominal_time)}"

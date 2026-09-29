@@ -171,7 +171,20 @@
   function timeline(map, opts) {
     var layer = null, frames = [], gaps = [], bounds = null, timer = null;
     var cache = new Map();          // url -> Image, LRU-evicted
-    var MAX_CACHED = 40;            // 168 frames is far more than a phone should hold
+    /* Frames held as decoded Images. 100 covers six hours outright and most of twelve, which is
+       the default range.
+
+       Not the whole range, deliberately, and the number that matters is not the one you would
+       guess: a frame is 24 KB as a PNG but 1120x1361 RGBA once decoded, which is 5.8 MB. Holding
+       all 600 frames of a 48-hour range would invite the browser to keep up to 3.4 GB of decoded
+       bitmap, and on a phone that ends as a killed renderer rather than a slow one. 100 is about
+       580 MB worst case.
+
+       What makes a modest number sufficient is that eviction is cheap: the overlay PNGs are served
+       `immutable` with a two-day max-age (storage.py), so a frame that falls out of this Map comes
+       back from the browser's own HTTP cache rather than the network. This buys decode time, not
+       bandwidth. */
+    var MAX_CACHED = 100;
     var WINDOW = 6;                 // how far either side of the cursor to prefetch
     var slider = opts.slider, play = opts.play, stamp = opts.stamp, banner = opts.banner;
 

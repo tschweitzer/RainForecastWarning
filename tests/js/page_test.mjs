@@ -1,8 +1,13 @@
-/* Behavioural tests for the inline JavaScript the signup page ships.
+/* Behavioural tests for the JavaScript the signup page ships.
  *
- * Takes the path to a rendered page as argv[2], pulls the functions out of it and runs them. The
- * page's script is not a module and touches `document` at load, so it cannot simply be imported;
+ * Takes the served `/static/signup.js` as argv[2], pulls the functions out of it and runs them.
+ * The script is not a module and touches `document` at load, so it cannot simply be imported;
  * extracting by brace-matching is the cheap way to test the parts that are pure logic.
+ *
+ * argv[2] was the rendered page until the script moved out of `index.html` into a static file.
+ * Reading the served file rather than the one on disk keeps the property that made the rendered
+ * page the right input: it is what a browser is handed, so a route that stopped serving it, or
+ * served something else, fails here rather than in production.
  *
  * These exist because the alternative was asserting that substrings appear in the HTML, and that
  * kind of test passed while `sameKey` would have destroyed a working subscription on every signup
@@ -12,7 +17,8 @@ import fs from 'node:fs';
 
 const body = fs.readFileSync(process.argv[2], 'utf8');
 /* The settings page, when given: `usesOurKey` there mirrors `sameKey` here, and two copies of a
-   comparison that decides whether a subscription is usable is exactly the pair that drifts. */
+   comparison that decides whether a subscription is usable is exactly the pair that drifts. It is
+   still the rendered page, because manage.html still carries its script inline. */
 const managed = process.argv[3] ? fs.readFileSync(process.argv[3], 'utf8') : null;
 
 function extract(name, source = body) {

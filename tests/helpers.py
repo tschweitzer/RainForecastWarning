@@ -43,3 +43,29 @@ def make_client(rec: Recorder, **kwargs):
     }
     defaults.update(kwargs)
     return DWDClient(**defaults)
+
+
+def page_source(client, path: str = "/") -> str:
+    """The page *and* the same-origin scripts it loads, concatenated.
+
+    Assertions like `assert "function sameKey(" in body` are about what reaches the browser, not
+    about which file it arrived in. They were written when the signup page carried its JavaScript
+    inline; moving that to `/static/signup.js` would have broken fourteen of them without changing
+    a single thing a reader experiences.
+
+    So this returns the union, which is what those assertions always meant. It follows only
+    same-origin `src` attributes - an external script is somebody else's source and this file has
+    opinions about that (there are none left: `script-src` is `'self'`).
+
+    **Use it for "does this code ship", not for "does the reader see this text."** The union
+    contains radar.js, which says "mm/h" inside a tooltip formatter; asserting that a page never
+    shows "mm/h" against the union is a true statement about the source and a false one about the
+    page. For copy, read `client.get(path).text` directly.
+    """
+    import re
+
+    html = client.get(path).text
+    sources = [html]
+    for src in re.findall(r'<script[^>]+src="(/[^"]+)"', html):
+        sources.append(client.get(src).text)
+    return "\n".join(sources)

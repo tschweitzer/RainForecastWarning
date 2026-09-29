@@ -14,6 +14,11 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    # Only for the wait in monitoring.tf. See the comment on `time_sleep.metric_descriptors`.
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.11"
+    }
   }
   # Terraform state contains generated database passwords. Keep it in a bucket with versioning,
   # not on a laptop. Create the bucket by hand once, then uncomment.
