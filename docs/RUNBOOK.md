@@ -274,6 +274,31 @@ out, and that is the better failure of the two. Check that overlays are being wr
 `latest_cycle`. `make rerender` rebuilds the history from archives already held — it does not talk
 to DWD.
 
+### A subscriber cannot sign up: "Dein Browser nutzt einen Push-Dienst, den wir noch nicht unterstützen"
+
+The endpoint their browser issued is on a host `notify/webpush.py:ALLOWED_PUSH_HOSTS` does not list.
+The log names it:
+
+```sh
+gcloud run services logs read rainalert-api --region europe-west3 --limit 200 | grep "subscribe refused"
+#   subscribe refused: 'jmt17.google.com' is not a known push service
+```
+
+Add the host, or its family if the name carries a shard number, and deploy. `jmt<n>.google.com` is
+already covered by `_GOOGLE_SHARD`.
+
+**Think before widening.** The allowlist is what stops the subscribe endpoint being a server-side
+request forgery primitive: `endpoint` is a URL a stranger supplies and this service POSTs to it. Add
+the specific host or the specific family, anchored at both ends. Do not add a bare domain suffix -
+`.google.com` would admit every Google host, not the push ones.
+
+This happened, and the reason it took a week to find is worth keeping: the list had been written
+from what the documentation says Chrome uses, not from what Chrome was observed to emit. Chrome
+handed out `jmt17.google.com`, every Chrome subscriber on a shard was refused, the browser half of
+the signup succeeded so their browser showed the site as subscribed, and the page told them to check
+input that was already correct. Nothing was logged. If a browser you have not personally tested is
+reported as broken, look here first.
+
 ### A subscriber says they got nothing
 
 ```sql

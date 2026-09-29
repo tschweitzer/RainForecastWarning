@@ -1329,3 +1329,47 @@ def test_the_silent_subscriber_count_finds_someone_who_never_acts(db, settings):
         )
         session.commit()
         assert count_silent_subscribers(session) == 0
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        # The host a real Chrome install produced, which this service refused. The shard number
+        # varies per subscription, so an exact-host list can never cover the family.
+        "https://jmt17.google.com/gcm/send/APA91bHun4MxP5egoKMwt2KZ",
+        "https://jmt42.google.com/gcm/send/x",
+        "https://jmt1.google.com/gcm/send/x",
+        "https://gcm-http.googleapis.com/gcm/send/x",
+    ],
+)
+def test_googles_sharded_push_hosts_are_accepted(endpoint):
+    """Chrome hands out `jmt<n>.google.com`, and the allowlist did not have it.
+
+    Every Chrome subscriber on such a shard could grant permission, watch their browser create a
+    subscription, see the site listed under their notification settings - and be rejected here, with
+    the page telling them to check input that was already correct. The list had been written from
+    what the documentation says Chrome uses rather than from what Chrome emits.
+    """
+    from rainalert.notify.webpush import check_endpoint
+
+    assert check_endpoint(endpoint) == endpoint
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://jmt17.google.com.evil.test/x",  # the shard name as a prefix of another domain
+        "https://notjmt17.google.com/x",  # a longer label ending in the shard name
+        "https://jmt.google.com/x",  # no digits: not a shard
+        "https://jmtabc.google.com/x",  # letters where the digits go
+        "https://sub.jmt17.google.com/x",  # a subdomain of a shard is not a shard
+        "https://evil.google.com/x",  # google.com as a whole is NOT allowlisted
+    ],
+)
+def test_the_shard_pattern_does_not_open_google_generally(endpoint):
+    """The fix admits a family, not a domain. `fullmatch` on both ends is what keeps
+    `jmt17.google.com.evil.test` out, and google.com at large is still refused."""
+    from rainalert.notify.webpush import EndpointRefused, check_endpoint
+
+    with pytest.raises(EndpointRefused):
+        check_endpoint(endpoint)

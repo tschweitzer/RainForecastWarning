@@ -668,7 +668,24 @@ document.getElementById('signup').addEventListener('submit', async function (eve
       finish('Zu viele Anmeldeversuche in der letzten Stunde. Bitte in etwa einer '
         + 'Stunde noch einmal versuchen – an deinen Eingaben liegt es nicht.');
     } else if (response.status === 422 || response.status === 400) {
-      finish('Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.');
+      /* One 422 is not the reader's fault and must not be blamed on them: the endpoint check can
+         refuse a push service we have not listed, and then the browser did everything right, the
+         subscription exists in their browser's own settings, and "prüfe die Eingaben" sends them
+         round a form where there is nothing to correct. It happened - a real Chrome install handed
+         out `jmt17.google.com`, which was missing from the allowlist, and the page told the reader
+         to check input that was already fine.
+
+         Our service-level refusals answer with `detail` as a string; pydantic's answer with a list.
+         That is the only distinction needed here, and no server text is shown to the reader. */
+      var refusal = null;
+      try { refusal = (await response.clone().json()).detail; } catch (error) { refusal = null; }
+      if (typeof refusal === 'string' && refusal.indexOf('push service') !== -1) {
+        finish('Dein Browser nutzt einen Push-Dienst, den wir noch nicht unterstützen. Das liegt '
+          + 'nicht an dir. Bitte melde uns, welchen Browser du benutzt – oder nimm so lange einen '
+          + 'anderen Browser.');
+      } else {
+        finish('Das hat nicht geklappt. Bitte prüfe die Eingaben und versuch es noch einmal.');
+      }
     } else {
       finish('Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal probieren.');
     }

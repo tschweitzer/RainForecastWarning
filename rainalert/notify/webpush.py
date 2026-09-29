@@ -58,6 +58,7 @@ ALLOWED_PUSH_HOSTS = (
     # Chrome, Edge and every other Chromium build.
     "fcm.googleapis.com",
     "android.googleapis.com",
+    "gcm-http.googleapis.com",
     # Firefox, whose endpoint host has a subdomain.
     "push.services.mozilla.com",
     # Safari, including iOS home-screen web apps.
@@ -72,6 +73,20 @@ ALLOWED_PUSH_HOSTS = (
 #: not length-checked: the allowlist decides which hosts are acceptable, this only decides what
 #: counts as a hostname at all.
 _HOSTNAME = re.compile(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*")
+
+#: Google's sharded GCM push hosts: `jmt17.google.com`, `jmt42.google.com`, and so on.
+#:
+#: These are not in `ALLOWED_PUSH_HOSTS` because the shard number varies per subscription, so no
+#: fixed list can cover them. A real Chrome install handed out `jmt17.google.com` and this service
+#: refused it - every Chrome subscriber on a `jmt*` shard could complete the browser half of a
+#: signup, see the subscription appear in their browser's own settings, and be rejected by us with
+#: "check your input". The allowlist was written from what the documentation says Chrome uses
+#: rather than from what Chrome was observed to emit, and the two differ.
+#:
+#: Anchored on both ends and requiring digits, so this admits the shard family and nothing else:
+#: `jmt17.google.com` yes, `jmt17.google.com.evil.test` no, `notjmt17.google.com` no,
+#: `jmt17.google.com` as a *suffix* of a longer host no.
+_GOOGLE_SHARD = re.compile(r"jmt[0-9]+\.google\.com")
 
 
 class EndpointRefused(ValueError):
@@ -155,6 +170,10 @@ def check_endpoint(endpoint: str, allowed_hosts: tuple[str, ...] = ALLOWED_PUSH_
         # in the allowed string - "notfcm.googleapis.com" - does not match.
         if host == allowed or host.endswith(f".{allowed}"):
             return endpoint
+    if _GOOGLE_SHARD.fullmatch(host):
+        return endpoint
+    # Named in the message because this is the one refusal a *legitimate* browser can trigger, and
+    # when it happens the host is the entire diagnosis. `subscribe` logs this.
     raise EndpointRefused(f"{host!r} is not a known push service")
 
 
