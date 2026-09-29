@@ -331,18 +331,33 @@ def create_app(
         clean 422 into a 500. Dropping `input` and `ctx` fixes that and stops the endpoint
         reflecting arbitrary user input into its own response.
         """
+        reasons = [
+            {
+                "loc": list(err.get("loc", ())),
+                "msg": err.get("msg", ""),
+                "type": err.get("type", ""),
+            }
+            for err in exc.errors()
+        ]
+        # Logged, because it was not, and that cost a day.
+        #
+        # A subscriber on Chrome got "Das hat nicht geklappt" and the only thing the service
+        # recorded was `POST /api/v1/subscriptions 422`. Which of six validation paths it was could
+        # not be told from the outside - the reason existed, was returned to the browser, and was
+        # thrown away by us. Diagnosing it needed DevTools on the reader's own phone, which is not
+        # something a reader will ever do.
+        #
+        # Field names and messages only. `loc` and `msg` say "p256dh failed the pattern"; neither
+        # carries the value, so an endpoint - which identifies a subscriber - stays out of the log.
+        logger.warning(
+            "%s %s rejected: %s",
+            request.method,
+            request.url.path,
+            "; ".join(f"{'.'.join(str(p) for p in r['loc'])}: {r['type']}" for r in reasons),
+        )
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "detail": [
-                    {
-                        "loc": list(err.get("loc", ())),
-                        "msg": err.get("msg", ""),
-                        "type": err.get("type", ""),
-                    }
-                    for err in exc.errors()
-                ]
-            },
+            content={"detail": reasons},
         )
 
     @app.middleware("http")
@@ -512,6 +527,9 @@ def create_app(
                 user_agent=request.headers.get("user-agent"),
             )
         except svc.ValidationError as exc:
+            # Same reasoning as the handler above: the message names the rule that refused (a host
+            # not on the allowlist, a malformed URL), never the endpoint itself.
+            logger.warning("subscribe refused: %s", exc)
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
         if result.confirm_token and result.address:
