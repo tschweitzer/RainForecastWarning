@@ -67,7 +67,7 @@ make run-ingest        # fetch a cycle, evaluate every subscriber, send what is 
 make verify            # score past warnings against what the radar then saw
 ```
 
-Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/map` then shows the timeline.
+Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/` then shows the timeline.
 
 ```sh
 make rerender          # rebuild map overlays from archives already held (no DWD traffic)

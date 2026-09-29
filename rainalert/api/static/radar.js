@@ -1,9 +1,9 @@
-/* The map pieces the three pages share.
+/* The map pieces the pages share.
  *
- * Before this, `/map` and `/manage` each carried their own copy of the basemap fallback and the
- * city labels, and the radar timeline lived only on `/map`. Putting the picker and the timeline
- * on the signup page too would have made that three copies of each, so they live here instead
- * and every page passes in its own elements.
+ * Before this, the radar page and `/manage` each carried their own copy of the basemap fallback
+ * and the city labels, and the radar timeline lived on one page only. Putting the picker and the
+ * timeline on the signup page too would have made that three copies of each, so they live here
+ * instead and every page passes in its own elements.
  *
  * Leaflet is the one global assumed; everything else arrives through the options.
  */
@@ -144,6 +144,45 @@
     return new Ctrl();
   }
 
+  /* The colour scale, as a control on the map rather than a strip under it.
+
+     Under the map it was a row of seven swatches that every reader scrolled past on every visit
+     to reach the thing below it. On the merged page there is more below it to reach - the whole
+     signup form - so a permanent strip costs every visitor vertical space to explain a scale
+     most of them already understand from the map itself.
+
+     A <details>, not a div and a click handler. Open/closed state, the disclosure triangle,
+     keyboard operation and the right announcement to a screen reader all come with the element;
+     re-implementing that on a <div> is how a control ends up reachable by mouse only.
+
+     Collapsed by default: the legend answers a question the reader has to have thought of.
+
+     `stopPropagation` and not `L.DomEvent.stop`: on the signup page a map click sets the
+     subscriber's location, so a click that reached the map from here would move their pin to
+     wherever this control sits - but `preventDefault` on a <summary> stops it toggling, which
+     would leave a legend that cannot be opened at all. */
+  function legendControl(opts) {
+    var options = opts || {};
+    var box = null;
+    var Ctrl = L.Control.extend({
+      options: { position: options.position || 'bottomleft' },
+      onAdd: function () {
+        var wrap = L.DomUtil.create('details', 'legend-control');
+        L.DomEvent.disableClickPropagation(wrap);
+        L.DomEvent.disableScrollPropagation(wrap);
+        var summary = L.DomUtil.create('summary', '', wrap);
+        summary.textContent = 'Legende';
+        box = L.DomUtil.create('div', 'legend', wrap);
+        return wrap;
+      }
+    });
+    var control = new Ctrl();
+    /* The element `timeline({legend: ...})` fills. Created in `onAdd`, so this is null until the
+       control is added to a map - callers add it first and read this after. */
+    control.body = function () { return box; };
+    return control;
+  }
+
   /* A place the reader is being shown, rather than one they are choosing.
      Same pin and same circle as the settings map, deliberately: the two pages should not
      disagree about what a pin means. Nothing here is draggable and nothing binds a map click -
@@ -151,7 +190,7 @@
   function mark(map, lat, lon, radius) {
     /* Removes the previous pin before drawing the new one. This used to add and keep no handle,
        which was fine while it ran once per document - a warning opened a new tab. Since a tapped
-       warning now re-uses an open /map tab and `hashchange` re-reads the token, it runs again in
+       warning now re-uses an open tab and `hashchange` re-reads the token, it runs again in
        the same document: a reader who has moved would see the old pin and the new one with no way
        to tell which is current, and every warning after that would retain another pair of layers. */
     if (map.__rainalertMark) {
@@ -308,62 +347,84 @@
       slider.addEventListener('input', function () { stop(); show(+slider.value); });
     }
 
-    fetch('/api/v1/overlays/timeline?past_hours=' + encodeURIComponent(opts.pastHours))
-      .then(function (r) {
-        // `fetch` does not reject on 4xx/5xx, so without this the error body flows on and
-        // `data.frames` is undefined - which threw, killed the script, and left the page with a
-        // dead slider and no explanation. "Overlays are not configured" is the normal state of a
-        // fresh install, and it has a message of its own to show.
-        if (!r.ok) { return { frames: [] }; }
-        return r.json();
-      })
-      .then(function (data) {
-        frames = Array.isArray(data.frames) ? data.frames : [];
-        gaps = data.gaps || [];
-        bounds = data.bounds;
+    /* The fetch is a function rather than a statement, so the range picker can ask for a new
+       window on a live timeline.
 
-        if (!frames.length || !bounds) {
-          say('Noch keine Radardaten vorhanden.');
+       Calling `timeline()` again would be the obvious alternative and is wrong: the slider and
+       play listeners are registered above, once per call, so a second call leaves two `input`
+       handlers on the slider and two `click` handlers on the button - and the second play tap
+       then starts two self-scheduling timers that fight over `slider.value`. Reloading in place
+       keeps exactly one of each.
+
+       The image cache is deliberately *not* cleared. It is keyed by URL and the ranges nest -
+       everything in 6 h is also in 12 h - so a reader stepping down the ranges re-shows frames
+       that are already decoded. */
+    function load(pastHours) {
+      stop();
+      if (slider) { slider.disabled = true; }
+      if (banner) { banner.hidden = true; }
+      return fetch('/api/v1/overlays/timeline?past_hours=' + encodeURIComponent(pastHours))
+        .then(function (r) {
+          // `fetch` does not reject on 4xx/5xx, so without this the error body flows on and
+          // `data.frames` is undefined - which threw, killed the script, and left the page with a
+          // dead slider and no explanation. "Overlays are not configured" is the normal state of a
+          // fresh install, and it has a message of its own to show.
+          if (!r.ok) { return { frames: [] }; }
+          return r.json();
+        })
+        .then(function (data) {
+          frames = Array.isArray(data.frames) ? data.frames : [];
+          gaps = data.gaps || [];
+          bounds = data.bounds;
+
+          if (!frames.length || !bounds) {
+            // Removed, not left behind: on a reload the map would otherwise keep showing a frame
+            // from the window we just navigated away from, with nothing on the slider to match it.
+            if (layer) { map.removeLayer(layer); layer = null; }
+            say('Noch keine Radardaten vorhanden.');
+            if (opts.onEmpty) { opts.onEmpty(); }
+            return;
+          }
+          if (data.stale) {
+            say('Die Radardaten sind ' + Math.round(data.age_minutes)
+              + ' Minuten alt – das Bild zeigt nicht die aktuelle Lage.');
+          }
+          if (slider) {
+            slider.max = frames.length - 1;
+            slider.disabled = false;
+          }
+          var nowIndex = frames.findIndex(function (f) { return f.offset_minutes === 0; });
+          var at = nowIndex < 0 ? 0 : nowIndex;
+          if (slider) { slider.value = at; }
+          show(at);
+          if (opts.legend) {
+            // The band names go in the title rather than inline: seven of them spelled out wraps
+            // to four lines on a phone and competes with the map for the screen. The settings page
+            // spells them out, because there the name is what you are choosing.
+            opts.legend.innerHTML = (data.colorscale || []).map(function (s) {
+              var c = s.rgba;
+              var name = s.label ? s.label + ' – ab ' + s.from_mm_5min + ' mm/5 min (~'
+                + s.approx_mm_per_hour + ' mm/h)' : '';
+              return '<span title="' + name + '"><i style="background:rgba(' + c[0] + ',' + c[1]
+                + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></i>'
+                + s.from_mm_5min.toFixed(2) + '</span>';
+            }).join('') + '<span>mm / 5 min</span>';
+          }
+          if (opts.onReady) { opts.onReady(frames[at]); }
+        })
+        .catch(function () {
+          say('Die Radardaten konnten nicht geladen werden.');
           if (opts.onEmpty) { opts.onEmpty(); }
-          return;
-        }
-        if (data.stale) {
-          say('Die Radardaten sind ' + Math.round(data.age_minutes)
-            + ' Minuten alt – das Bild zeigt nicht die aktuelle Lage.');
-        }
-        if (slider) {
-          slider.max = frames.length - 1;
-          slider.disabled = false;
-        }
-        var nowIndex = frames.findIndex(function (f) { return f.offset_minutes === 0; });
-        var at = nowIndex < 0 ? 0 : nowIndex;
-        if (slider) { slider.value = at; }
-        show(at);
-        if (opts.legend) {
-          // The band names go in the title rather than inline: seven of them spelled out wraps
-          // to four lines on a phone and competes with the map for the screen. The settings page
-          // spells them out, because there the name is what you are choosing.
-          opts.legend.innerHTML = (data.colorscale || []).map(function (s) {
-            var c = s.rgba;
-            var name = s.label ? s.label + ' – ab ' + s.from_mm_5min + ' mm/5 min (~'
-              + s.approx_mm_per_hour + ' mm/h)' : '';
-            return '<span title="' + name + '"><i style="background:rgba(' + c[0] + ',' + c[1]
-              + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></i>'
-              + s.from_mm_5min.toFixed(2) + '</span>';
-          }).join('') + '<span>mm / 5 min</span>';
-        }
-        if (opts.onReady) { opts.onReady(frames[at]); }
-      })
-      .catch(function () {
-        say('Die Radardaten konnten nicht geladen werden.');
-        if (opts.onEmpty) { opts.onEmpty(); }
-      });
+        });
+    }
 
-    return { stop: stop, show: show };
+    load(opts.pastHours);
+
+    return { stop: stop, show: show, load: load };
   }
 
   global.RainRadar = {
     basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon, mark: mark,
-    locateControl: locateControl
+    locateControl: locateControl, legendControl: legendControl
   };
 })(window);

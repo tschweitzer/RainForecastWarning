@@ -23,10 +23,46 @@ function config() {
     radius: parseInt(d.radius, 10) || 2000,
     layerOpacity: parseFloat(d.layerOpacity),
     vapidKey: d.vapidKey || '',
-    emailAvailable: d.emailAvailable === 'true'
+    emailAvailable: d.emailAvailable === 'true',
+    windowHours: parseInt(d.windowHours, 10) || 12,
+    maxHours: parseInt(d.maxHours, 10) || 48,
+    windowPinned: d.windowPinned === 'true'
   };
 }
-var CONFIG = config();
+/* `const`, not `var`, and that is the whole point of this line.
+
+   Three bugs in this file have been the same bug: something that runs during page setup read a
+   module constant declared further down, `var` hoisted the declaration without the assignment, and
+   the read returned `undefined` instead of throwing. Each one failed silently and in a different
+   direction - every visitor told their browser could not do push, every returning subscriber shown
+   the signup form again, a stored preference written correctly and never once read back. None was
+   caught by a test; all three were caught by driving a browser, and only because someone happened
+   to look at the right thing.
+
+   `const` has a temporal dead zone: the same mistake throws where it happens instead of yielding
+   `undefined`. Measured, by moving `WINDOW_KEY` back below its use: the page setup stops there, so
+   the range picker, the legend and the slider never appear at all - broken in a way the first
+   person to load the page cannot miss, rather than a radar that silently shows the wrong window.
+   This file already needs ES2017 for `async`/`await`, so it costs no browser that could have run
+   it anyway. Use it for anything at this level that setup code might read. */
+const CONFIG = config();
+
+/* Where this browser remembers the reader's chosen radar window.
+
+   Declared here, at the top, and not next to the two functions that use it. It was down there,
+   and `var` hoists the declaration without the assignment - so the map setup, which runs earlier
+   in this file, called `storedWindow()` while `WINDOW_KEY` was still `undefined`, read the
+   localStorage key literally named "undefined", got null every time and silently fell back to the
+   default. The preference was written correctly and never once read back. Caught in Chromium, not
+   by a test, which is the third bug of exactly this shape in this file - hence the position and
+   hence `test_the_pages_own_javascript_behaves` now exercising `storedWindow()` directly.
+
+   localStorage access is wrapped by both users below, because reading it is not safe: Safari in
+   private browsing and any browser with site data blocked *throw* on access rather than returning
+   null, and this runs during page setup. An uncaught throw here would take the map and the signup
+   form with it, to remember a slider position. A reader who cannot store the preference gets the
+   default every visit, which is the old behaviour and fine. */
+const WINDOW_KEY = 'rainalert.windowHours';
 
 
 /* A signup that has gone through is not a form any more.
@@ -80,12 +116,19 @@ function setPlace(lat, lon, fromMap) {
   // red and reads as another complaint.
   hint.className = 'hint';
 }
+/* One map, two jobs.
+
+   Everything that does not depend on who is looking - the basemap, the radar loop, the legend and
+   the range picker - is built immediately, because the map is the page. Only the parts that
+   change a subscription (the draggable pin, and the locate button setting it) wait for the state
+   check below, so a subscriber never sees a pin they are not allowed to move.
+
+   `has_map` says whether there is radar imagery to lay over the map. Picking a place does not
+   need any: the basemap - tiles, or the graticule and city dots - is what you aim with. Only the
+   loop is conditional. */
+var radar = null;
 
 (function () {
-  // `has_map` says whether there is radar imagery to lay over the map. Picking a place does
-  // not need any: the basemap - tiles, or the graticule and city dots - is what you aim with.
-  // Only the loop below is conditional.
-  var hasOverlay = CONFIG.hasOverlay;
   if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
     // No Leaflet: the map area would be an empty box, so take it away and offer the fields.
     document.getElementById('map').hidden = true;
@@ -97,6 +140,9 @@ function setPlace(lat, lon, fromMap) {
 
   // Opens on the whole country: a new visitor has not told us anything yet, so any closer view
   // would be a guess, and a guess here is a wrong location nobody notices.
+  //
+  // maxZoom on the map as well as on the tile layer: with no basemap configured there is no tile
+  // layer to take it from, and Leaflet would then let the graticule zoom forever.
   map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 5);
   RainRadar.basemap(map, {
     tileUrl: CONFIG.tileUrl,
@@ -104,6 +150,245 @@ function setPlace(lat, lon, fromMap) {
     graticule: true
   });
 
+  openOnTheWarningsPlace();
+  /* And again whenever the fragment changes, which is the case that was broken.
+
+     The service worker prefers to reuse an open tab, and that function erases the hash as its
+     first act - so a tab left over from an earlier warning sits at plain `/`. Sending it to
+     `/#l=<new token>` changes only the fragment, which is a same-document navigation: no script
+     re-runs, the new token is never read, and the reader taps their second warning and gets the
+     country view with no explanation. Verified in Chromium: one locate call for two navigations.
+
+     This listener IS the fix, and the direction matters: `focusOrOpen` in sw.js navigates an open
+     tab on purpose and depends on this to re-read the token. An earlier version had the worker
+     dodge the problem by opening a new window instead, but the dodge matched every warning after
+     the first, so an afternoon of showers left a column of map tabs, and it was removed. It also
+     covers a reader following two warning links by hand. */
+  window.addEventListener('hashchange', openOnTheWarningsPlace);
+
+  if (!CONFIG.hasOverlay) { return; }
+
+  var legend = RainRadar.legendControl();
+  map.addControl(legend);
+
+  var controls = document.getElementById('radar-controls');
+  controls.hidden = false;
+  radar = RainRadar.timeline(map, {
+    pastHours: initialWindow(),
+    layerOpacity: CONFIG.layerOpacity,
+    slider: document.getElementById('slider'),
+    play: document.getElementById('play'),
+    stamp: document.getElementById('frame-stamp'),
+    legend: legend.body(),
+    banner: document.getElementById('banner'),
+    // Under the pin, or the radar hides the thing being positioned.
+    behindMarkers: true,
+    onEmpty: function () {
+      controls.hidden = true;
+      document.getElementById('frame-stamp').textContent = '';
+    },
+    onReady: function () { controls.hidden = false; }
+  });
+
+  rangePicker();
+})();
+
+/* Which window the slider opens on.
+
+   Three sources, in this order: `?hours=` in the URL, this browser's stored preference, the
+   server's default. A shared link wins over the preference on purpose - someone sending "look at
+   the last 48 hours" is not asking about your settings - and the server has already clamped it,
+   so a hand-typed `?hours=999` arrives here as the ceiling rather than as a 600-frame slider. */
+function initialWindow() {
+  if (CONFIG.windowPinned) { return CONFIG.windowHours; }
+  var stored = storedWindow();
+  return stored === null ? CONFIG.windowHours : stored;
+}
+
+function storedWindow() {
+  /* The try covers the localStorage call and nothing else, which is not fussiness.
+
+     It used to wrap this whole body, and that quietly defeated the `const` above: moving the
+     declaration below this function makes reading it a `ReferenceError`, the catch swallowed it,
+     `storedWindow()` returned null, and the page fell back to the default exactly as silently as
+     before. A catch written for "this browser refuses site data" must not also absorb "this code
+     is wrong".
+
+     Hence the separate `key` line. Narrowing the try to the `getItem` call alone was not enough
+     while `WINDOW_KEY` was still read *as its argument* - that read is inside the try, so the
+     ReferenceError was still caught and the page still failed silently. Verified both ways by
+     moving the declaration and watching the console. */
+  var key = WINDOW_KEY;
+  var raw;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch (error) {
+    return null;
+  }
+  if (raw === null) { return null; }
+  var hours = parseInt(raw, 10);
+  // Validated, not trusted: this is the only input to the page that a *previous* version of the
+  // page wrote, so an old or hand-edited value must not become a range nobody offers. Anything
+  // outside what the server is willing to serve falls back to the default.
+  if (!isFinite(hours) || hours < 1 || hours > CONFIG.maxHours) { return null; }
+  return hours;
+}
+
+function rememberWindow(hours) {
+  // Both reads outside the try, for the reason spelled out in storedWindow().
+  var key = WINDOW_KEY;
+  var value = String(hours);
+  try { window.localStorage.setItem(key, value); } catch (error) { /* fine */ }
+}
+
+/* The range picker. Buttons rather than the links the old radar page used, because the choice is
+   now remembered in this browser instead of carried in the URL.
+
+   Reloads the live timeline rather than rebuilding it: `RainRadar.timeline()` registers the
+   slider and play listeners once per call, so calling it again would leave two of each and the
+   next play tap would run two timers against one slider. */
+function rangePicker() {
+  var nav = document.getElementById('range');
+  if (!nav || !radar) { return; }
+  var buttons = [].slice.call(nav.querySelectorAll('button[data-hours]'));
+  if (!buttons.length) { return; }
+  nav.hidden = false;
+
+  function mark(hours) {
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(+b.dataset.hours === hours));
+    });
+  }
+
+  mark(initialWindow());
+  buttons.forEach(function (button) {
+    button.addEventListener('click', function () {
+      var hours = +button.dataset.hours;
+      mark(hours);
+      rememberWindow(hours);
+      /* The cursor lands on "jetzt", which `load()` does for us: it picks the frame at offset 0.
+         Keeping the old slider index would be meaningless - index 40 of a 3-hour window and index
+         40 of a 48-hour window are ten hours apart - and keeping the old *time* would drop a
+         reader who was watching the forecast back into the past. "Now" is the one position that
+         means the same thing in every window. */
+      radar.load(hours);
+    });
+  });
+}
+
+/* Tapped a warning? Centre on the place it was about.
+
+   The link carries a signed reference, not the coordinates - a warning stays in a notification
+   list for good, and a screenshot of one should not be somebody's address. The reference stops
+   resolving after an hour, and then this is simply the ordinary map, which is the whole point:
+   last week's warning tells a reader nothing about where its owner lives. */
+function openOnTheWarningsPlace() {
+  var hash = window.location.hash || '';
+  if (hash.indexOf('#l=') !== 0) { return; }
+  var token = decodeURIComponent(hash.slice(3));
+  // Erased before anything else can read it, and replaceState so Back does not return to a URL
+  // still carrying it.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+  var stale = document.getElementById('stale-link');
+  stale.hidden = true;
+
+  fetch('/api/v1/locate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token })
+  }).then(function (r) {
+    return r.ok ? r.json() : { located: false };
+  }).then(function (place) {
+    if (!place.located) {
+      // Said rather than silently ignored: a map that opens on the whole country when you
+      // expected your own street reads as broken unless it says why.
+      stale.hidden = false;
+      return;
+    }
+    RainRadar.mark(map, place.lat, place.lon, place.radius_m);
+    // 11 is what the settings map opens on - about 40 km across, enough to see which town you are
+    // in and to judge a shower's distance against it.
+    map.setView([place.lat, place.lon], 11);
+  }).catch(function () { /* the map is still a map */ });
+}
+
+/* Does this browser already hold a subscription we could send to?
+
+   Browser-side only, and it has to be: the server has no endpoint that answers "is this endpoint
+   subscribed" without a session, and adding one would be an oracle letting anyone test whether a
+   given push endpoint is registered here. So this asks the same question /manage asks, with the
+   same `sameKey` bias - a subscription bound to a different applicationServerKey is not a route
+   into anything, because every send signed with our current key is rejected forever.
+
+   It therefore answers "this browser believes it is subscribed", not "the server has a confirmed
+   row". A signup abandoned before confirmation leaves a live browser subscription behind, and
+   that reader sees state B until the server purges it. The line state B shows is worded for
+   exactly that: it says where to go, and the settings page is where the truth is. */
+async function thisBrowserIsSubscribed() {
+  if (!pushSupported() || !VAPID_KEY) { return false; }
+  try {
+    var registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration) { return false; }
+    var subscription = await registration.pushManager.getSubscription();
+    return !!subscription && sameKey(subscription, VAPID_KEY);
+  } catch (error) {
+    return false;
+  }
+}
+
+/* Decide which half of the page below the map the reader gets.
+
+   Fail-open, in three places, because the failure that matters is a visitor who cannot sign up:
+   the catch, the timeout, and `getRegistration` resolving to nothing all end at the signup form.
+   Only a positive answer hides it.
+
+   `serviceWorker.getRegistration`, not `.ready`: `ready` never resolves when no worker is
+   registered, which is every first-time visitor - the form would have stayed hidden forever on
+   exactly the browsers it exists for.
+
+   Called at the very bottom of this script, not here, for the same reason `announceCapability()`
+   is: it reads `VAPID_KEY`, which is declared further down with `var`. `var` hoists the
+   declaration without the assignment, so running this in place read `undefined`, decided no
+   subscription could exist, and showed every returning subscriber the signup form - which is the
+   whole bug this state check was added to remove. */
+function decideSignupState() {
+  var section = document.getElementById('signup-section');
+  var already = document.getElementById('already-subscribed');
+  var settled = false;
+
+  function reveal(subscribed) {
+    if (settled) { return; }
+    settled = true;
+    section.hidden = !!subscribed;
+    already.hidden = !subscribed;
+    if (subscribed) { enableViewing(); } else { enablePicking(); }
+  }
+
+  // The floor under the whole thing. `getSubscription()` is normally a few milliseconds, but it
+  // talks to the browser's push machinery and there is no contract that it ever settles; a
+  // visitor staring at a map with nothing under it is a worse outcome than a subscriber seeing
+  // the form for a moment.
+  var guard = window.setTimeout(function () { reveal(false); }, 1500);
+
+  thisBrowserIsSubscribed().then(function (subscribed) {
+    window.clearTimeout(guard);
+    reveal(subscribed);
+  }).catch(function (error) {
+    // Still fail-open - a visitor who cannot sign up is the outcome that matters - but no longer
+    // silent. Nothing here is expected to throw, so anything that does is a bug in this file, and
+    // a bug that degrades gracefully is one nobody reports. The console is where it shows, and
+    // the browser harness collects console errors.
+    if (window.console) { window.console.error('signup state check failed', error); }
+    window.clearTimeout(guard);
+    reveal(false);
+  });
+}
+
+/* The pin, and the locate button that sets it. Only ever called for a reader who is not signed
+   up: on this page a subscriber's location is not editable, because editing it here would be the
+   settings page rebuilt in a second place. */
+function enablePicking() {
+  if (!map) { return; }
   pick = RainRadar.picker(map, {
     radius: CONFIG.radius,
     onChange: function (lat, lon) { setPlace(lat, lon, true); }
@@ -121,30 +406,44 @@ function setPlace(lat, lon, fromMap) {
     },
     onFound: function (lat, lon) {
       setPlace(lat, lon, false);
-      // 12 rather than the opening 5: having just asked to be found, you want to see the
-      // street, and 12 is as far as 1 km radar lets the tile layer go.
+      // 12 rather than the opening 5: having just asked to be found, you want to see the street,
+      // and 12 is as far as 1 km radar lets the tile layer go.
       map.setView([lat, lon], 12);
     }
   }));
+}
 
-  if (!hasOverlay) { return; }
+/* The same button for a reader who is already signed up, with the half that changes a
+   subscription taken out.
 
-  // The same twelve-hour window the radar page opens on, and deliberately without the range
-  // picker: the loop is here to show what the weather has been doing where you are about to
-  // put the pin, not to be tuned.
-  document.getElementById('radar-controls').hidden = false;
-  RainRadar.timeline(map, {
-    pastHours: 12,
-    layerOpacity: CONFIG.layerOpacity,
-    slider: document.getElementById('slider'),
-    play: document.getElementById('play'),
-    stamp: document.getElementById('frame-stamp'),
-    behindMarkers: true,
-    onEmpty: function () { document.getElementById('radar-controls').hidden = true; }
-  });
-})();
+   It is still here, and that is the point of the distinction: "where am I on this radar" is a map
+   question, and a subscriber watching a shower approach wants it answered as much as anyone. What
+   they must not get is a pin that looks draggable, because dragging it would appear to move their
+   warning location and would not - that lives on the settings page.
 
-// The button beside the coordinate fields, which are only on screen when Leaflet failed to
+   `RainRadar.mark` rather than the picker's pin: nothing about it is interactive, and it replaces
+   its predecessor through `map.__rainalertMark`, so pressing the button twice leaves one marker
+   instead of a trail. The accuracy circle it draws is honest here - at 1 km radar resolution,
+   "somewhere within 2 km" and "here" look identical and only one of them is true. */
+function enableViewing() {
+  if (!map) { return; }
+  var banner = document.getElementById('banner');
+  map.addControl(RainRadar.locateControl({
+    onStatus: function (text, kind) {
+      // Reuses the page's banner rather than the signup form's hint, which is hidden in this
+      // state - an error message inside a hidden section is an error nobody is told about.
+      if (kind === 'error' && text) {
+        banner.hidden = false;
+        banner.textContent = text;
+      }
+    },
+    onFound: function (lat, lon, accuracy) {
+      banner.hidden = true;
+      RainRadar.mark(map, lat, lon, Math.max(accuracy || 0, 50));
+      map.setView([lat, lon], Math.max(map.getZoom(), 10));
+    }
+  }));
+}// The button beside the coordinate fields, which are only on screen when Leaflet failed to
 // load. With a map there is a control on it; without one, this is the only way to avoid typing
 // decimal degrees, so it does not disappear with the map - it appears with the fields.
 (function () {
@@ -275,9 +574,9 @@ function el(tag, cls, text) {
 /* The VAPID public key, from the server. Empty when none is configured, which is the signal that
    this deployment cannot do push at all - rendered as JSON so an empty value is an empty string
    rather than a syntax error. */
-var VAPID_KEY = CONFIG.vapidKey;
+const VAPID_KEY = CONFIG.vapidKey;
 /* Whether there is a second channel to fall back to, which decides what a push failure may suggest. */
-var EMAIL_AVAILABLE = CONFIG.emailAvailable;
+const EMAIL_AVAILABLE = CONFIG.emailAvailable;
 
 /* base64url -> Uint8Array. `applicationServerKey` will not take the base64 string, only bytes,
    and atob does not know base64url - so the two substitutions and the padding are both needed.
@@ -419,6 +718,7 @@ function sameKey(subscription, expected) {
 
 /* Everything it reads - VAPID_KEY, pushSupported, EMAIL_AVAILABLE - is defined above by here. */
 announceCapability();
+decideSignupState();
 
 document.getElementById('signup').addEventListener('submit', async function (event) {
   event.preventDefault();

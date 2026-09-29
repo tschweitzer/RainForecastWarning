@@ -132,4 +132,4 @@ def test_the_pages_own_javascript_behaves(tmp_path, capsys):
     assert result.returncode == 0, (
         f"page javascript tests failed:\n{result.stdout}\n{result.stderr}"
     )
-    assert "all 17 passed" in result.stdout, result.stdout
+    assert "all 29 passed" in result.stdout, result.stdout

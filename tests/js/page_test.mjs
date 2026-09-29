@@ -115,6 +115,85 @@ if (managed) {
   }
 }
 
+/* --- the remembered radar window ------------------------------------------------------------
+ *
+ * `storedWindow` reads a value a *previous version of this page* wrote, which makes it the one
+ * input here that is neither the server's nor the reader's typing - so an old or hand-edited
+ * value must not become a window nobody offers. It also has to survive a browser that throws on
+ * localStorage rather than returning null, which is what Safari does in private browsing and what
+ * any browser with site data blocked does.
+ *
+ * These run the functions with a fake `window` and `CONFIG`. That deliberately cannot catch the
+ * ordering bug that shipped here - `WINDOW_KEY` declared below its first use, read as `undefined`,
+ * every stored preference silently ignored - because extraction throws the ordering away. That one
+ * is guarded in the source instead: `const` makes it stop the page rather than pass a wrong value
+ * on, and tests/test_pages.py asserts these stay `const`. */
+function windowFns(store, config) {
+  const box = {};
+  const fakeWindow = { localStorage: store };
+  new Function('box', 'window', 'CONFIG', 'WINDOW_KEY',
+    `${extract('storedWindow')}\n${extract('initialWindow')}\n${extract('rememberWindow')}\n` +
+    'box.storedWindow = storedWindow; box.initialWindow = initialWindow;' +
+    'box.rememberWindow = rememberWindow;'
+  )(box, fakeWindow, config, 'rainalert.windowHours');
+  return box;
+}
+
+const DEFAULTS = { windowHours: 12, maxHours: 48, windowPinned: false };
+const fakeStore = (value) => {
+  const held = { value };
+  return {
+    getItem: () => (held.value === undefined ? null : held.value),
+    setItem: (k, v) => { held.value = v; },
+    held
+  };
+};
+
+test('a stored window is read back', () => {
+  assert.equal(windowFns(fakeStore('24'), DEFAULTS).storedWindow(), 24);
+});
+
+test('nothing stored means no preference, not zero', () => {
+  assert.equal(windowFns(fakeStore(undefined), DEFAULTS).storedWindow(), null);
+});
+
+for (const [label, stored] of [['rubbish', 'twelve'], ['empty', ''], ['zero', '0'],
+                               ['negative', '-3'], ['past the ceiling', '999']]) {
+  test(`a ${label} stored window is ignored`, () => {
+    assert.equal(windowFns(fakeStore(stored), DEFAULTS).storedWindow(), null);
+  });
+}
+
+test('a browser that throws on localStorage is not a broken page', () => {
+  // The whole reason these are wrapped: this runs during page setup, so an uncaught throw here
+  // would take the map and the signup form with it, to remember a slider position.
+  const hostile = { getItem() { throw new DOMException('denied'); },
+                    setItem() { throw new DOMException('denied'); } };
+  const fns = windowFns(hostile, DEFAULTS);
+  assert.equal(fns.storedWindow(), null);
+  assert.doesNotThrow(() => fns.rememberWindow(24));
+});
+
+test('with no preference the page opens on the server default', () => {
+  assert.equal(windowFns(fakeStore(undefined), DEFAULTS).initialWindow(), 12);
+});
+
+test('a stored preference beats the server default', () => {
+  assert.equal(windowFns(fakeStore('24'), DEFAULTS).initialWindow(), 24);
+});
+
+test('a shared ?hours= link beats the stored preference', () => {
+  // Someone sending "look at the last 48 hours" is not asking about your settings.
+  const pinned = { windowHours: 48, maxHours: 48, windowPinned: true };
+  assert.equal(windowFns(fakeStore('24'), pinned).initialWindow(), 48);
+});
+
+test('the preference is written back as a plain number', () => {
+  const store = fakeStore(undefined);
+  windowFns(store, DEFAULTS).rememberWindow(6);
+  assert.equal(store.held.value, '6');
+});
+
 let failed = 0;
 for (const [status, name, message] of results) {
   if (status === 'FAIL') { failed++; console.log(`FAIL ${name}: ${message}`); }

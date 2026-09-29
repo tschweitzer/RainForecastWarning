@@ -379,7 +379,7 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
         # Push only. Email ignores `click_url`, and a mail body is forwarded far more often than
         # a notification is - there is no reason to put this where it travels furthest.
         click_url=(
-            f"{settings.public_base_url.rstrip('/')}/map"
+            f"{settings.public_base_url.rstrip('/')}/"
             f"#l={locate_token(subscriber.id, settings.secret_key, settings.locate_link_ttl_minutes)}"
         ),
         actions=actions,

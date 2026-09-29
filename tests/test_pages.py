@@ -56,7 +56,7 @@ def test_the_geolocation_helper_is_served(client):
     assert "javascript" in response.headers["content-type"]
 
 
-@pytest.mark.parametrize("path", ["/", "/map", "/manage"])
+@pytest.mark.parametrize("path", ["/", "/manage"])
 def test_every_page_with_a_locate_button_loads_the_helper(client, path):
     assert "/static/geolocate.js" in client.get(path).text
 
@@ -82,7 +82,7 @@ def test_every_map_has_an_on_map_locate_control(client, db):
     # a click that reached the map would move the subscriber's pin to wherever the button is.
     assert "L.DomEvent.disableClickPropagation" in module
 
-    for path in ("/map", "/", "/manage"):
+    for path in ("/", "/manage"):
         assert "RainRadar.locateControl(" in page_source(client, path), path
 
 
@@ -147,10 +147,35 @@ def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db
     assert "coord-fallback" in enclosing_ids(body, "locate-status"), path
 
 
+def test_the_pages_module_constants_are_const_not_var(client):
+    """The one guard against a bug this file has now shipped three times.
+
+    Each was the same shape: something that runs during page setup read a module constant declared
+    further down, `var` hoisted the declaration without the assignment, and the read returned
+    `undefined` rather than throwing. They failed silently and differently - every visitor told
+    their browser could not do push, every returning subscriber shown the signup form again, a
+    stored range preference written correctly and never once read back. None was caught by a test;
+    all three were found by driving a browser.
+
+    `const` has a temporal dead zone, so the same mistake stops the page where it happens. Measured
+    by making it: the range picker, legend and slider never appear, which the first person to load
+    the page cannot miss.
+
+    Asserted here rather than left to review because the failure mode is invisible in a diff - a
+    `var` in the right place today is a bug the moment something above it grows a read.
+    """
+    source = client.get("/static/signup.js").text
+    for name in ("CONFIG", "WINDOW_KEY", "VAPID_KEY", "EMAIL_AVAILABLE"):
+        assert f"const {name} =" in source, f"{name} must be const - see this test's docstring"
+        assert f"var {name} =" not in source, f"{name} went back to var"
+
+
 @pytest.mark.parametrize(
     ("path", "hint"),
     [
-        ("/", "Tippe in die Karte, um deinen Ort zu setzen."),
+        # "oben", because on the merged page the map is above the form rather than inside it,
+        # and a hint pointing at a control the reader has scrolled past has to say where it is.
+        ("/", "Tippe oben in die Karte, um deinen Ort zu setzen."),
         ("/manage", "Tippe in die Karte, um den Ort zu setzen."),
     ],
 )
@@ -336,7 +361,7 @@ def test_there_is_only_one_opacity(client):
     assert "opacity: opts.layerOpacity" in module
     assert "opacity: 0.75" not in module
     # And every page must hand it the real value rather than typing one of its own.
-    for path in ("/", "/map", "/manage"):
+    for path in ("/", "/manage"):
         page = page_source(client, path)
         assert "layerOpacity" in page
         assert "opacity: 0.75" not in page
@@ -436,9 +461,9 @@ def test_the_subscribe_page_links_to_the_settings_page(client):
     assert 'href="/manage"' in page_source(client)
 
 
-@pytest.mark.parametrize("path", ["/map", "/manage"])
+@pytest.mark.parametrize("path", ["/", "/manage"])
 def test_both_maps_zoom_to_street_level(client, path):
-    assert "maxZoom: 18" in client.get(path).text
+    assert "maxZoom: 18" in page_source(client, path)
 
 
 # --- the map marker ------------------------------------------------------------------------------
@@ -489,7 +514,7 @@ def test_no_page_relies_on_a_third_party_image(client):
     tests/test_vendored_leaflet.py asserts the general form. This stays as the specific one,
     because the marker icon is exactly where it was broken before.
     """
-    for path in ("/", "/map", "/manage"):
+    for path in ("/", "/manage"):
         page = client.get(path).text
         for marker in ('<img src="https://', "src: 'https://", "iconUrl"):
             assert marker not in page, f"{path} pulls an image from elsewhere"
@@ -498,7 +523,7 @@ def test_no_page_relies_on_a_third_party_image(client):
 # --- attribution (DESIGN.md 4.2) ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/map", "/manage", "/privacy"])
+@pytest.mark.parametrize("path", ["/", "/manage", "/privacy"])
 def test_every_page_credits_dwd_and_says_the_data_was_modified(client, path):
     """CC BY 4.0 wants the source, the licence, and any modification indicated.
 
@@ -921,14 +946,14 @@ def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
 #: Every page a reader can land on. Listed here rather than discovered, so adding a route means
 #: deciding whether it belongs in the navigation instead of finding out later that it does not
 #: have any - which is how /confirm, /unsubscribe and /privacy became dead ends.
-EVERY_PAGE = ("/", "/map", "/manage", "/confirm", "/unsubscribe", "/privacy")
+EVERY_PAGE = ("/", "/manage", "/confirm", "/unsubscribe", "/privacy")
 
 
 def test_every_page_carries_the_same_navigation(client, db):
     for path in EVERY_PAGE:
         body = client.get(path).text
         nav = body.split('<nav class="site"')[1].split("</nav>")[0]
-        for label in ("Start", "Regenradar", "Einstellungen"):
+        for label in ("Start", "Einstellungen"):
             assert label in nav, f"{path} is missing {label}"
 
 
@@ -943,7 +968,7 @@ def test_the_page_you_are_on_is_marked_and_is_not_a_link(client, db):
     """The set keeps its shape as you move around - the current entry is marked, not dropped."""
     import re
 
-    for path, label in (("/", "Start"), ("/map", "Regenradar"), ("/manage", "Einstellungen")):
+    for path, label in (("/", "Start"), ("/manage", "Einstellungen")):
         nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
         # Whitespace-insensitive: the assertion is about which element wraps the label, not
         # about how Jinja happened to indent it.
@@ -954,15 +979,22 @@ def test_the_page_you_are_on_is_marked_and_is_not_a_link(client, db):
         assert f'href="{path}"' not in nav, f"{path} links to itself"
 
 
-def test_the_radar_is_listed_even_with_no_overlay_store(client, db):
-    """`has_map` says whether there is imagery to lay over the map, not whether the page exists:
-    it renders its graticule and its "no radar data yet" banner perfectly well without one.
-    Gating the link on it left the map missing from the navigation while standing on it."""
+def test_the_navigation_does_not_depend_on_there_being_radar_imagery(client, db):
+    """`has_map` says whether there is imagery to lay over the map, not whether the map exists:
+    the page renders its graticule and its "no radar data yet" banner perfectly well without an
+    overlay store. Gating a navigation entry on it once left the map missing from the navigation
+    while the reader was standing on it, and nothing here may reintroduce that.
+
+    The entry itself is gone - the radar and the signup form are one page now, so a second
+    `Regenradar` link would be `Start` under another name - but the rule outlived it.
+    """
     # This client has no overlay store configured, which is the case under test.
     assert "Noch keine Radardaten" in client.get("/static/radar.js").text
     for path in EVERY_PAGE:
         nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
-        assert "Regenradar" in nav, path
+        assert "Start" in nav and "Einstellungen" in nav, path
+    # And the map is still on the start page, overlay store or not.
+    assert 'id="map"' in client.get("/").text
 
 
 def test_the_old_one_off_wayfinding_links_are_gone(client, db):

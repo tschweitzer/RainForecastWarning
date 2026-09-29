@@ -327,7 +327,7 @@ Restart the server and every message carries that address:
 confirmation   http://203.0.113.10:8000/confirm#a=...   (#t= in mail - D-36)
 settings link  http://203.0.113.10:8000/manage#t=...
 unsubscribe    http://203.0.113.10:8000/unsubscribe#t=...
-warning taps   http://203.0.113.10:8000/map#l=...
+warning taps   http://203.0.113.10:8000/#l=...
 ```
 
 The tap target on a warning carries a **locate reference**, not coordinates: it opens the map on
@@ -532,7 +532,7 @@ while true; do make run-ingest; sleep 300; done
 ```
 
 Five minutes, not less — one request per cycle is the politeness rule the whole ingest client is
-built around (DESIGN.md §4.3). After an hour or two, `http://localhost:8000/map` has real history
+built around (DESIGN.md §4.3). After an hour or two, `http://localhost:8000/` has real history
 to slide through, and this is also the closest thing to M2's "24 h unattended" criterion that can be
 done without deploying.
 
@@ -604,13 +604,13 @@ a colourful map, because it stops the constraint propagating into every future p
 
 ### Choosing how far back the map looks
 
-The slider shows the last 12 hours by default. The picker at the foot of `/map` changes that, and
+The slider shows the last 12 hours by default. The picker under the map changes that, and
 each choice is a plain link with its own address:
 
 ```
-http://localhost:8000/map            12 h, the default
-http://localhost:8000/map?hours=3     3 h
-http://localhost:8000/map?hours=48   48 h, everything DWD retains
+http://localhost:8000/            12 h, the default (or whatever this browser last chose)
+http://localhost:8000/?hours=3     3 h
+http://localhost:8000/?hours=48   48 h, everything DWD retains
 ```
 
 Any number of hours works, not only the ones offered: `?hours=5` is fine. Out of range is clamped

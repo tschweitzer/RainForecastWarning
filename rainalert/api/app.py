@@ -1062,14 +1062,49 @@ def create_app(
         return build_timeline(session, settings, overlay_store, past_hours)
 
     # ---- pages ----------------------------------------------------------------------------
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def index(request: Request) -> HTMLResponse:
-        return page(request, "index.html", {"layer_opacity": LAYER_OPACITY})
-
-    #: What the range picker at the foot of the map offers. Every one of them is inside what
-    #: DWD retains; the page drops any that exceed the configured maximum rather than showing a
-    #: choice that would be silently clamped.
+    #: What the range picker under the map offers. Every one of them is inside what DWD retains;
+    #: the page drops any that exceed the configured maximum rather than showing a choice that
+    #: would be silently clamped.
     WINDOW_CHOICES = (3, 6, 12, 24, 48)
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index(request: Request, hours: str | None = None) -> HTMLResponse:
+        """The radar and the signup form, on one page.
+
+        `/map` used to be separate and is gone - not redirected. It was still in development and
+        only its author had links to it, so the honest move was to delete it rather than keep a
+        second address alive forever.
+
+        `hours` is resolved here rather than in the page's JavaScript so the window is clamped
+        before it reaches the browser: the script may override it from this browser's stored
+        preference, but it cannot widen it past what the server is willing to serve.
+
+        Taken as a string and parsed leniently on purpose. Declared as `int`, FastAPI answers
+        ?hours=abc with a 422 validation page; a rubbish query parameter should not cost someone
+        the whole page when there is a perfectly good default to fall back to.
+        """
+        window = settings.timeline_default_hours
+        pinned = False
+        if hours is not None:
+            try:
+                window = int(hours)
+                # Only a *usable* value pins the window. `?hours=abc` falling back to the default
+                # must not also announce itself as a deliberate choice, or it would override the
+                # reader's stored preference with a typo.
+                pinned = True
+            except ValueError:
+                window = settings.timeline_default_hours
+        window = min(max(window, 1), settings.timeline_past_hours)
+        return page(
+            request,
+            "index.html",
+            {
+                "layer_opacity": LAYER_OPACITY,
+                "window_hours": window,
+                "window_pinned": pinned,
+                "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
+            },
+        )
 
     @app.get("/manage", response_class=HTMLResponse, include_in_schema=False)
     def manage_page(request: Request) -> HTMLResponse:
@@ -1081,32 +1116,6 @@ def create_app(
         """
         return page(
             request, "manage.html", {"bounds": rule_bounds(), "layer_opacity": LAYER_OPACITY}
-        )
-
-    @app.get("/map", response_class=HTMLResponse, include_in_schema=False)
-    def rain_map(request: Request, hours: str | None = None) -> HTMLResponse:
-        # Resolved here rather than in the page's JavaScript, so the heading states the window
-        # the page is actually showing instead of a number typed into the template - which is
-        # how it came to say "12 Stunden" while serving 48.
-        #
-        # Taken as a string and parsed leniently on purpose. Declared as `int`, FastAPI answers
-        # ?hours=abc with a 422 validation page; a rubbish query parameter should not cost
-        # someone the map when there is a perfectly good default to fall back to.
-        window = settings.timeline_default_hours
-        if hours is not None:
-            try:
-                window = int(hours)
-            except ValueError:
-                window = settings.timeline_default_hours
-        window = min(max(window, 1), settings.timeline_past_hours)
-        return page(
-            request,
-            "map.html",
-            {
-                "window_hours": window,
-                "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
-                "layer_opacity": LAYER_OPACITY,
-            },
         )
 
     #: Served from the root, not from /static. A service worker's default scope is the directory

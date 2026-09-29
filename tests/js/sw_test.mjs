@@ -12,7 +12,7 @@ async function test(name, fn) {
 const WARNING = {
   title: 'Regen in etwa 12 Minuten',
   body: 'Leichter Regen zieht auf.',
-  url: '/map#l=tok',
+  url: '/#l=tok',
   actions: [{ title: 'Einstellungen', url: '/api/v1/manage/request', body: '{}' }]
 };
 
@@ -82,19 +82,19 @@ await test('tapping the body reuses an open tab on another path', async () => {
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: WARNING, close() {} }
   });
-  assert.deepEqual(w.navigated.map((n) => n.to), ['/map#l=tok']);
+  assert.deepEqual(w.navigated.map((n) => n.to), ['/#l=tok']);
   assert.deepEqual(w.opened, []);
 });
 
 await test('a second warning does not open a second tab', async () => {
   // The regression: the same-path branch broke out of the loop so openWindow ran, and it matched
   // every warning after the first. Three warnings, three tabs.
-  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/map'] });
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'] });
   await fire(w.listeners.notificationclick, {
-    action: '', notification: { data: { ...WARNING, url: '/map#l=second' }, close() {} }
+    action: '', notification: { data: { ...WARNING, url: '/#l=second' }, close() {} }
   });
   assert.deepEqual(w.opened, [], 'opened a new window instead of reusing the tab');
-  assert.deepEqual(w.navigated.map((n) => n.to), ['/map#l=second']);
+  assert.deepEqual(w.navigated.map((n) => n.to), ['/#l=second']);
 });
 
 await test('with no tab open a window is opened', async () => {
@@ -102,16 +102,16 @@ await test('with no tab open a window is opened', async () => {
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: WARNING, close() {} }
   });
-  assert.deepEqual(w.opened, ['/map#l=tok']);
+  assert.deepEqual(w.opened, ['/#l=tok']);
 });
 
 await test('a tab on another origin is ignored', async () => {
-  const w = loadWorker({ maxActions: 2, windows: ['https://elsewhere.invalid/map'] });
+  const w = loadWorker({ maxActions: 2, windows: ['https://elsewhere.invalid/'] });
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: WARNING, close() {} }
   });
   assert.deepEqual(w.navigated, []);
-  assert.deepEqual(w.opened, ['/map#l=tok']);
+  assert.deepEqual(w.opened, ['/#l=tok']);
 });
 
 await test('an action POSTs without cookies and opens nothing', async () => {
@@ -202,7 +202,7 @@ await test('what the push handler stores is what the click handler reads', async
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: stored, close() {} }
   });
-  assert.deepEqual(w.opened, ['/map#l=tok'], 'a body tap must open where the payload pointed');
+  assert.deepEqual(w.opened, ['/#l=tok'], 'a body tap must open where the payload pointed');
 
   const w2 = loadWorker({ maxActions: 2, windows: [] });
   await fire(w2.listeners.push, { data: { json: () => WARNING } });
@@ -221,7 +221,7 @@ await test('an uncontrolled tab that refuses navigation still gets a window', as
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: WARNING, close() {} }
   });
-  assert.deepEqual(w.opened, ['/map#l=tok']);
+  assert.deepEqual(w.opened, ['/#l=tok']);
 });
 
 await test('tabs this worker has not claimed are still considered', async () => {
@@ -254,7 +254,7 @@ await test('a client that cannot be focused is skipped, not crashed on', async (
   await fire(w.listeners.notificationclick, {
     action: '', notification: { data: WARNING, close() {} }
   });
-  assert.deepEqual(w.opened, ['/map#l=tok'], 'an unfocusable client must fall through to a window');
+  assert.deepEqual(w.opened, ['/#l=tok'], 'an unfocusable client must fall through to a window');
   assert.deepEqual(w.navigated, []);
 });
 

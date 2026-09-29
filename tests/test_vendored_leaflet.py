@@ -1,7 +1,7 @@
 """Leaflet is served by this app, and the basemap defaults to one that costs nobody anything.
 
 Two changes land together here because they are the same concern from two directions. Until
-2026-09-27 a visit to `/map` told two third parties who was looking: unpkg, for the library, and
+2026-09-27 a visit to the radar told two third parties who was looking: unpkg, for the library, and
 whatever tile server an operator had configured. The library half is now vendored under
 `static/vendor/leaflet`, and the tile half has a default that is public open data rather than
 somebody's donated bandwidth.
@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from rainalert.api.app import create_app, image_origin
 from rainalert.config import Settings
 from rainalert.notify import ConsoleNotifier
+from tests.helpers import page_source
 
 VENDOR = Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "vendor" / "leaflet"
 
@@ -40,7 +41,7 @@ UPSTREAM_SHA256 = {
     "leaflet.css": "a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6",
 }
 
-MAP_PAGES = ("/", "/map", "/manage")
+MAP_PAGES = ("/", "/manage")
 
 
 @pytest.fixture()
@@ -160,7 +161,7 @@ def test_no_page_fetches_a_script_or_stylesheet_from_anywhere_else(client, path)
 
 
 def test_the_policy_names_no_third_party_script_or_style_origin(client):
-    policy = client.get("/map").headers["content-security-policy"]
+    policy = client.get("/").headers["content-security-policy"]
     for directive in ("script-src", "style-src"):
         part = next(p.strip() for p in policy.split(";") if p.strip().startswith(directive))
         assert "http" not in part, f"{part} still allows a third party"
@@ -241,9 +242,9 @@ def test_no_basemap_is_still_a_supported_state(db, settings):
         create_app(bare, session_factory=db, notifier=ConsoleNotifier()),
         base_url=bare.public_base_url,
     )
-    body = client.get("/map").text
+    body = page_source(client)
     assert "graticule" in body
     assert "sgx.geodatenzentrum.de" not in body
-    policy = client.get("/map").headers["content-security-policy"]
+    policy = client.get("/").headers["content-security-policy"]
     img_src = next(p.strip() for p in policy.split(";") if p.strip().startswith("img-src"))
     assert "geodatenzentrum" not in img_src

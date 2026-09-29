@@ -97,12 +97,12 @@
    as you move around; it is marked instead. Datenschutz is not here: it belongs with the
    imprint-ish material in the footer, not among the places you go to do something.
 
-   The radar page is listed unconditionally. `has_map` says whether there is imagery to lay over
-   the map, not whether the page exists - it renders its graticule and its "no radar data yet"
-   banner perfectly well without an overlay store. Gating the link on it left the map missing
-   from the navigation while you were standing on it. #}
+   Two entries, not three. `Regenradar` pointed at `/map`, which no longer exists: the radar and
+   the signup form are the same page now, so a separate `Regenradar` link would be `Start` under
+   another name - and a navigation whose two entries go to one place teaches the reader that it
+   cannot be trusted. #}
 <nav class="site" aria-label="Seiten">
-  {% for href, label in [('/', 'Start'), ('/map', 'Regenradar'), ('/manage', 'Einstellungen')] %}
+  {% for href, label in [('/', 'Start'), ('/manage', 'Einstellungen')] %}
     {% if request.url.path == href %}
       <strong aria-current="page">{{ label }}</strong>
     {% else %}

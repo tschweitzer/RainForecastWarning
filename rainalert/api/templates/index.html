@@ -1,28 +1,73 @@
 {% extends "base.html" %}
+{# The map and the signup form on one page.
+
+   They were two: `/` had a small map for putting a pin in, `/map` had the radar loop. A visitor
+   who had already subscribed still landed on a page whose entire purpose was to offer them a
+   subscription, and the radar - the thing worth coming back for - was a separate address they had
+   to know about. `/map` is gone rather than redirected; this is it. #}
 {% block body_attrs %} data-has-overlay="{{ (has_map | default(false)) | tojson }}"
  data-tile-url="{{ settings.map_tile_url or '' }}"
  data-tile-attribution="{{ settings.map_tile_attribution or '' }}"
  data-radius="{{ settings.default_radius_m | default(2000) }}"
  data-layer-opacity="{{ layer_opacity | default(1.0) }}"
  data-vapid-key="{{ vapid_public_key or '' }}"
- data-email-available="{{ settings.email_channel_enabled | tojson }}"{% endblock %}
+ data-email-available="{{ settings.email_channel_enabled | tojson }}"
+ {# The window the page opens on, already resolved and clamped by the server. The script may
+    override it from localStorage, which is the reader's own stored preference - but never from
+    the raw query string, so a clamp cannot be bypassed here. #}
+ data-window-hours="{{ window_hours }}"
+ data-max-hours="{{ settings.timeline_past_hours }}"
+ {# Whether `?hours=` was given. A shared link must win over the stored preference: someone who
+    sends you "look at the last 48 hours" is not asking about your settings. #}
+ data-window-pinned="{{ window_pinned | tojson }}"{% endblock %}
 {% block body %}
 <style>
-  #map { height:38vh; min-height:240px; border-radius:10px; border:1px solid var(--line); }
-  /* By id: Leaflet's stylesheet is linked further down the page, so it would win
-     against `.leaflet-container` here. */
+  /* svh, not vh: on a phone `vh` is the viewport with the browser chrome *hidden*, so a map
+     sized in vh is taller than what is on screen and pushes the slider below the fold. The vh
+     line stays first as the fallback for browsers that do not know svh.
+
+     Shorter than the old /map (55vh) because this page has a form under it, taller than the old
+     / (38vh) because the radar is now the reason to be here rather than an aid to putting a pin
+     somewhere. */
+  #map { height:48vh; height:45svh; min-height:240px;
+         border-radius:10px; border:1px solid var(--line); }
+  /* By id: Leaflet's stylesheet is linked further down the page, so it would win against
+     `.leaflet-container` here. With no tile provider the container otherwise shows Leaflet's
+     default light grey, which is a bright slab on a dark page. */
   #map { background: var(--bg); }
+
   .controls { display:flex; gap:.75rem; align-items:center; margin-top:.6rem; }
   .controls button { margin:0; width:3rem; }
   .controls input[type=range] { flex:1; }
   .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; font-size:.85rem; }
   .stamp .kind, .stamp .day { color:var(--muted); }
   .stamp .future { color:var(--accent); font-weight:600; }
+
+  /* The range picker. Buttons rather than the links /map used, because the choice is now
+     remembered in this browser rather than carried in the URL. */
+  .range { display:flex; flex-wrap:wrap; gap:.4rem; align-items:baseline;
+           margin-top:.5rem; font-size:.85rem; color:var(--muted); }
+  .range button { margin:0; padding:.2rem .5rem; width:auto; font-size:.85rem;
+                  background:none; border:1px solid var(--line); color:var(--muted); }
+  .range button[aria-pressed="true"] { color:var(--accent); border-color:var(--accent);
+                                       font-weight:600; }
+
+  /* The legend, inside its on-map control. Not a strip under the map any more: it would sit
+     between the radar and the signup form, costing every visitor the space to explain a scale
+     the map mostly explains itself. */
+  .legend-control { background:var(--bg); border:1px solid var(--line); border-radius:6px;
+                    padding:.25rem .45rem; font-size:.72rem; max-width:min(19rem, 70vw); }
+  .legend-control summary { cursor:pointer; color:var(--muted); }
+  .legend { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.35rem; color:var(--muted); }
+  .legend span { display:inline-flex; align-items:center; gap:.3rem; }
+  .legend i { width:.8rem; height:.8rem; border-radius:3px; display:inline-block; }
+
   /* Only ever drawn when no tile provider is configured, so the surface behind them is the
      page's own - a fixed slate all but disappears in dark mode. */
   .place { background:none; border:none; box-shadow:none; padding:0 0 0 .2rem;
            color:var(--fg); opacity:.75; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
+
   .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
   .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
   .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
@@ -38,155 +83,190 @@
              font-size:.9rem; color:var(--muted); }
 </style>
 <h1>Regenwarnung</h1>
-<p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
-Vorhersage bis zwei Stunden voraus. Kostenlos, ohne Konto, ohne App.</p>
 
-{# Above the channel choice, because it explains that choice.
+{# Above the map, because both are about the map: a radar that failed to load, and a warning's
+   link that has outlived its hour. #}
+<div id="banner" class="note" hidden></div>
+<p class="hint" id="stale-link" hidden>Dieser Link ist älter als
+  {{ settings.locate_link_ttl_minutes }} Minuten – die Karte zeigt deshalb nicht mehr deinen
+  Ort. Über <a href="/manage">Einstellungen</a> siehst du ihn jederzeit.</p>
 
-   `announceCapability()` moves the radio from push to E-Mail when this browser cannot do push, and
-   this sentence is the only thing that says why. Inside #what-happens it rendered at y=827 on a
-   390x844 phone - below the map, below the fold - so the reader's first screen was an E-Mail radio
-   they had not selected and an address box, with no reason given anywhere in view. A note that
-   changes the premise of a control has to precede the control.
-
-   No `for-push` class, deliberately. It had one, and `syncChannelFields()` sets `hidden` on every
-   `.for-push` node whenever the channel changes - so the note was force-shown (empty) on a capable
-   browser and force-hidden on the blocked one it exists for, i.e. wrong in both directions. Its
-   visibility is owned by `announceCapability()` alone. #}
-<p class="note" id="capability-note" hidden></p>
-
-<form id="signup">
-  {# With no mail provider configured the API refuses `channel=email`, so the choice is not a
-     choice. The fieldset is hidden rather than dropped: the push radio stays checked and in the
-     DOM, which is what `chosenChannel()` and `syncChannelFields()` read, and the page does not
-     ask a question whose second answer would be rejected. #}
-  <fieldset class="channel" {% if not settings.email_channel_enabled %}hidden{% endif %}>
-    <legend>Wie sollen wir dich warnen?</legend>
-    <label><input type="radio" name="channel" value="webpush" checked> Push auf diesen Browser</label>
-    {% if settings.email_channel_enabled %}
-    <label><input type="radio" name="channel" value="email"> E-Mail</label>
-    {% endif %}
-  </fieldset>
-
-  {# Hidden for push, and not merely ignored: the request is refused if an address arrives on
-     the webpush channel, so leaving it fillable would let someone believe it had been stored. #}
-  <div id="email-field" hidden>
-    <label for="email">E-Mail</label>
-    <input type="email" id="email" name="email" autocomplete="email"
-           placeholder="du@example.org">
-  </div>
-
-  <label id="where-label">Wo soll gewarnt werden?</label>
-  <div id="map"></div>
-  <div class="controls" id="radar-controls" hidden>
-    <button type="button" id="play" aria-label="Abspielen">▶</button>
-    <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
-           disabled>
-  </div>
-  <p class="stamp" id="frame-stamp"></p>
-  <p class="hint" id="map-hint">Tippe in die Karte, um deinen Ort zu setzen.</p>
-
-  {# Only shown when Leaflet fails to load. Asking for decimal degrees is not something to do to
-     anyone who has a map, but a blocked CDN must not mean the form cannot be filled in at all. #}
-  <div class="row" id="coord-fallback" hidden>
-    <div>
-      <label for="lat">Breite</label>
-      {# step="any": a coordinate pasted from a mapping site has six or seven decimals, and
-         step="0.0001" made the browser reject it as invalid. Precision is reduced on the server,
-         where it is also enforced - it is not the visitor's job to round. #}
-      <input type="number" id="lat" name="lat" step="any" placeholder="50.1109">
-    </div>
-    <div>
-      <label for="lon">Länge</label>
-      <input type="number" id="lon" name="lon" step="any" placeholder="8.6821">
-    </div>
-    {# The map carries a locate button of its own, in the corner where a map's controls live.
-       This one only appears when there is no map to put it on. #}
-    <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
-    <p id="locate-status" class="hint" role="status"></p>
-  </div>
-
-  {# Order here is: what will happen -> I agree -> Anmelden.
-
-     It began below the button entirely: measured on a 390x844 phone the note sat at y=859 while the
-     button was at y=798, so every word of it - the permission warning and the "clearing browser data
-     ends the subscription" sentence D-47 requires "before anyone signs up" - was off-screen at the
-     moment of the decision. Moving it above the button fixed that and left it below the consent
-     checkbox, which still asked the reader to agree to something before explaining what it sets in
-     motion. Now it precedes both. #}
-<div class="note" id="what-happens">
-  {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
-     as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
-     page always said so; this one contradicted it. #}
-  {# The one thing the reader must get right and cannot undo. Pressing Anmelden fires the browser's
-     own permission prompt, and Chrome treats a denial as permanent - a wrong tap costs a trip into
-     browser settings. Nothing on the page used to mention it, and the only explanation lived in an
-     error message shown *after* the mistake. #}
-
-  {# A <p>, not a <span>. As spans these two ran together into one six-line block, which put the
-     bold permission sentence - the only thing on this page a reader cannot undo - in the middle of
-     a paragraph instead of standing alone, undoing most of the benefit of moving it here.
-
-     "Bestätigen", not "Testbenachrichtigung": what arrives is titled "Regenwarnung bestätigen" with
-     the body "Zum Aktivieren antippen", and /confirm then says "wir bestätigen deine Anmeldung", so
-     the page was the only place calling it a test. Three names for the one notification the reader
-     is actively hunting for. #}
-  <p class="for-push" style="margin:.6rem 0 0">Du bekommst dann eine Benachrichtigung zum
-  Bestätigen – tippe sie an, dann bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
-  {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
-  Nachrichten.</p>
-
-  {# The one thing a web push subscriber has to understand, said before they sign up rather than
-     discovered afterwards. The subscription and the settings session both live in this browser's
-     site data, and Chrome clears them together: "Cookies und andere Websitedaten" unregisters the
-     service worker, which deactivates the push subscription. There is no recovery path - no
-     address to send a link to, nothing to type - so the honest thing is to say so here. D-47. #}
-  <p class="for-push" style="margin:.6rem 0 0">Die Anmeldung lebt in diesem Browser. Wenn du die
-  Websitedaten löschst oder Benachrichtigungen blockierst, endet sie – dann musst du dich neu
-  {# Not "dabei", which says: at that moment. We do not learn the subscription is gone until the
-     next send fails, and if nothing is sent the liveness ping goes after `webpush_liveness_days`
-     with a weekly check behind it - which privacy.html documents honestly as "es kann also einige
-     Tage länger dauern". Two pages must not disagree about a deletion promise. #}
-  anmelden. Deinen Standort löschen wir danach von selbst.</p>
-  <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung wird
-  die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine
-  weiteren Mails.</span>
+<div id="map"></div>
+<div class="controls" id="radar-controls" hidden>
+  <button type="button" id="play" aria-label="Abspielen">▶</button>
+  <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
+         disabled>
 </div>
+<p class="stamp" id="frame-stamp"></p>
 
-  {# Both wordings are rendered and one is hidden, rather than written by script: the consent
-     text is the thing being agreed to, so it belongs where it can be read in the template and
-     in the page source, not assembled at runtime. Which one was shown follows from the
-     subscriber's stored `channel` plus `consent_text_version` (DESIGN.md §13). #}
-  <div class="consent">
-    <input type="checkbox" id="consent" required>
-    <label for="consent" style="font-weight:400;margin:0">
-      <span class="for-push">Ich bin einverstanden, dass die Push-Adresse dieses Browsers und
-      mein Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar
-      in den Einstellungen.</span>
-      <span class="for-email" hidden>Ich bin einverstanden, dass meine E-Mail-Adresse und mein
-      Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über
-      den Abmeldelink.</span>
-    </label>
-  </div>
+{# Always on the page, in both states and whether or not anyone is signed up: seeing what the
+   last two days looked like is how you decide whether this service is worth having. #}
+<nav class="range" id="range" aria-label="Zeitraum" hidden>
+  <span>Zeitraum:</span>
+  {% for choice in choices %}
+  <button type="button" data-hours="{{ choice }}" aria-pressed="false">{{ choice }} h</button>
+  {% endfor %}
+</nav>
 
+{# State B: this browser already holds a push subscription made with the key we sign with.
 
-  {# Immediately above the button, and not inside #what-happens with the rest.
+   Deliberately the only thing here. An earlier sketch offered a location map and an unsubscribe
+   button too, which is the settings page rebuilt in a second place - two screens that can
+   disagree about what someone's subscription says. The navigation already points at the real
+   one. #}
+<p class="lede" id="already-subscribed" hidden>Dieser Browser ist für Regenwarnungen angemeldet.
+  Ort, Empfindlichkeit und Abmeldung findest du in den <a href="/manage">Einstellungen</a>.</p>
 
-     This is the one instruction on the page a reader cannot undo without a trip into browser
-     settings, so it has to be on screen at the moment they press. Measured at 390x844: with the
-     button in view, everything from #what-happens up there is scrolled off - moving that block above
-     the consent checkbox (right, in itself: you should know what you are agreeing to before you
-     agree) pushed the button down far enough that this sentence went from fully visible to 0 pixels
-     visible. Two different jobs, so two different positions: context before the checkbox, the
-     un-undoable warning against the button. #}
-  <p class="note for-push" id="permission-prompt-note" style="margin:0 0 .8rem"><strong>Beim
-  Anmelden fragt dein Browser, ob wir dir Benachrichtigungen schicken dürfen – bitte auf „Zulassen“
-  tippen.</strong> Ohne das können wir dich nicht warnen.</p>
-  <button type="submit">Anmelden</button>
-</form>
-<p id="result" role="status"></p>
+{# State A: nobody is signed up on this browser.
 
+   Hidden until the check above has run, so a returning subscriber does not get a flash of a
+   signup form on every visit. `reveal()` in signup.js removes this unconditionally on every
+   path, including its failure paths and a timeout, because a page that decided nothing must
+   fall back to offering the subscription rather than to a blank page. #}
+<section id="signup-section" hidden>
+  {# Below the map now. It is the pitch, and the map makes it better than the text does. #}
+  <p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
+  Vorhersage bis zwei Stunden voraus. Kostenlos, ohne Konto, ohne App.</p>
 
+  {# Above the channel choice, because it explains that choice.
+
+     `announceCapability()` moves the radio from push to E-Mail when this browser cannot do push,
+     and this sentence is the only thing that says why. Inside #what-happens it rendered below the
+     fold on a 390x844 phone - so the reader's first screen was an E-Mail radio they had not
+     selected and an address box, with no reason given anywhere in view. A note that changes the
+     premise of a control has to precede the control.
+
+     No `for-push` class, deliberately. It had one, and `syncChannelFields()` sets `hidden` on
+     every `.for-push` node whenever the channel changes - so the note was force-shown (empty) on
+     a capable browser and force-hidden on the blocked one it exists for, i.e. wrong in both
+     directions. Its visibility is owned by `announceCapability()` alone. #}
+  <p class="note" id="capability-note" hidden></p>
+
+  <form id="signup">
+    {# With no mail provider configured the API refuses `channel=email`, so the choice is not a
+       choice. The fieldset is hidden rather than dropped: the push radio stays checked and in the
+       DOM, which is what `chosenChannel()` and `syncChannelFields()` read, and the page does not
+       ask a question whose second answer would be rejected. #}
+    <fieldset class="channel" {% if not settings.email_channel_enabled %}hidden{% endif %}>
+      <legend>Wie sollen wir dich warnen?</legend>
+      <label><input type="radio" name="channel" value="webpush" checked> Push auf diesen Browser</label>
+      {% if settings.email_channel_enabled %}
+      <label><input type="radio" name="channel" value="email"> E-Mail</label>
+      {% endif %}
+    </fieldset>
+
+    {# Hidden for push, and not merely ignored: the request is refused if an address arrives on
+       the webpush channel, so leaving it fillable would let someone believe it had been stored. #}
+    <div id="email-field" hidden>
+      <label for="email">E-Mail</label>
+      <input type="email" id="email" name="email" autocomplete="email"
+             placeholder="du@example.org">
+    </div>
+
+    {# The map these point at is at the top of the page, so they say so. They live inside the
+       form rather than under the map because in state B there is no picking to do, and a hint
+       telling a subscriber to tap the map would be an instruction to change something this page
+       deliberately cannot change. #}
+    <label id="where-label">Wo soll gewarnt werden?</label>
+    <p class="hint" id="map-hint">Tippe oben in die Karte, um deinen Ort zu setzen.</p>
+
+    {# Only shown when Leaflet fails to load. Asking for decimal degrees is not something to do to
+       anyone who has a map, but a blocked CDN must not mean the form cannot be filled in at all. #}
+    <div class="row" id="coord-fallback" hidden>
+      <div>
+        <label for="lat">Breite</label>
+        {# step="any": a coordinate pasted from a mapping site has six or seven decimals, and
+           step="0.0001" made the browser reject it as invalid. Precision is reduced on the server,
+           where it is also enforced - it is not the visitor's job to round. #}
+        <input type="number" id="lat" name="lat" step="any" placeholder="50.1109">
+      </div>
+      <div>
+        <label for="lon">Länge</label>
+        <input type="number" id="lon" name="lon" step="any" placeholder="8.6821">
+      </div>
+      {# The map carries a locate button of its own, in the corner where a map's controls live.
+         This one only appears when there is no map to put it on. #}
+      <button type="button" class="secondary" id="locate">Meinen Standort verwenden</button>
+      <p id="locate-status" class="hint" role="status"></p>
+    </div>
+
+    {# Order here is: what will happen -> I agree -> Anmelden.
+
+       It began below the button entirely: measured on a 390x844 phone the note sat at y=859 while
+       the button was at y=798, so every word of it - the permission warning and the "clearing
+       browser data ends the subscription" sentence D-47 requires "before anyone signs up" - was
+       off-screen at the moment of the decision. Moving it above the button fixed that and left it
+       below the consent checkbox, which still asked the reader to agree to something before
+       explaining what it sets in motion. Now it precedes both. #}
+    <div class="note" id="what-happens">
+      {# "Ohne Bestätigung wird nichts gespeichert" was not true: a signup is stored straight away
+         as `pending`, and deleted after unconfirmed_purge_hours if nobody confirms. The privacy
+         page always said so; this one contradicted it. #}
+
+      {# A <p>, not a <span>. As spans these two ran together into one six-line block, which put
+         the bold permission sentence - the only thing on this page a reader cannot undo - in the
+         middle of a paragraph instead of standing alone.
+
+         "Bestätigen", not "Testbenachrichtigung": what arrives is titled "Regenwarnung bestätigen"
+         with the body "Zum Aktivieren antippen", and /confirm then says "wir bestätigen deine
+         Anmeldung", so the page was the only place calling it a test. #}
+      <p class="for-push" style="margin:.6rem 0 0">Du bekommst dann eine Benachrichtigung zum
+      Bestätigen – tippe sie an, dann bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
+      {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
+      Nachrichten.</p>
+
+      {# The one thing a web push subscriber has to understand, said before they sign up rather
+         than discovered afterwards. The subscription and the settings session both live in this
+         browser's site data, and Chrome clears them together: "Cookies und andere Websitedaten"
+         unregisters the service worker, which deactivates the push subscription. There is no
+         recovery path - no address to send a link to, nothing to type - so the honest thing is to
+         say so here. D-47. #}
+      <p class="for-push" style="margin:.6rem 0 0">Die Anmeldung lebt in diesem Browser. Wenn du
+      die Websitedaten löschst oder Benachrichtigungen blockierst, endet sie – dann musst du dich
+      neu
+      {# Not "dabei", which says: at that moment. We do not learn the subscription is gone until
+         the next send fails, and if nothing is sent the liveness ping goes after
+         `webpush_liveness_days` with a weekly check behind it - which privacy.html documents
+         honestly as "es kann also einige Tage länger dauern". Two pages must not disagree about a
+         deletion promise. #}
+      anmelden. Deinen Standort löschen wir danach von selbst.</p>
+      <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung
+      wird die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen
+      keine weiteren Mails.</span>
+    </div>
+
+    {# Both wordings are rendered and one is hidden, rather than written by script: the consent
+       text is the thing being agreed to, so it belongs where it can be read in the template and
+       in the page source, not assembled at runtime. Which one was shown follows from the
+       subscriber's stored `channel` plus `consent_text_version` (DESIGN.md §13). #}
+    <div class="consent">
+      <input type="checkbox" id="consent" required>
+      <label for="consent" style="font-weight:400;margin:0">
+        <span class="for-push">Ich bin einverstanden, dass die Push-Adresse dieses Browsers und
+        mein Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar
+        in den Einstellungen.</span>
+        <span class="for-email" hidden>Ich bin einverstanden, dass meine E-Mail-Adresse und mein
+        Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über
+        den Abmeldelink.</span>
+      </label>
+    </div>
+
+    {# Immediately above the button, and not inside #what-happens with the rest.
+
+       This is the one instruction on the page a reader cannot undo without a trip into browser
+       settings, so it has to be on screen at the moment they press. Measured at 390x844: with the
+       button in view, everything from #what-happens up there is scrolled off - moving that block
+       above the consent checkbox (right, in itself: you should know what you are agreeing to
+       before you agree) pushed the button down far enough that this sentence went from fully
+       visible to 0 pixels visible. Two different jobs, so two different positions: context before
+       the checkbox, the un-undoable warning against the button. #}
+    <p class="note for-push" id="permission-prompt-note" style="margin:0 0 .8rem"><strong>Beim
+    Anmelden fragt dein Browser, ob wir dir Benachrichtigungen schicken dürfen – bitte auf
+    „Zulassen“ tippen.</strong> Ohne das können wir dich nicht warnen.</p>
+    <button type="submit">Anmelden</button>
+  </form>
+  <p id="result" role="status"></p>
+</section>
 
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <script nonce="{{ request.state.csp_nonce }}" src="/static/vendor/leaflet/leaflet.js"></script>

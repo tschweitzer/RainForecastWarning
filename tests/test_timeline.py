@@ -190,7 +190,7 @@ def test_every_inline_script_carries_the_csp_nonce(client):
     a header exists."""
     import re
 
-    for path in ("/", "/map"):
+    for path in ("/", "/manage"):
         page = client.get(path)
         assert page.status_code == 200, path
         policy = page.headers["content-security-policy"]
@@ -305,8 +305,9 @@ def test_metrics_report_no_cycles_distinctly(db, settings):
 def map_js(client) -> str:
     """The behaviour the three map-bearing pages share.
 
-    It used to be inline in `/map`, and was duplicated in `/manage`; putting the picker and the
-    timeline on the signup page too would have made three copies, so it moved to one module.
+    It used to be inline in the radar page, and was duplicated in `/manage`; putting the picker
+    and the timeline on the signup page too would have made three copies, so it moved to one
+    module.
     These tests follow it rather than asserting against whichever page happened to hold it.
     """
     return client.get("/static/radar.js").text
@@ -318,7 +319,7 @@ def test_the_map_borrows_no_tiles_by_default(client):
     It blocks them, too - which is how this was found. Shipping a default that leans on it is
     taking something that was not offered, so there is no default provider at all.
     """
-    assert "openstreetmap.org" not in client.get("/map").text
+    assert "openstreetmap.org" not in client.get("/").text
     body = map_js(client)
     assert "openstreetmap.org" not in body
     assert "L.tileLayer" in body  # still there, for whoever configures one
@@ -329,7 +330,7 @@ def test_the_map_borrows_no_tiles_by_default(client):
 
 def test_csp_allows_only_the_configured_image_origin(client):
     """The policy follows the provider in use, so it can never be wider than the provider."""
-    policy = client.get("/map").headers["Content-Security-Policy"]
+    policy = client.get("/").headers["Content-Security-Policy"]
     img = next(d for d in policy.split(";") if d.strip().startswith("img-src"))
     assert "openstreetmap" not in img
     assert "https:" not in img.replace("https://", "")  # no blanket https: source
@@ -360,7 +361,7 @@ def test_the_csp_allows_the_bucket_the_overlays_are_actually_served_from(db):
     )
     client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
 
-    policy = client.get("/map").headers["Content-Security-Policy"]
+    policy = client.get("/").headers["Content-Security-Policy"]
     img = next(d for d in policy.split(";") if d.strip().startswith("img-src"))
     assert "https://storage.googleapis.com" in img, img
     # Still the origin only - a policy that allowed the whole of storage.googleapis.com's
@@ -408,7 +409,7 @@ def test_tiles_identify_the_page_to_the_provider(client, monkeypatch):
 def test_the_page_still_sends_no_referrer_by_default(client):
     """The override is per element. Everything else on the site keeps the strict header."""
     assert client.get("/").headers["Referrer-Policy"] == "no-referrer"
-    assert client.get("/map").headers["Referrer-Policy"] == "no-referrer"
+    assert client.get("/manage").headers["Referrer-Policy"] == "no-referrer"
 
 
 def test_playback_is_slow_enough_to_read(client):
@@ -506,11 +507,18 @@ def test_a_nonsense_window_does_not_empty_the_map(db, tmp_path):
             assert observed, f"past_hours={asked} produced an empty map"
 
 
-def test_the_heading_states_the_window_actually_shown(client):
-    """It said "12 Stunden" while serving 48, because the number was typed into the template."""
-    assert "Die letzten 12 Stunden" in client.get("/map").text
-    assert "Die letzten 6 Stunden" in client.get("/map?hours=6").text
-    assert "Die letzten 48 Stunden" in client.get("/map?hours=48").text
+def test_the_page_states_the_window_it_is_actually_serving(client):
+    """It said "12 Stunden" while serving 48, because the number was typed into the template.
+
+    The sentence it said that in is gone. With the range now remembered per browser, a
+    server-rendered "die letzten 12 Stunden" would be wrong for every reader whose stored
+    preference differs from the default - the same class of lie, told to more people. What the
+    server renders instead is the resolved window itself, and the script takes the slider from
+    that attribute, so the two cannot disagree.
+    """
+    assert 'data-window-hours="12"' in client.get("/").text
+    assert 'data-window-hours="6"' in client.get("/?hours=6").text
+    assert 'data-window-hours="48"' in client.get("/?hours=48").text
 
 
 def test_the_window_defaults_to_twelve_hours_not_the_maximum(client):
@@ -521,19 +529,29 @@ def test_the_window_defaults_to_twelve_hours_not_the_maximum(client):
     assert s.timeline_default_hours == 12
     assert s.timeline_past_hours == 48  # still the ceiling
 
+    assert 'data-window-hours="12"' in client.get("/").text
     # The page hands the window to the shared timeline; the module builds the query from it.
-    assert "pastHours: 12" in client.get("/map").text
     assert "past_hours=" in map_js(client)
 
 
-def test_the_picker_pages_show_the_same_window_without_offering_to_change_it(client):
-    """The signup and settings maps carry the loop so you can see what the weather is doing
-    where you are about to put the pin - not so it can be tuned. That is what /map is for."""
-    for path in ("/", "/manage"):
-        body = page_source(client, path)
-        assert "pastHours: 12" in body
-        # No range picker: the choice belongs on the page built around it.
-        assert "/map?hours=" not in body
+def test_a_shared_link_is_marked_so_it_can_outrank_a_stored_preference(client):
+    """Someone sending "look at the last 48 hours" is not asking about your settings.
+
+    Once both are a bare number the script cannot tell a `?hours=` the reader was given from the
+    server's own default, so the server says which it was. A *rubbish* parameter must not count as
+    a deliberate choice, or one typo in a shared link would silently override the stored
+    preference of everyone who opened it.
+    """
+    assert 'data-window-pinned="false"' in client.get("/").text
+    assert 'data-window-pinned="true"' in client.get("/?hours=6").text
+    assert 'data-window-pinned="false"' in client.get("/?hours=abc").text
+
+
+def test_the_settings_map_shows_the_window_without_offering_to_change_it(client):
+    """The settings map carries the loop so you can see what the weather is doing where you are
+    about to put the pin - not so it can be tuned. The start page is where that belongs."""
+    assert "pastHours: 12" in page_source(client, "/manage")
+    assert 'id="range"' not in client.get("/manage").text
 
 
 def test_a_rubbish_hours_parameter_still_gives_you_a_map(client):
@@ -541,46 +559,73 @@ def test_a_rubbish_hours_parameter_still_gives_you_a_map(client):
 
     There is a perfectly good default to fall back to, and nothing here worth an error page.
     """
-    response = client.get("/map?hours=abc")
+    response = client.get("/?hours=abc")
     assert response.status_code == 200
-    assert "Die letzten 12 Stunden" in response.text
+    assert 'data-window-hours="12"' in response.text
 
 
 def test_an_out_of_range_window_is_clamped_not_refused(client):
-    assert "Die letzten 48 Stunden" in client.get("/map?hours=999").text
-    # and the German stays correct at the bottom of the range
-    assert "Die letzte Stunde" in client.get("/map?hours=-3").text
+    assert 'data-window-hours="48"' in client.get("/?hours=999").text
+    # and it stays sane at the bottom of the range
+    assert 'data-window-hours="1"' in client.get("/?hours=-3").text
 
 
-def test_the_range_picker_marks_the_current_choice(client):
-    body = client.get("/map?hours=6").text
-    assert '<strong aria-current="true">6 h</strong>' in body
-    assert "/map?hours=12" in body  # the others are plain links, shareable and JS-free
+def test_the_range_picker_offers_every_choice_and_marks_none_of_them(client):
+    """One button per choice, and the server marks no winner.
+
+    It cannot: the reader's stored preference lives in their browser, so a server-rendered
+    `aria-pressed="true"` would be wrong for anyone who has one - the page would claim 12 h while
+    loading 24 h. The script marks the button it actually loaded.
+    """
+    body = client.get("/").text
+    # The nav alone. Asserting against the whole document matched the stylesheet's own
+    # `.range button[aria-pressed="true"]` rule, so the test passed on its own CSS.
+    nav = body[body.index('<nav class="range"') : body.index("</nav>")]
+    for choice in (3, 6, 12, 24, 48):
+        assert f'data-hours="{choice}"' in nav
+    assert 'aria-pressed="true"' not in nav
 
 
 # --- map page layout -----------------------------------------------------------------------------
 
 
-def test_the_window_sentence_sits_with_the_range_picker(client):
-    """It describes the picker, so it belongs next to it - not above the map, where it was
-    one more thing pushing the slider off a phone screen."""
-    page = client.get("/map").text
-    legend = page.index('id="legend"')
-    sentence = page.index("Die letzten 12 Stunden")
-    picker = page.index('class="range"')
-    assert legend < sentence < picker
+def test_the_map_and_its_controls_come_before_the_signup_form(client):
+    """The order the merged page exists for.
+
+    `/` used to be a signup form with a small map in it, and the radar lived at `/map`. Now the
+    radar is the top of the page and the form is under it, so a returning visitor sees weather
+    rather than a form asking them to do again what they have already done.
+    """
+    page = client.get("/").text
+    positions = [
+        page.index('id="map"'),
+        page.index('id="radar-controls"'),
+        page.index('id="frame-stamp"'),
+        page.index('id="range"'),
+        page.index('id="signup-section"'),
+    ]
+    assert positions == sorted(positions), "the map, then its controls, then the form"
+
+
+def test_the_legend_is_on_the_map_rather_than_between_it_and_the_form(client):
+    """A strip under the map is a row every visitor scrolls past on every visit, and on this page
+    it would sit between the radar and the signup form. As a collapsed control it costs nothing
+    until someone wants it."""
+    assert "RainRadar.legendControl()" in page_source(client)
+    # The old radar page had a bare `<div id="legend">` in its markup. The control builds its own.
+    assert '<div id="legend"' not in client.get("/").text
 
 
 def test_the_map_leaves_room_for_the_slider(client):
-    """The slider is the control people come to this page for.
+    """The slider is a control people come to this page for.
 
     Sized in svh rather than vh: on a phone `vh` is the viewport with the browser chrome
-    *hidden*, so a map sized in vh is taller than what is on screen. Measured in Chromium at
-    375x553 the slider was below the fold before this and is not now.
+    *hidden*, so a map sized in vh is taller than what is on screen. Shorter than the old radar
+    page, because this one has a form under it.
     """
-    page = client.get("/map").text
-    assert "52svh" in page
-    assert "55vh" in page, "the vh fallback must stay for browsers without svh"
+    page = client.get("/").text
+    assert "45svh" in page
+    assert "48vh" in page, "the vh fallback must stay for browsers without svh"
     # No inline height on the element, or it would win over the stylesheet.
     assert 'id="map" style=' not in page
 
@@ -588,7 +633,7 @@ def test_the_map_leaves_room_for_the_slider(client):
 def test_the_page_does_not_explain_the_slider(client):
     """Dropped: a slider does not need to be told to be a slider, and the line cost a row of
     vertical space on the screen where space was the problem."""
-    assert "Ziehen oder abspielen" not in client.get("/map").text
+    assert "Ziehen oder abspielen" not in client.get("/").text
 
 
 # --- a warning's link centres the map on the place it warned about --------------------------
@@ -644,7 +689,7 @@ def test_the_warning_carries_a_reference_and_never_the_coordinates(db, settings)
             "peak_mm_5min": 0.4,
         },
     )
-    assert "/map#l=" in message.click_url
+    assert "/#l=" in message.click_url
     for leaked in ("48.15", "11.55", "lat", "lon"):
         assert leaked not in message.click_url, f"{leaked} is in the link"
         assert leaked not in message.text, f"{leaked} is in the body"
@@ -692,7 +737,7 @@ def test_a_token_minted_for_something_else_does_not_locate_anyone(client, db, se
 def test_the_map_reads_the_reference_from_the_fragment_and_erases_it(client):
     """A fragment never reaches the server, so the reference cannot land in a request log
     (D-26) - and it is cleared from the address bar once spent."""
-    body = client.get("/map").text
+    body = page_source(client)
     assert "hash.indexOf('#l=') !== 0" in body
     assert "history.replaceState" in body
     assert "'/api/v1/locate'" in body

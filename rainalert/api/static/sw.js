@@ -184,8 +184,8 @@ function focusOrOpen(url) {
   /* Reuse a tab that is already on the site rather than opening a third copy of it - but only when
      doing so actually loads the target.
      
-     The trap: map.html reads its `#l=` token in a load-time script and then replaceState's the hash
-     away, so an open tab's URL is plain `/map`. Navigating that tab to `/map#l=<new token>` differs
+     The trap: signup.js reads its `#l=` token in a load-time script and then replaceState's the
+     hash away, so an open tab's URL is plain `/`. Navigating that tab to `/#l=<new token>` differs
      only in the fragment, which is a *same-document* navigation - no script re-runs, the new token
      is never read, and the reader taps their second warning and gets the country view or the stale
      view from the first one. Verified in Chromium: one locate call for two navigations.
@@ -202,12 +202,12 @@ function focusOrOpen(url) {
         }
         /* No same-path special case any more, and this is the interesting part.
         
-           There used to be one: map.html read its `#l=` token once at load and replaceState'd the
-           hash away, so navigating an open `/map` tab to `/map#l=<new token>` was a same-document
+           There used to be one: the page read its `#l=` token once at load and replaceState'd the
+           hash away, so navigating an open `/` tab to `/#l=<new token>` was a same-document
            navigation - no script re-ran, the token was never read, and the reader got the stale
            view. The branch here broke out of the loop so `openWindow` ran instead.
         
-           map.html now listens for `hashchange` and re-reads the token, so `navigate()` works. With
+           signup.js now listens for `hashchange` and re-reads the token, so `navigate()` works. With
            both halves in place the branch had become not just redundant but harmful: it matched on
            *every* warning after the first, so each one opened another tab - warning 3 of an
            afternoon shower left three copies of the map open. Verified in node: two navigations to

@@ -98,7 +98,7 @@ def message_for(browser, **kwargs):
         "subject": "Regenwarnung",
         "text": "In etwa 25 Minuten faengt es an zu regnen.",
         "channel": "webpush",
-        "click_url": "https://rain.example.invalid/map",
+        "click_url": "https://rain.example.invalid/#l=tok",
         "push_p256dh": browser["p256dh"],
         "push_auth": browser["auth"],
     }
@@ -142,7 +142,7 @@ def test_the_browser_can_decrypt_what_we_send(vapid, browser):
     payload = json.loads(plaintext)
     assert payload["title"] == "Regenwarnung"
     assert payload["body"].startswith("In etwa 25 Minuten")
-    assert payload["url"] == "https://rain.example.invalid/map"
+    assert payload["url"] == "https://rain.example.invalid/#l=tok"
     assert [a["title"] for a in payload["actions"]] == ["Einstellungen"]
 
 
@@ -440,8 +440,8 @@ def test_the_service_worker_actually_passes_the_actions_to_the_notification(brow
 def test_the_tab_reuse_fix_has_both_of_its_halves(browser):
     """Two files have to agree for a tapped warning to land on the right place.
 
-    `map.html` reads its `#l=` token on load and erases it, so a tab left from an earlier warning
-    sits at plain `/map`; navigating it to `/map#l=<new token>` is a same-document navigation and no
+    `signup.js` reads its `#l=` token on load and erases it, so a tab left from an earlier warning
+    sits at plain `/`; navigating it to `/#l=<new token>` is a same-document navigation and no
     script re-runs. The fix is the `hashchange` listener on the page - and once that exists, the
     worker must NOT also route around the problem by opening a new window, which is what it used to
     do and which opened one more tab per warning.
@@ -449,11 +449,14 @@ def test_the_tab_reuse_fix_has_both_of_its_halves(browser):
     The worker's half is tested by running it (`tests/js/sw_test.mjs`, "a second warning does not
     open a second tab"). This asserts the page's half, which that harness cannot see, and it is a
     source check because the alternative is a full browser with a registered worker.
+
+    It followed the code: this lived in `map.html` until the radar and the signup form became one
+    page, and that template was deleted.
     """
     page = (
-        Path(__file__).resolve().parents[1] / "rainalert" / "api" / "templates" / "map.html"
+        Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "signup.js"
     ).read_text(encoding="utf-8")
-    assert "hashchange" in page, "map.html must re-read the token when the fragment changes"
+    assert "hashchange" in page, "signup.js must re-read the token when the fragment changes"
     # And the worker must not have grown the window-opening shortcut back.
     focus = SW.read_text(encoding="utf-8").split("function focusOrOpen(")[1]
     assert "break;" not in focus, (
@@ -943,7 +946,10 @@ def test_the_page_does_not_offer_push_without_a_vapid_key(db, settings):
     assert re.search(r"vapidKey: d\.vapidKey\b", script), (
         "the config has to come off the body's dataset"
     )
-    assert re.search(r"var VAPID_KEY = CONFIG\.vapidKey\b", script), (
+    # The declaration keyword is deliberately not matched here. It is `const`, and must stay
+    # `const` - but that is `test_the_pages_module_constants_are_const_not_var`'s job, and pinning
+    # it in two places means one change breaks two tests for one reason.
+    assert re.search(r"VAPID_KEY = CONFIG\.vapidKey\b", script), (
         "and the script has to read that config"
     )
 

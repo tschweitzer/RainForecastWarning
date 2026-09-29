@@ -79,7 +79,8 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-19 | Frontend: server-rendered HTML, no build step; Leaflet for the map, basemap tiles from a configured provider or none (§11.1) | Non-technical friends must be able to subscribe |
 | D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
-| D-22 | The slider spans **−12 h … +2 h by default, −48 h … +2 h at most** — the ceiling is everything DWD retains (measured: 47 h 55 min, `DWD_RV_FORMAT.md` §3). Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast. Revised twice: to −48 h on 2026-09-18 because a shorter window discards history that is free to have, then split into a default and a ceiling on 2026-09-19 because 577 slider positions is a poor thing to land on. `/map?hours=N` and the picker at the foot of the page move between them; the heading is rendered from the resolved window, having once said 12 h while serving 48 |
+| D-48 | **One page.** The radar loop and the signup form share `/`; `/map` is deleted, not redirected. A visitor who had already subscribed still landed on a page whose whole purpose was to offer them a subscription, and the radar — the thing worth coming back for — was a separate address they had to know existed | The page asks the browser whether it holds a push subscription made with our current key (the same question `/manage` asks, same `sameKey` bias) and shows one of two things below the map: the signup form, or one line pointing at Einstellungen. Deliberately *only* that line — no location map, no unsubscribe — because those are the settings page rebuilt in a second place, and two screens that can disagree about a subscription are worse than one trip. The check is browser-side because no server endpoint can answer it without a session, and adding one would let anyone test whether a given push endpoint is registered here. It therefore answers "this browser believes it is subscribed", not "the server has a confirmed row": an abandoned signup leaves a live subscription behind, so the line says where to go rather than asserting more than it knows. Fail-open in three places — catch, 1.5 s timeout, no registration — because the failure that matters is a visitor who cannot sign up |
+| D-22 | The slider spans **−12 h … +2 h by default, −48 h … +2 h at most** — the ceiling is everything DWD retains (measured: 47 h 55 min, `DWD_RV_FORMAT.md` §3). Past frames are the **t+0 analysis frame of each past cycle**; future frames are leads 1…24 of the **latest** cycle | Still one DWD product (RV); the past is what the radar saw, not a re-forecast. Revised twice: to −48 h on 2026-09-18 because a shorter window discards history that is free to have, then split into a default and a ceiling on 2026-09-19 because 577 slider positions is a poor thing to land on. `/?hours=N` and the picker under the map move between them, and the choice is remembered per browser in `localStorage`; the server renders the resolved window into `data-window-hours` and the script takes the slider from that, so the two cannot disagree — the heading that once said 12 h while serving 48 is gone, because a server-rendered sentence would now be wrong for every reader whose stored preference differs from the default |
 | D-23 | `evaluations` is a **rolling 48 h debug log** with a single TTL. The permanent per-subscriber record is `rain_events` + `notifications`, which are only written when something happens anyway | §8.1 — an indefinite row-per-subscriber-per-cycle series outgrows the entire national radar archive at ~13 500 subscribers, and ~99 % of it says "nothing happened" |
 | D-24 | Production database is **Cloud SQL `db-f1-micro`, `europe-west3`**; dev and CI use Neon free or a local Postgres | §6.3 — Neon's free CU-hour allowance does not survive a 5-minute cadence, and it would add a second US processor for email + home coordinates |
 | D-25 | The settings page is reached by a **magic link**: one-use, 15 minutes, redeemed for a signed session cookie lasting 30 minutes | Answers the question F-16 left open. The API token cannot be the way in - it is shown once and is normally lost - and a permanent link in every alert would be a bearer credential to someone's home coordinates living in an inbox. A link that expires and is spent on first use is neither |
@@ -724,7 +725,7 @@ All endpoints return RFC 7807 problem details on error.
 | `DELETE` | `/subscriptions/me` | api | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
 | `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
 | `GET` | `/overlays/timeline?past_hours=` | none | The full slider manifest, default `TIMELINE_DEFAULT_HOURS` (12), capped at `TIMELINE_PAST_HOURS` (48), floored at 1: `{now, latest_cycle, bounds:[[s,w],[n,e]], width, height, colorscale:[…], attribution, gaps:[…], frames:[{offset_minutes, valid_time, kind:"observed"｜"forecast", source_cycle, url}]}`. `offset_minutes` is negative for the past, ordered ascending. Cache-Control 60 s. |
-| `GET` | `/map#l=…` | none (the reference is resolved by `POST /locate`) | The radar. With a warning's reference in the fragment it opens pinned on the warned location at zoom 11; without one, or once it has expired, on the country view (D-38) |
+| `GET` | `/#l=…` | none (the reference is resolved by `POST /locate`) | The start page, which is the radar. With a warning's reference in the fragment it opens pinned on the warned location at zoom 11; without one, or once it has expired, on the country view (D-38) |
 | `GET` | `/unsubscribe#t=…` | unsubscribe token | Renders a button and changes nothing; the `POST` behind it deletes. The `List-Unsubscribe` header carries this same link (D-33). |
 | `GET` | `/healthz`, `/readyz` | none | Liveness / readiness. **Readiness = database reachable *and* its schema at the migration this code expects**, because new code on an old schema connects fine and then 500s on the first request touching what the migration added. `503` names the revision it found, the one it wanted, and the command. On Cloud Run that also means a revision deployed without its migration never takes traffic. |
 | `GET` | `/metrics` | internal | Prometheus-format metrics (§15). |
@@ -961,7 +962,7 @@ same rain by construction, rather than because two lists were edited together.
 | 6.00 | 72 | extremer Starkregen | violet | 0.97 |
 
 **One opacity, not two.** The alpha above is what you see. It used to be multiplied again by the
-Leaflet layer's own opacity — 0.75 on `/map`, 0.6 on `/manage` — which put the lightest band at
+Leaflet layer's own opacity — 0.75 on the radar, 0.6 on `/manage` — which put the lightest band at
 an effective 0.38 and 0.31: pale blue at a third strength over a basemap, close to invisible, and
 a palette in which no number was the number on screen. `LAYER_OPACITY` is 1.0 and the templates
 read it from the server, so there is one place that decides how strong rain looks.
@@ -1037,12 +1038,12 @@ Neuhausen" and "my street". `maxZoom` is 18 on both maps; the radar overlay simp
 handler both write the coordinate
 fields, rounded to the four decimals the server keeps so the field shows what will be stored.
 The radius is a circle that resizes as the number changes. The current radar frame (t+0 only -
-this page is for choosing a spot, `/map` is for watching weather) is drawn underneath everything
+this page is for choosing a spot, the radar loop is for watching weather) is drawn underneath everything
 else, because an overlay on top hides the thing being positioned.
 
 Picking a spot and showing rain on it are separate capabilities: with no `OVERLAY_DIR` the map
 still works, it just has no radar on it. Clearing `MAP_TILE_URL` removes the basemap too, and the
-fallback is the same graticule-and-cities used by `/map`.
+fallback is the same graticule-and-cities used by the radar.
 
 **Saving** is two requests, not one, because a move resets the alert state and a rule change does
 not (D-29). The rule goes first, so a refused rule does not leave the location already moved.
@@ -1104,7 +1105,7 @@ A `timeout` is set for the same family of reasons: with none, the callback may s
 arrive - a headless browser with no location provider does exactly that - and the button stays
 disabled forever, which is the original silent failure wearing a different hat.
 
-On `/map` this is an on-map control in the top-left under the zoom buttons, styled as a
+On the radar this is an on-map control in the top-left under the zoom buttons, styled as a
 `leaflet-bar` so it looks like what it is. It draws the position as a dot **and an accuracy
 circle**: at 1 km radar scale, "here" and "somewhere within 2 km" look identical, and only one of
 them is true.
@@ -1128,7 +1129,7 @@ Alert mail:
 - Headers: `List-Unsubscribe` (the same fragment link as in the body) and
   `Auto-Submitted: auto-generated`. **Not** `List-Unsubscribe-Post`: see D-33 for why one-click
   was removed rather than fixed, and Q-13 for what bringing it back would take.
-- Tap target (push only, `click_url`): `/map#l=<locate token>` — the radar, opened on the place
+- Tap target (push only, `click_url`): `/#l=<locate token>` — the radar, opened on the place
   the warning was about (D-38). The coordinates are **not** in the link: a warning stays in a
   notification list for good, and a screenshot of one carrying decimal degrees would say more
   than the message does, which names a time and an intensity but never a place. The reference
@@ -1483,7 +1484,7 @@ silent, which is the case that matters — rain already falling tells us nothing
 subscriber has just walked into it.
 
 **M5 — map UI.** 🟡 *code complete 2026-09-17*
-Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, re-render job, `/map` page with
+Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, re-render job, the radar page with
 the slider, staleness banner, gap rendering, legend and attribution. 164 tests.
 Verified against real data: the rendered overlay agrees with the source grid at six German cities
 (6/6), and the manifest labels observed and forecast frames, reports gaps, and flags staleness.
