@@ -299,6 +299,43 @@ the signup succeeded so their browser showed the site as subscribed, and the pag
 input that was already correct. Nothing was logged. If a browser you have not personally tested is
 reported as broken, look here first.
 
+### Tapping a notification does nothing at all
+
+The reader taps a notification and the page they are already looking at does not change. The tell,
+which is what makes this diagnosable at all: navigating somewhere else first and *then* tapping the
+notification works.
+
+This is one bug with one cause, and it has now appeared on three pages. Every token this service
+issues rides in the URL **fragment** (D-26), because a fragment never reaches the server. Every page
+that receives one reads it at load and erases it with `replaceState`, so a tab sitting on that page
+has a bare path in its address bar. `focusOrOpen` in `sw.js` then reuses that tab by navigating it —
+deliberately, because opening a window instead left one tab per notification. When the target path
+equals the open tab's path, `client.navigate()` changes only the fragment, and **that is a
+same-document navigation**: no script re-runs, the token is never read, nothing happens.
+
+The fix is always on the page, never in the worker: a `hashchange` listener that re-reads the
+fragment. `tests/test_pages.py::test_every_page_a_notification_can_open_re_reads_its_fragment`
+enumerates the target paths from the `click_url`s `mail.py` builds and asserts each page has one, so
+a new notification target fails the suite until its page can be re-entered.
+
+Reported instances, for shape recognition:
+
+| Page | Symptom |
+| --- | --- |
+| `/` | A second warning opened the country view, or stayed on the first warning's place |
+| `/manage` | "Link an diesen Browser senden", stay on the page, tap the notification — nothing |
+| `/confirm` | Found while fixing the above, unreported. Costlier: a signup that is never confirmed is purged after `unconfirmed_purge_hours` and the reader is never told why |
+
+If a fourth page ever receives a token, it needs the same three lines. Two things make a naive fix
+insufficient, both learned the hard way:
+
+* **Re-running the page's bootstrap must be safe.** `manage.html` builds a Leaflet map, and
+  `L.map()` on an already-initialised container throws `Map container is already initialized`, which
+  kills the rest of the handler. `buildMap()` returns early and re-places the pin instead.
+* **The re-entry guard must queue, not discard.** A flag that simply returns while a run is in
+  flight drops a fragment that arrives during a slow redeem — the same "nothing happened", rarer and
+  harder to report. `restart()` schedules exactly one more pass.
+
 ### A subscriber says they got nothing
 
 ```sql

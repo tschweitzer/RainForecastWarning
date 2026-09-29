@@ -69,3 +69,28 @@ def page_source(client, path: str = "/") -> str:
     for src in re.findall(r'<script[^>]+src="(/[^"]+)"', html):
         sources.append(client.get(src).text)
     return "\n".join(sources)
+
+
+def js_function(source: str, name: str) -> str:
+    """The body of a JavaScript function, found by matching braces rather than by a landmark.
+
+    Written because a landmark broke. Two tests sliced `start()` out of manage.html as everything
+    between ``async function start()`` and the literal ``start();`` that called it - and when that
+    call became ``restart();``, the boundary matched the ``start();`` *inside* it. The slice then ran
+    on into the next function, whose concurrency guard has a bare `return`, and a test about the
+    settings dispatch failed for a reason that had nothing to do with the dispatch.
+
+    Brace matching has no such ambiguity: a function ends where its own braces close.
+    """
+    at = source.index("function " + name + "(")
+    depth = 0
+    started = False
+    for i in range(at, len(source)):
+        if source[i] == "{":
+            depth += 1
+            started = True
+        elif source[i] == "}":
+            depth -= 1
+            if started and depth == 0:
+                return source[at : i + 1]
+    raise AssertionError(f"unbalanced braces in {name}()")

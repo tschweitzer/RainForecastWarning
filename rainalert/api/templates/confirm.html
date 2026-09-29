@@ -36,42 +36,76 @@ noch einmal direkt aus der Nachricht.</p>
   var field = document.getElementById('token');
   var form = document.getElementById('form');
   var lede = document.getElementById('lede');
-  var hash = window.location.hash || '';
-  // `#a=` arrives from a push notification and confirms on open; `#t=` arrives by mail and waits
-  // for the click. Which one is sent is decided in the message, where the channel is known.
-  var auto = hash.indexOf('#a=') === 0;
-  if (auto || hash.indexOf('#t=') === 0) {
-    field.value = decodeURIComponent(hash.slice(3));
-    // Erased, and replaceState so Back does not return to a URL still carrying the token.
-    history.replaceState(null, '', window.location.pathname);
-  }
+  var busy = document.getElementById('busy');
+  var noToken = document.getElementById('no-token');
+  // Read from the markup rather than repeated here: the same sentence in a template and in a
+  // script is two places to change it and one place to forget.
+  var ledePromise = lede.textContent;
+  var slowTimer = null;
 
-  if (!field.value) {
-    // The lede promises the very thing this state cannot deliver ("ein Klick noch"), so it goes
-    // with the button rather than sitting above the explanation contradicting it.
-    lede.hidden = true;
-    document.getElementById('no-token').hidden = false;
-    return;
-  }
-
-  if (!auto) {
-    form.hidden = false;
-    return;
-  }
-
-  lede.hidden = true;
-  document.getElementById('busy').hidden = false;
-  form.submit();
-
-  // The button is still the working way through if that submit never lands - a dropped
-  // connection leaves this page sitting on a spinner forever otherwise. It is offered late and
-  // only on evidence, rather than shown up front on the chance that something goes wrong.
-  window.setTimeout(function () {
-    document.getElementById('busy').hidden = true;
-    lede.textContent = 'Das dauert länger als erwartet. Tippe hier, um es noch einmal zu versuchen.';
+  function readTheToken() {
+    // A second run must not inherit the first's states, including its 8-second timeout - which
+    // would otherwise fire over whatever this run decided and offer a button for a token that
+    // has since been replaced.
+    if (slowTimer) { window.clearTimeout(slowTimer); slowTimer = null; }
+    busy.hidden = true;
+    noToken.hidden = true;
+    form.hidden = true;
     lede.hidden = false;
-    form.hidden = false;
-  }, 8000);
+    lede.textContent = ledePromise;
+
+    var hash = window.location.hash || '';
+    // `#a=` arrives from a push notification and confirms on open; `#t=` arrives by mail and waits
+    // for the click. Which one is sent is decided in the message, where the channel is known.
+    var auto = hash.indexOf('#a=') === 0;
+    if (auto || hash.indexOf('#t=') === 0) {
+      field.value = decodeURIComponent(hash.slice(3));
+      // Erased, and replaceState so Back does not return to a URL still carrying the token.
+      history.replaceState(null, '', window.location.pathname);
+    }
+
+    if (!field.value) {
+      // The lede promises the very thing this state cannot deliver ("ein Klick noch"), so it goes
+      // with the button rather than sitting above the explanation contradicting it.
+      lede.hidden = true;
+      noToken.hidden = false;
+      return;
+    }
+
+    if (!auto) {
+      form.hidden = false;
+      return;
+    }
+
+    lede.hidden = true;
+    busy.hidden = false;
+    form.submit();
+
+    // The button is still the working way through if that submit never lands - a dropped
+    // connection leaves this page sitting on a spinner forever otherwise. It is offered late and
+    // only on evidence, rather than shown up front on the chance that something goes wrong.
+    slowTimer = window.setTimeout(function () {
+      busy.hidden = true;
+      lede.textContent = 'Das dauert länger als erwartet. Tippe hier, um es noch einmal zu versuchen.';
+      lede.hidden = false;
+      form.hidden = false;
+    }, 8000);
+  }
+
+  /* And again whenever the fragment changes.
+
+     `POST /confirm` answers at `/confirm`, so a tab that has confirmed once stays on this path
+     with the token erased. The service worker reuses any open tab on this origin by navigating it,
+     so a second confirmation - after clearing site data and signing up again, say - arrives as
+     `/confirm#a=<new token>`: a change of fragment only, which is a same-document navigation. No
+     script re-runs, the token is never read, and nothing happens. The signup is then never
+     confirmed and is purged after `unconfirmed_purge_hours` without the reader ever learning why.
+
+     Rarer than the same trap on `/manage`, which was reported from the field, and costlier when it
+     lands. Every page the worker can send anyone to needs this; `tests/test_pages.py` enumerates
+     them from the click_urls rather than trusting anyone to remember. */
+  window.addEventListener('hashchange', readTheToken);
+  readTheToken();
 })();
 </script>
 {% endblock %}

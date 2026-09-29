@@ -23,6 +23,7 @@ from rainalert.tokens import (
     verify_csrf_token,
     verify_manage_request_token,
 )
+from tests.helpers import js_function
 
 MUNICH = (48.1533, 11.5574)
 HAMBURG = (53.5511, 9.9937)
@@ -749,8 +750,7 @@ def test_every_exit_from_the_settings_dispatch_names_a_state(client):
     is pinned by the test below.
     """
     body = client.get("/manage").text
-    start = body.index("async function start()")
-    dispatch = body[start : body.index("start();", start)]
+    dispatch = js_function(body, "start")
 
     deciders = ("show(STATES", "gateWithNote(", "requestLink(", "redeem(")
     for chunk in dispatch.split("return;")[:-1]:
@@ -771,11 +771,7 @@ def test_a_spent_link_falls_through_to_a_session_this_browser_already_has(client
     redeem = body[body.index("async function redeem") : body.index("async function load")]
     assert "gateWithNote(" not in redeem, "redeem must report, not decide: " + redeem
 
-    start = body[
-        body.index("async function start()") : body.index(
-            "start();", body.index("async function start()")
-        )
-    ]
+    start = js_function(body, "start")
     spent_at = start.index("spent = !await redeem(token)")
     session_at = start.index("/api/v1/manage/csrf")
     complaint_at = start.index("gilt nicht mehr")

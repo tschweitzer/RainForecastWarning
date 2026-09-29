@@ -147,6 +147,76 @@ def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db
     assert "coord-fallback" in enclosing_ids(body, "locate-status"), path
 
 
+def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
+    """The trap that has now caught three pages, and the rule that closes it for all of them.
+
+    Every token this service hands out rides in the URL *fragment* (D-26), because a fragment never
+    reaches the server. Every page that receives one reads it at load and immediately erases it with
+    `replaceState`, so a tab sitting on that page has a bare path in its address bar.
+
+    `focusOrOpen` in sw.js then reuses that tab by navigating it - deliberately, because opening a
+    window instead left one tab per notification. When the target path equals the open tab's path,
+    `client.navigate()` changes only the fragment, and that is a *same-document* navigation: no
+    script re-runs, the token is never read, and the reader taps the notification and watches
+    nothing happen.
+
+    It was fixed on `/` for warning links, and stayed broken on `/manage` until someone pressed
+    "Link an diesen Browser senden", stayed on the page and tapped the notification - the tell being
+    that navigating away first made it work. `/confirm` had it too, unreported and worse: a signup
+    that is never confirmed is purged without explanation.
+
+    So this enumerates the paths from the click_urls the messages actually build, rather than from a
+    list someone has to remember to extend. A new notification target fails here until its page can
+    be re-entered.
+    """
+    import ast
+    import re
+    from pathlib import Path
+
+    mail = (Path(__file__).resolve().parents[1] / "rainalert" / "api" / "mail.py").read_text(
+        encoding="utf-8"
+    )
+    # The paths a click_url can point at.
+    #
+    # Scoped to the functions that actually build one, which is what makes this precise. Matching
+    # every `public_base_url` URL with a fragment in the file also catches `/unsubscribe#t=`, and
+    # that one is email-only: it goes in a mail body, never in a `click_url` or a notification
+    # action, so no notification can ever open it. (The one action that does exist, Einstellungen,
+    # posts to `/api/v1/manage/request` in the background and navigates nothing.)
+    #
+    # Matched across string concatenation, because the warning link is built as `f"...}}/"` on one
+    # line and `f"#l={...}"` on the next; a pattern anchored to one line sees the path without its
+    # fragment and quietly drops `/` from the set.
+    tree = ast.parse(mail)
+    lines = mail.splitlines(keepends=True)
+    targets = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = "".join(lines[node.lineno - 1 : node.end_lineno])
+        if "click_url" not in body:
+            continue
+        targets.update(
+            re.findall(
+                r"public_base_url\.rstrip\('/'\)\}(/[a-z]*)(?:\"\s*\n\s*f?\")?#",
+                body,
+            )
+        )
+    assert targets, "no click_url targets found - has mail.py changed shape?"
+    assert targets == {"/", "/confirm", "/manage"}, (
+        f"the set of notification targets changed: {targets}. Every one of them needs to re-read "
+        f"its fragment - see this test's docstring - so update the expectation deliberately."
+    )
+
+    for path in sorted(targets):
+        # page_source: the listener may live in the page or in a script it loads.
+        body = page_source(client, path)
+        assert "addEventListener('hashchange'" in body, (
+            f"{path} can be opened by a notification but never re-reads its fragment - a tab "
+            f"already on {path} will silently ignore the token. See this test's docstring."
+        )
+
+
 def test_the_pages_module_constants_are_const_not_var(client):
     """The one guard against a bug this file has now shipped three times.
 

@@ -595,6 +595,17 @@
   }
 
   function buildMap() {
+    /* Once. `L.map('map', ...)` on a container Leaflet has already initialised throws
+       "Map container is already initialized", and since `start()` can now run a second time - a
+       warning or settings link arriving in this very tab changes only the fragment - a second
+       call is reachable. It is not a no-op though: the panel has just been re-filled from the
+       server, so the pin follows, or the map would show the location this tab had before the
+       link arrived. */
+    if (map) {
+      if (pick) { pick.set(current.lat, current.lon, true); }
+      map.setView([current.lat, current.lon], Math.max(map.getZoom(), 11));
+      return;
+    }
     if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
       // Leaflet comes from a CDN, so this is a blocked or failed load rather than a setting.
       // Fall back to the coordinate fields, which are otherwise not shown at all.
@@ -844,6 +855,10 @@
 
   async function start() {
     var hash = window.location.hash || '';
+    // Re-entered from `hashchange` the page is showing whatever it settled on last time - the
+    // gate, or a panel from a session that has since lapsed. A link is about to be redeemed, so
+    // say so rather than leaving the old state up while the request is in flight.
+    if (hash.indexOf('#t=') === 0 || hash.indexOf('#r=') === 0) { show(STATES.busy); }
     var request = hash.indexOf('#r=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
     if (request) {
       history.replaceState(null, '', window.location.pathname);
@@ -895,7 +910,49 @@
     buildMap();
   }
 
-  start();
+  /* And again whenever the fragment changes, which is how this page is usually reached.
+
+     `start()` erases the fragment as soon as it has read it, so a tab already on `/manage` sits at
+     the bare path. The service worker prefers to reuse an open tab, so tapping "Einstellungen" in
+     a notification navigates that tab to `/manage#t=<token>` - a change of fragment only, which is
+     a same-document navigation: no script re-runs, the token is never read, and the reader taps
+     the notification and watches nothing happen. Reported from the field, and reproducible: press
+     the button, stay on the page, tap the notification. Navigating away first and then tapping
+     worked, which is the tell.
+
+     This is the same trap `/` had for warning links, fixed the same way, and `/confirm` had it too
+     - found while fixing this one. Three pages, one cause: `sw.js` navigates an open tab
+     deliberately (opening a window instead left one tab per notification), so every page it can
+     target needs this listener. The target set is derived from the click_urls in
+     `tests/test_pages.py::test_every_page_a_notification_can_open_re_reads_its_fragment`, rather
+     than from a list someone has to remember to extend.
+
+     Guarded against overlap: `start()` is async and redeems a single-use token, so two runs at
+     once could spend one link twice and answer "dieser Link gilt nicht mehr" to someone whose
+     link was fine.
+
+     The guard queues rather than discards, and that distinction is the whole bug in miniature. A
+     flag that simply returned while a run was in flight would drop a fragment that arrived during
+     a slow redeem - one more shape of "tapped the notification, nothing happened", rarer and
+     harder to report. So a change during a run schedules exactly one more pass, which reads
+     whatever the fragment is by then. It cannot spin: `start()` erases the fragment as it reads
+     it, so the extra pass finds none and only re-checks the session. */
+  var starting = false, changedDuringRun = false;
+  async function restart() {
+    if (starting) { changedDuringRun = true; return; }
+    starting = true;
+    try {
+      do {
+        changedDuringRun = false;
+        await start();
+      } while (changedDuringRun);
+    } finally {
+      starting = false;
+    }
+  }
+
+  window.addEventListener('hashchange', restart);
+  restart();
 })();
 </script>
 {% endblock %}
