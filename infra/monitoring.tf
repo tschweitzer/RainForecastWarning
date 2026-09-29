@@ -72,6 +72,76 @@ resource "google_monitoring_alert_policy" "job_not_completing" {
   notification_channels = [google_monitoring_notification_channel.operator.id]
 }
 
+# A browser this service does not recognise, which is a silently broken signup for everyone using it.
+#
+# Deliberately narrow: only the "is not a known push service" refusal, not every `EndpointRefused`.
+# The others - not https, userinfo, wrong port, not printable ASCII - are malformed input from bots
+# and scanners, they arrive constantly, and alerting on them would be noise that also lets anyone
+# ring this bell on demand. An unknown *host* is the one that means a real browser, with a real
+# person behind it, cannot sign up.
+#
+# This exists because of what it would have caught. Chrome hands out `jmt<n>.google.com` and the
+# allowlist did not have it: every Chrome subscriber was refused, the browser half of their signup
+# succeeded so their own browser listed the site as subscribed, and the page told them to check
+# input that was already correct. Nothing was logged, nothing was measured, and it surfaced a week
+# later as "works in Firefox, Edge and Opera but not Chrome". That is the hardest shape of bug
+# report to act on, and this alert turns it into an email within five minutes.
+resource "google_logging_metric" "unknown_push_service" {
+  name   = "rainalert_unknown_push_service"
+  filter = <<-EOT
+    resource.type="cloud_run_revision"
+    resource.labels.service_name="${google_cloud_run_v2_service.api.name}"
+    (textPayload:"is not a known push service" OR jsonPayload.msg:"is not a known push service")
+  EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+  }
+}
+
+# No label extractor for the host, deliberately. A label would put the offending hostname straight
+# into the alert, which is what an operator wants - but the hostname comes from an unauthenticated
+# request body, so anyone could mint unbounded distinct label values and turn a metric into a bill.
+# The alert says that it happened; RUNBOOK.md section 3 has the one-line grep that says which host.
+resource "google_monitoring_alert_policy" "unknown_push_service" {
+  display_name = "RainAlert: a browser used a push service we do not allow"
+  combiner     = "OR"
+
+  conditions {
+    display_name = "unknown push host refused"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.unknown_push_service.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.operator.id]
+  # Closes itself once a deploy has added the host and the refusals stop. Long enough that a slow
+  # afternoon of one subscriber per hour does not re-page repeatedly.
+  alert_strategy { auto_close = "3600s" }
+
+  documentation {
+    content = <<-EOT
+      A browser produced a push endpoint on a host that `ALLOWED_PUSH_HOSTS` in
+      `rainalert/notify/webpush.py` does not list, so that subscriber could not sign up.
+
+      Find the host:
+
+          gcloud run services logs read rainalert-api --region europe-west3 --limit 200 \
+            | grep "subscribe refused"
+
+      Then add the host, or its family if the name carries a shard number, and deploy. Add the
+      specific host - never a bare domain suffix. See RUNBOOK.md section 3.
+    EOT
+  }
+}
+
 # NOT DEFINED HERE, on purpose: the cycle-age SLI. It lives in the database, which Cloud Monitoring
 # cannot see. Getting it onto a dashboard needs something to scrape /metrics (Managed Service for
 # Prometheus, or a tiny scheduled job that reads it and writes a custom metric). The two alerts
