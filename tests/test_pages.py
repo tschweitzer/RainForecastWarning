@@ -1019,6 +1019,32 @@ def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
 EVERY_PAGE = ("/", "/manage", "/confirm", "/unsubscribe", "/privacy")
 
 
+def test_no_shared_cache_may_keep_a_page_that_carries_a_nonce(client, db):
+    """Every page here is per-request, and a shared cache must not pass one visitor's to another.
+
+    Each response carries a fresh CSP nonce in both the header and the markup, and they are only
+    useful as a pair: a cache handing one visitor's body to another either blocks every script on
+    the page or hands out a nonce an injected inline script could claim. `/confirmed` is worse - it
+    sets the session cookie, so its body belongs to one subscriber.
+
+    Nothing sat in front of Cloud Run when these pages were written, so no page set this header at
+    all. That stops being true the moment a CDN, a load balancer or Firebase Hosting is added for a
+    custom domain, and it is not a change anyone would think to make at the same time.
+
+    `private` is the load-bearing half. `no-cache` is revalidation, not "do not store", and
+    `no-store` is deliberately *not* used: Chrome refuses the back/forward cache for a `no-store`
+    document, which would make every Back into the start page rebuild the map and refetch the
+    timeline instead of restoring instantly.
+    """
+    for path in EVERY_PAGE:
+        cache = client.get(path).headers.get("Cache-Control", "")
+        assert "private" in cache, f"{path} may be kept by a shared cache: {cache!r}"
+        assert "no-cache" in cache, f"{path} is not revalidated: {cache!r}"
+        assert "no-store" not in cache, (
+            f"{path} sets no-store, which costs the back/forward cache - see this test's docstring"
+        )
+
+
 def test_every_page_carries_the_same_navigation(client, db):
     for path in EVERY_PAGE:
         body = client.get(path).text

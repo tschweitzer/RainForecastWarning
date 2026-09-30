@@ -30,6 +30,28 @@ variable "public_base_url" {
   }
 }
 
+variable "trusted_proxy_hops" {
+  description = "How many proxies in front of the service are ours. 1 for Cloud Run alone; 2 once Firebase Hosting or a load balancer is in front of it. Wrong in either direction breaks a security control - see the validation below and ratelimit.py."
+  type        = number
+  default     = 1
+
+  validation {
+    # Not a free-form number. `X-Forwarded-For` is appended to by each hop, so `client_ip()` takes
+    # the Nth entry from the right and only the rightmost N were added by infrastructure we own.
+    #
+    # Too low and every visitor resolves to the same address - the CDN's edge, or Cloud Run's own
+    # front end - so they all share one rate-limit bucket and `subscribe_limit_per_hour` becomes a
+    # global cap of five signups an hour for the whole service. That failure looks exactly like the
+    # unexplained 422s of 2026-09.
+    #
+    # Too high and `len(parts) >= hops` fails, which falls back to the socket peer: same shared
+    # bucket. And at a value the header *can* reach, the client is picking its own identity out of
+    # a header it wrote, which is F-5 in SECURITY_REVIEW.md - every limit becomes decorative.
+    condition     = var.trusted_proxy_hops >= 1 && var.trusted_proxy_hops <= 3
+    error_message = "trusted_proxy_hops counts real proxies: 1 for Cloud Run alone, 2 behind Firebase Hosting or a load balancer. 0 would take the socket peer, which behind Cloud Run is one address for every visitor."
+  }
+}
+
 variable "mail_from" {
   description = "Sender address. Its domain needs SPF, DKIM and DMARC or the warnings land in spam. Unused while smtp_host is empty."
   type        = string

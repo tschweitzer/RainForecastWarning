@@ -73,6 +73,48 @@ def test_migrations_match_the_models(postgres_url, monkeypatch):
         get_settings.cache_clear()
 
 
+def test_the_proxy_hop_count_is_configurable_and_never_zero():
+    """`TRUSTED_PROXY_HOPS` is a security control whose right value depends on the deployment.
+
+    `client_ip()` takes the Nth entry from the right of `X-Forwarded-For`, because each proxy
+    *appends* and only the rightmost N were added by infrastructure we own. Cloud Run alone is one
+    hop. Putting Firebase Hosting or a load balancer in front - which is the only way to get a
+    custom domain in europe-west3, where Cloud Run offers no domain mapping - makes it two.
+
+    Both directions fail, and both fail quietly:
+
+    * Too low, and every visitor resolves to the same address (the CDN edge, or Cloud Run's own
+      front end), so they share one bucket and `subscribe_limit_per_hour` becomes a global cap of
+      five signups an hour for the whole service.
+    * Too high, and `len(parts) >= hops` fails into the socket peer - the same shared bucket - or,
+      at a reachable value, lets the client choose its own identity from a header it wrote, which
+      is F-5 in SECURITY_REVIEW.md.
+
+    So this asserts the value comes from a variable rather than a literal, and that the variable
+    cannot be 0. Checked as text rather than by parsing HCL because no HCL parser is a declared
+    dependency of this project, and adding one to assert two lines would be the larger change.
+    """
+    infra = pathlib.Path(__file__).resolve().parents[1] / "infra"
+    run_tf = (infra / "run.tf").read_text(encoding="utf-8")
+    variables_tf = (infra / "variables.tf").read_text(encoding="utf-8")
+
+    assert "TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops)" in run_tf, (
+        "the hop count must come from a variable: it changes with the deployment, and the change "
+        "has to land with the cutover rather than before it"
+    )
+    # A literal would deploy the same number to every deployment shape.
+    assert not re.search(r'TRUSTED_PROXY_HOPS\s*=\s*"', run_tf), (
+        "TRUSTED_PROXY_HOPS is hard-coded again - see this test's docstring"
+    )
+
+    block = variables_tf[variables_tf.index('variable "trusted_proxy_hops"') :]
+    block = block[: block.index("\nvariable ")]
+    assert "default     = 1" in block, "Cloud Run alone is one hop, and that is the default"
+    assert "var.trusted_proxy_hops >= 1" in block, (
+        "0 must be refused: behind Cloud Run the socket peer is one address for every visitor"
+    )
+
+
 def test_every_runtime_import_is_a_declared_dependency():
     """The container installs from pyproject alone, so an undeclared import is a crash at runtime.
 

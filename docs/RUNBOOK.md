@@ -353,6 +353,64 @@ manage page will be telling them so.
 
 ---
 
+## 3b. Putting a custom domain in front
+
+Cloud Run's own domain mapping is **not available in europe-west3**. The console says so outright:
+"Domain mappings are not available in the region of the selected service. Either copy this service
+to a different region, use an Application Load Balancer or Firebase Hosting." `gcloud beta run
+domain-mappings list --region europe-west3` is not a test for this - it returns `Listed 0 items.`
+either way.
+
+Of the three, only two are real here:
+
+* **Copy to another region** - no. europe-west3 is deliberate (German subscribers' data in Germany,
+  `variables.tf`), and Cloud SQL is in the same region, reached over a unix socket. Moving the
+  service away from its database for a nicer URL is the wrong trade.
+* **Application Load Balancer** - works in any region, and the forwarding rule alone is roughly
+  €15-20/month. That is more than the rest of this stack.
+* **Firebase Hosting** - a `run` rewrite, works regardless of region, and gives a free
+  `<site>.web.app` with a managed certificate before any domain is bought. This is the intended
+  route.
+
+### The two changes that are not `public_base_url`
+
+Both are easy to miss because nothing fails loudly.
+
+1. **`trusted_proxy_hops` 1 -> 2.** Firebase Hosting is a second proxy, so `X-Forwarded-For` gains
+   an entry and `client_ip()` would otherwise return the Firebase edge address for every visitor -
+   one shared rate-limit bucket, and `subscribe_limit_per_hour` becomes a global cap of five signups
+   an hour. It is a variable so this is a one-line tfvars change that lands *with* the cutover;
+   deploying 2 before Firebase is in front is the same outage in the other direction.
+
+   Verify it rather than trusting the arithmetic. After cutover, sign up from two different networks
+   and look at the buckets:
+
+       SELECT DISTINCT bucket FROM rate_limit_hits WHERE bucket LIKE 'subscribe:ip:%';
+
+   Two distinct rows means the hop count is right. One means it is wrong, and the limits are no
+   longer per-visitor.
+
+2. **Page cache headers.** Already handled - `page()` sets `private, no-cache` - but this is why:
+   every page carries a per-request CSP nonce in both the header and the markup, and a shared cache
+   passing one visitor's body to another either blocks every script on the page or hands out a nonce
+   an injected script could claim. `/confirmed` also sets the session cookie. Do not "optimise" this
+   to something cacheable.
+
+### Order of operations
+
+1. Create the Hosting site and the `run` rewrite. Confirm `https://<site>.web.app/` serves the page
+   and `/healthz` answers.
+2. *Then* set `public_base_url` to the new origin and `trusted_proxy_hops = 2`, and apply. Doing
+   this first means every link sent in the meantime points at a host that does not serve the site.
+3. Run the bucket query above.
+4. Decide about the old origin. Push subscriptions belong to the origin that created them, so
+   existing subscribers keep receiving warnings (the endpoint is at the push service, and VAPID's
+   audience comes from that endpoint, not from us) but `/manage` on the new origin finds no
+   registration and offers them the gate instead of their settings. If they then sign up again there
+   are two live subscriptions for one person and both fire. While this is a handful of test
+   subscribers the clean move is to delete the subscriber rows at cutover. Setting the service's
+   `ingress` to load-balancer-only also stops the `*.a.run.app` origin being a second front door.
+
 ## 4. Routine operations
 
 ### Schema changes

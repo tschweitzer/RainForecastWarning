@@ -24,9 +24,14 @@ locals {
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"
-    # Cloud Run sits in front of us, so exactly one hop is ours. Without this the client picks its
-    # own identity out of X-Forwarded-For and every rate limit is decorative (F-5).
-    TRUSTED_PROXY_HOPS = "1"
+    # How many proxies in front of us are ours. Without this the client picks its own identity out
+    # of X-Forwarded-For and every rate limit is decorative (F-5).
+    #
+    # A variable rather than the literal "1" it was, because the right answer changes with the
+    # deployment and the change has to land *with* the cutover, not before it: Cloud Run alone is
+    # one hop, Firebase Hosting or a load balancer in front makes it two. Setting 2 while nothing
+    # is in front is the same outage as setting 1 once something is - see variables.tf.
+    TRUSTED_PROXY_HOPS = tostring(var.trusted_proxy_hops)
   }
 }
 

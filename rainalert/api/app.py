@@ -588,7 +588,26 @@ def create_app(
             "vapid_public_key": vapid_public_key,
         }
         context.update(extra or {})
-        return TEMPLATES.TemplateResponse(request, template, context, **kwargs)
+        response = TEMPLATES.TemplateResponse(request, template, context, **kwargs)
+        # Every page here is per-request, and two things make that more than a preference.
+        #
+        # The CSP nonce. Each response carries a fresh one in both the header and the markup
+        # (see the middleware above), and they are only useful together: a shared cache handing
+        # one visitor's body to another either breaks every script on the page or, worse, hands
+        # out a nonce an injected inline script could then claim. `private` is what says "no
+        # shared cache", and it is the half that matters once anything sits in front of Cloud Run
+        # - a CDN, a load balancer, a corporate proxy.
+        #
+        # And `/confirmed` sets the session cookie, so its body is specific to one subscriber.
+        #
+        # `private, no-cache` rather than `no-store`, deliberately. `no-store` would also do the
+        # job, and it costs the back/forward cache: Chrome refuses bfcache for a `no-store`
+        # document, so every Back into this page would re-run the whole script - the map, the
+        # timeline fetch, the subscription check - instead of restoring instantly. `no-cache`
+        # still forces revalidation on every visit, which is all that was wanted; `private` does
+        # the part that protects the nonce.
+        response.headers["Cache-Control"] = "private, no-cache"
+        return response
 
     # ---- confirm --------------------------------------------------------------------------
     @app.get("/confirm", response_class=HTMLResponse, include_in_schema=False)
