@@ -101,6 +101,18 @@ def test_the_hosting_proxy_agrees_with_the_service_it_proxies():
 
     run_tf = (root / "infra" / "run.tf").read_text(encoding="utf-8")
     variables_tf = (root / "infra" / "variables.tf").read_text(encoding="utf-8")
+
+    # The Hosting site must live in the *same* project as the service it proxies: Firebase Hosting
+    # cannot rewrite to Cloud Run across projects. Worth asserting because the mistake is so
+    # natural - "Firebase project" sounds like the thing you create for a Firebase site, so the
+    # obvious move is a new project named after the site, and it produces a Hosting site that
+    # simply cannot reach this service. The fix is `firebase projects:addfirebase` on the project
+    # that already holds the service.
+    assert f'default     = "{rc["projects"]["default"]}"' in variables_tf, (
+        f".firebaserc deploys to {rc['projects']['default']!r}, which is not the project "
+        "infra/variables.tf deploys the Cloud Run service to. Firebase Hosting cannot rewrite to "
+        "Cloud Run in another project - the site has to live alongside the service."
+    )
     rewrite = config["rewrites"][0]
     assert rewrite["source"] == "**", "everything is proxied: one origin, nothing to keep in sync"
     assert f'name     = "{rewrite["run"]["serviceId"]}"' in run_tf, (

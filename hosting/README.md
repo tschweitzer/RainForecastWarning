@@ -24,6 +24,26 @@ The radar overlay PNGs do *not* pass through here: they are served straight from
 
     firebase deploy --only hosting
 
+## The site must live in the project that holds the service
+
+Firebase Hosting cannot rewrite to a Cloud Run service in another project. The site and the service
+have to be in the same one - here, `rainchecker-195519`.
+
+This is worth its own heading because the mistake is the natural one. "Firebase project" sounds like
+the thing you create in order to have a Firebase site, so the obvious move is to make a new project
+named after the site you want. That gives you a project whose *default* site is named after the
+project ID rather than the name you chose, in a project that cannot see the service. Both wrong, and
+neither says so until a deploy serves "Site Not Found".
+
+What is actually wanted is Firebase added to the project that already exists:
+
+    firebase projects:addfirebase rainchecker-195519
+    gcloud services enable firebasehosting.googleapis.com --project rainchecker-195519
+    firebase hosting:sites:create <site> --project rainchecker-195519
+
+`tests/test_packaging.py::test_the_hosting_proxy_agrees_with_the_service_it_proxies` checks that
+`.firebaserc` and `infra/variables.tf` name the same project, so a stray one fails the suite.
+
 ## Before the first deploy
 
 `firebase hosting:sites:create rainalerts` has to have succeeded - that call is what claims the name,
