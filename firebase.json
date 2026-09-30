@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "site": "rainalerts",
+    "public": "hosting/public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "rainalert-api",
+          "region": "europe-west3"
+        }
+      }
+    ]
+  }
+}

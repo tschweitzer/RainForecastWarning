@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "rainchecker-195519"
+  },
+  "targets": {
+    "rainchecker-195519": {
+      "hosting": {
+        "app": ["rainalerts"]
+      }
+    }
+  }
+}

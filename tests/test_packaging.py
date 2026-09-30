@@ -73,6 +73,53 @@ def test_migrations_match_the_models(postgres_url, monkeypatch):
         get_settings.cache_clear()
 
 
+def test_the_hosting_proxy_agrees_with_the_service_it_proxies():
+    """Firebase Hosting is the front door, and four things about it drift silently.
+
+    It exists because Cloud Run has no domain mapping in europe-west3, so the only cheap way to a
+    custom domain is a Hosting `run` rewrite. That makes `firebase.json` a second place naming the
+    Cloud Run service and its region, and a rename on either side produces a site that serves
+    Hosting's "Site Not Found" rather than an error anyone would trace back here.
+
+    The fourth is the trap worth a test on its own: Hosting serves a static file in preference to a
+    rewrite, so an `index.html` in the public directory would be served at `/` and the rewrite would
+    never run for the one path that matters most. Every page *except* the home page would work,
+    which is a bewildering way to discover a misconfiguration.
+    """
+    import json
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    config = json.loads((root / "firebase.json").read_text(encoding="utf-8"))["hosting"]
+    rc = json.loads((root / ".firebaserc").read_text(encoding="utf-8"))
+
+    # The site and the deploy target have to name the same site, or `firebase deploy` fails in a
+    # way that reads as an auth problem.
+    targets = rc["targets"][rc["projects"]["default"]]["hosting"]
+    assert [config["site"]] == next(iter(targets.values())), (
+        f"firebase.json serves {config['site']!r} but .firebaserc targets {targets!r}"
+    )
+
+    run_tf = (root / "infra" / "run.tf").read_text(encoding="utf-8")
+    variables_tf = (root / "infra" / "variables.tf").read_text(encoding="utf-8")
+    rewrite = config["rewrites"][0]
+    assert rewrite["source"] == "**", "everything is proxied: one origin, nothing to keep in sync"
+    assert f'name     = "{rewrite["run"]["serviceId"]}"' in run_tf, (
+        f"firebase.json proxies to {rewrite['run']['serviceId']!r}, which infra/run.tf does not define"
+    )
+    assert f'default     = "{rewrite["run"]["region"]}"' in variables_tf, (
+        f"firebase.json names region {rewrite['run']['region']!r}, which is not the deployed region"
+    )
+
+    # And nothing may shadow the rewrite at `/`.
+    public = root / config["public"]
+    assert public.is_dir(), f"{config['public']} is missing - the deploy needs it to exist"
+    shadowing = [f.name for f in public.iterdir() if not f.name.startswith(".")]
+    assert not shadowing, (
+        f"{config['public']} must stay empty: {shadowing} would be served instead of the rewrite - "
+        "see this test's docstring"
+    )
+
+
 def test_the_proxy_hop_count_is_configurable_and_never_zero():
     """`TRUSTED_PROXY_HOPS` is a security control whose right value depends on the deployment.
 
