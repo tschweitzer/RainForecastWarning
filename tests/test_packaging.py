@@ -173,6 +173,21 @@ def test_the_proxy_hop_count_is_configurable_and_never_zero():
         "0 must be refused: behind Cloud Run the socket peer is one address for every visitor"
     )
 
+    # And it has to be discoverable. A variable with a safe default is invisible: whoever puts a
+    # CDN in front next will not know it exists, and the deployment will silently share one
+    # rate-limit bucket between every visitor. The example file is the only place anyone reads
+    # before writing a tfvars, and this variable was missing from it until someone setting up the
+    # Firebase Hosting cutover noticed and asked.
+    example = (infra / "terraform.tfvars.example").read_text(encoding="utf-8")
+    # The assignment line, not just the name. A first attempt asserted the name appeared anywhere,
+    # and passed on a sentence elsewhere in the file that merely mentioned it - so the example
+    # could lose the setting itself and still be "documented".
+    assert re.search(r"^#?\s*trusted_proxy_hops\s*=", example, re.MULTILINE), (
+        "terraform.tfvars.example must carry a trusted_proxy_hops line (commented is fine) - a "
+        "security control whose correct value depends on what is in front of the service cannot be "
+        "left for someone to discover by reading variables.tf"
+    )
+
 
 def test_every_runtime_import_is_a_declared_dependency():
     """The container installs from pyproject alone, so an undeclared import is a crash at runtime.
