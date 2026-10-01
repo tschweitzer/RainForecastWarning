@@ -382,13 +382,26 @@ Both are easy to miss because nothing fails loudly.
    an hour. It is a variable so this is a one-line tfvars change that lands *with* the cutover;
    deploying 2 before Firebase is in front is the same outage in the other direction.
 
-   Verify it rather than trusting the arithmetic. After cutover, sign up from two different networks
-   and look at the buckets:
+   Verify it rather than trusting the arithmetic - the chain is not obvious. Cloud Run's front end
+   appends the address it saw, which is Firebase's edge, so `X-Forwarded-For` should arrive as
+   `<visitor>, <firebase edge>` and the second-from-right entry is the visitor. Should. If Hosting
+   adds more than one entry of its own, the count is 3 and 2 is wrong.
 
-       SELECT DISTINCT bucket FROM rate_limit_hits WHERE bucket LIKE 'subscribe:ip:%';
+   **The decisive check is one device.** Sign up, then:
 
-   Two distinct rows means the hop count is right. One means it is wrong, and the limits are no
-   longer per-visitor.
+       SELECT DISTINCT bucket FROM rate_limit_hits
+       WHERE bucket LIKE 'subscribe:ip:%' ORDER BY 1;
+
+   Compare the address in the bucket against `curl -s https://ifconfig.me` from the machine that
+   signed up. The same address means the hop count is right. A Google-owned address means every
+   visitor is being recorded as the CDN and they all share one bucket.
+
+   Two things that look like this check and are not:
+
+   * `SELECT DISTINCT bucket, occurred_at ...` - adding the timestamp makes every row distinct, so
+     two signups always produce two rows whatever the bucket says. It answers nothing.
+   * Two devices on the same WiFi - they share one public IP, so a single bucket is correct and
+     expected. The two-network version of this test needs the phone on mobile data.
 
 2. **Page cache headers.** Already handled - `page()` sets `private, no-cache` - but this is why:
    every page carries a per-request CSP nonce in both the header and the markup, and a shared cache

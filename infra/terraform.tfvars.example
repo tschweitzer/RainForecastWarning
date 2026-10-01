@@ -37,9 +37,11 @@ region     = "europe-west3"
 # value the header can actually reach, the opposite happens: the client picks its own identity out
 # of a header it wrote, and every limit is decorative (SECURITY_REVIEW.md F-5).
 #
-# So it is not a guess. After the cutover, sign up from two different networks and check:
-#   SELECT DISTINCT bucket FROM rate_limit_hits WHERE bucket LIKE 'subscribe:ip:%';
-# Two rows means this is right. One means it is not.
+# So it is not a guess. After the cutover, sign up once and compare the recorded address against
+# your own (`curl -s https://ifconfig.me`):
+#   SELECT DISTINCT bucket FROM rate_limit_hits WHERE bucket LIKE 'subscribe:ip:%' ORDER BY 1;
+# Your own address means this is right; a Google-owned one means every visitor shares a bucket.
+# Do not add occurred_at to that DISTINCT - it makes every row unique and the check says nothing.
 # trusted_proxy_hops = 2
 
 # By digest, not by tag: a tag is mutable, and a digest is what makes a rollback mean something.
