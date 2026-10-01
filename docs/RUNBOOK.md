@@ -396,6 +396,45 @@ Both are easy to miss because nothing fails loudly.
    an injected script could claim. `/confirmed` also sets the session cookie. Do not "optimise" this
    to something cacheable.
 
+### Firebase Hosting strips every cookie except `__session`
+
+It drops all other cookies from the requests it proxies, so that it can cache: when `__session` is
+present it goes into the cache key, which is what stops two visitors with different sessions being
+served each other's response.
+
+So the settings-page cookie **must** be named `__session` (`MANAGE_COOKIE` in `app.py`). It was
+`rainalert_manage`, and the first cutover found out the hard way. The failure reports nothing
+anywhere: the magic link redeems, the cookie is set, and then every request that needs it arrives
+without one. `GET /api/v1/subscriptions/me` answers 401 and the page says *"Deine Einstellungen
+konnten gerade nicht geladen werden. Fordere am besten einen neuen Link an."* - which reads as a
+server fault and sends the reader to request another link that fails identically.
+
+`tests/test_manage.py` pins the name and round-trips a real session, so this cannot regress quietly.
+
+Related, and already handled: pages must not be cacheable by a shared cache (`page()` sets
+`private, no-cache`), both because of the per-request CSP nonce and because `/confirmed` sets this
+cookie. Do not "optimise" that header.
+
+### Running a query against the database
+
+There is no psql on any machine here, and `authorized_networks` is deliberately empty
+(`infra/main.tf`), so nothing may connect directly.
+
+**Use Cloud SQL Studio**: console -> SQL -> `rainalert` -> Cloud SQL Studio. It needs a database
+user and password, which live in Secret Manager:
+
+    gcloud secrets versions access latest --secret=rainalert-api-database-url \
+      --project rainchecker-195519
+
+That prints the SQLAlchemy URL; the user is `rainalert_api`, the password is the part between `:`
+and `@`, and the database is `rainalert`.
+
+**Do not use `gcloud sql connect`.** It works by adding your current IP to the instance's
+`authorized_networks` for a few minutes, which is exactly the setting this deployment leaves empty on
+purpose - and Terraform will then want to remove it on the next apply, so it also shows up as drift.
+
+Cloud Shell with `cloud-sql-proxy` is the other clean option if a real psql prompt is wanted.
+
 ### Order of operations
 
 1. Create the Hosting site and the `run` rewrite. Confirm `https://<site>.web.app/` serves the page

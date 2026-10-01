@@ -87,10 +87,29 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # belongs on every page, so it should not depend on each handler remembering to pass it.
 TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 
-#: The settings-page session. Not prefixed `__Host-`, which would be the stronger choice, because
-#: that prefix requires Secure and this service is served over plain http in development - a
-#: cookie the browser silently refuses to store is a page that silently never logs in.
-MANAGE_COOKIE = "rainalert_manage"
+#: The settings-page session.
+#:
+#: The name is not ours to choose. Firebase Hosting - which fronts this service, because Cloud Run
+#: offers no domain mapping in europe-west3 - **strips every cookie except one named `__session`**
+#: from the requests it proxies to the backend. It does that so it can cache: when the cookie is
+#: present it goes into the cache key, so two visitors with different sessions cannot be served each
+#: other's response.
+#:
+#: This was `rainalert_manage`, and the symptom of getting it wrong is not an error anywhere. The
+#: magic link redeems, the session cookie is set, and then every request that needs it arrives
+#: without it: `GET /api/v1/subscriptions/me` answers 401 and the settings page says "Deine
+#: Einstellungen konnten gerade nicht geladen werden" - which reads as a server fault and sends the
+#: reader off to request another link that will fail the same way.
+#:
+#: Generic as the name is, it is still host-scoped, and `web.app` is on the Public Suffix List - so
+#: no other `*.web.app` site can set or read a cookie for this host. On a custom domain later the
+#: same holds for that domain.
+#:
+#: Not prefixed `__Host-`, which would be the stronger choice, because that prefix requires Secure
+#: and this service is served over plain http in development - a cookie the browser silently refuses
+#: to store is a page that silently never logs in. `__session` is also exactly the name Hosting
+#: looks for, so a prefix would defeat the point.
+MANAGE_COOKIE = "__session"
 #: Echoed back on every write from the settings page. A custom header cannot be set by a plain
 #: cross-site form, so requiring one already forces a preflight; the value being unguessable is
 #: what makes the preflight pointless to attempt (SECURITY_REVIEW.md F-16).

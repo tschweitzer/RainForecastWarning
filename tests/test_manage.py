@@ -739,6 +739,48 @@ def test_the_settings_page_starts_on_none_of_its_states(client):
     assert 'id="busy"' in body and "spinner" in body
 
 
+def test_the_session_cookie_is_named_what_the_cdn_lets_through():
+    """Firebase Hosting strips every cookie except one named `__session`.
+
+    It fronts this service because Cloud Run has no domain mapping in europe-west3, and it drops
+    all other cookies from proxied requests so that it can cache: the `__session` cookie goes into
+    the cache key, so two visitors with different sessions cannot be served each other's response.
+
+    Asserted by name because the failure is silent and misleading. With any other name the magic
+    link redeems, the cookie is set, and then every request that needs it arrives without one -
+    `GET /api/v1/subscriptions/me` answers 401 and the settings page says "Deine Einstellungen
+    konnten gerade nicht geladen werden", which reads as a server fault and sends the reader to
+    request another link that fails identically. That is what happened on the first cutover.
+
+    If this service ever stops being served through Hosting, this constraint goes with it - but
+    then this test is the thing that says so, rather than a rename nobody connects to a CDN.
+    """
+    from rainalert.api.app import MANAGE_COOKIE
+
+    assert MANAGE_COOKIE == "__session", (
+        "Firebase Hosting will strip any other name and the settings page will 401 with no error "
+        "anywhere - see this test's docstring"
+    )
+
+
+def test_the_session_cookie_actually_round_trips(client, notifier):
+    """And the name is not enough on its own: it has to be the one the app reads back.
+
+    Two constants could disagree - one used to set the cookie and one to read it - and the name
+    assertion above would pass while nothing worked. This drives the real flow instead: redeem a
+    link, then use the session it opened.
+    """
+    subscribed(client, notifier)
+    # A magic link has to be requested first; the notification `subscribed` leaves behind is the
+    # confirmation, whose token goes to /confirm rather than /manage.
+    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    response = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
+    assert response.status_code == 200, response.text
+    assert "__session" in response.cookies, dict(response.cookies)
+    # The client carries the cookie forward, which is the part that matters.
+    assert client.get("/api/v1/subscriptions/me").status_code == 200
+
+
 def test_every_exit_from_the_settings_dispatch_names_a_state(client):
     """The old code relied on the gate being the default, so several paths just `return`ed and
     left whatever happened to be on screen. With nothing shown by default that is a blank page,
