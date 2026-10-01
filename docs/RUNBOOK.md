@@ -387,6 +387,10 @@ Both are easy to miss because nothing fails loudly.
    `<visitor>, <firebase edge>` and the second-from-right entry is the visitor. Should. If Hosting
    adds more than one entry of its own, the count is 3 and 2 is wrong.
 
+   **Measured on the 2026-10 cutover: 2 is correct** - the address recorded in the bucket was the
+   phone's own public IP, so the chain is `<visitor>, <firebase edge>` as expected and limits are
+   per-visitor. Re-measure if anything in front of the service changes.
+
    **The decisive check is one device.** Sign up, then:
 
        SELECT DISTINCT bucket FROM rate_limit_hits
@@ -427,6 +431,31 @@ server fault and sends the reader to request another link that fails identically
 Related, and already handled: pages must not be cacheable by a shared cache (`page()` sets
 `private, no-cache`), both because of the per-request CSP nonce and because `/confirmed` sets this
 cookie. Do not "optimise" that header.
+
+### Never run `rainalert reset` against the deployed database
+
+It refuses now, and the reason it did not is worth knowing. `assert_local` allowed an empty hostname
+so that a local unix socket would work - and production is exactly that shape, because Cloud Run
+reaches Cloud SQL through the Auth proxy's socket at `/cloudsql/<project>:<region>:<instance>`
+(`local.socket` in `infra/secrets.tf`). So the one guard in front of a `TRUNCATE` of every subscriber
+table answered "local" for the live database. Nothing reached it, because there is no reset job in
+`infra/`, but do not add one.
+
+To clear test subscribers from the deployed database, use SQL in Cloud SQL Studio instead:
+
+    -- what is there
+    SELECT channel, status, count(*) FROM subscribers
+      JOIN subscriptions ON subscriptions.subscriber_id = subscribers.id
+      GROUP BY channel, status;
+
+    -- cascades to subscriptions, auth_tokens, alert_states, evaluations, rain_events and
+    -- notifications; leaves radar_cycles and rate_limit_hits alone (rate_limit_hits deliberately
+    -- has no cascade - the record of abuse should outlive the account).
+    DELETE FROM subscribers;
+
+Repeatedly clearing site data while testing leaves one orphaned subscriber per cycle, each with a
+push subscription the browser has already discarded. They are harmless - the liveness job retires
+them after `webpush_liveness_days` - so this is tidiness, not repair.
 
 ### Running a query against the database
 

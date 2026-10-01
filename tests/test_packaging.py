@@ -275,6 +275,53 @@ def test_the_image_installs_the_extras_its_lazy_imports_need():
 # --- local reset -----------------------------------------------------------------------------
 
 
+def test_reset_refuses_the_production_socket_this_service_actually_uses():
+    """The shape the host check could not see, and the one that mattered most.
+
+    A DSN with a unix socket has no host component - `postgresql://u:p@/db?host=/some/dir` - so the
+    empty string is in LOCAL_HOSTS and `assert_local` returned. Production is exactly that shape:
+    Cloud Run reaches Cloud SQL through the Auth proxy's socket at
+    `/cloudsql/<project>:<region>:<instance>`. So the one guard on a TRUNCATE of every subscriber
+    table answered "local" for the live database.
+
+    Nothing reached it - there is no reset job in infra/ - but a guard that is trusted and wrong is
+    worse than no guard, and the docstring claimed a property it did not have.
+
+    The URL here is built the way infra/secrets.tf builds it, and the prefix is read from that file
+    rather than typed, so a change to the socket path fails this test instead of silently
+    re-opening the hole.
+    """
+    from rainalert.jobs.reset import NotLocal, assert_local
+
+    secrets_tf = (pathlib.Path(__file__).resolve().parents[1] / "infra" / "secrets.tf").read_text(
+        encoding="utf-8"
+    )
+    assert 'socket = "/cloudsql/' in secrets_tf, (
+        "infra/secrets.tf no longer builds a /cloudsql/ socket - check that reset.py still refuses "
+        "whatever it builds instead"
+    )
+    assert "?host=${local.socket}" in secrets_tf, "the socket still has to ride in the query string"
+
+    production = (
+        "postgresql+psycopg://rainalert_api:pw@/rainalert"
+        "?host=/cloudsql/rainchecker-195519:europe-west3:rainalert"
+    )
+    with pytest.raises(NotLocal):
+        assert_local(production)
+
+
+def test_reset_still_allows_a_genuinely_local_socket():
+    """The refusal above must not take local development with it: a socket in /tmp or
+    /var/run/postgresql is how a local Postgres is normally reached."""
+    from rainalert.jobs.reset import assert_local
+
+    for url in (
+        "postgresql+psycopg://user@/rainalert?host=/tmp/pgsock",
+        "postgresql+psycopg://user@/rainalert?host=/var/run/postgresql",
+    ):
+        assert_local(url)  # must not raise
+
+
 @pytest.mark.parametrize(
     "url",
     [
