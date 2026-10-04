@@ -12,10 +12,10 @@ Two structural rules here, both from things that have gone wrong in similar syst
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from rainalert.alerting.rules import AlertRule, evaluate
@@ -48,6 +48,7 @@ class CycleReport:
     skipped_missing: int = 0
     errors: int = 0
     blast_radius_tripped: bool = False
+    daily_cap_tripped: bool = False
     decisions: dict[str, int] = field(default_factory=dict)
 
 
@@ -75,7 +76,7 @@ def evaluate_cycle(
     pending: list[tuple[Subscription, object, object, object]] = []
     for subscription in subscriptions:
         try:
-            outcome = _evaluate_one(session, subscription, cycle, frames, cache, now)
+            outcome = _evaluate_one(session, subscription, cycle, frames, cache, now, settings)
         except Exception:
             # One bad row must not take the cycle down for everyone. The subscription is marked so
             # the user is told, rather than silently never warned.
@@ -106,8 +107,33 @@ def evaluate_cycle(
         cycle.notes = f"blast radius: {len(alerting)}/{len(subscriptions)} would alert"
         session.commit()
 
+    # The global ceiling (F-2, F-15). Counted once before the loop and then carried forward, so the
+    # alerts this cycle is about to queue count against it too - re-querying per subscription would
+    # not see them, since nothing is committed until the end.
+    day_ago = now - timedelta(hours=24)
+    queued_today = alerts_since(session, day_ago) if settings.global_alert_cap_per_day else 0
+
     for subscription, state_row, reading, transition in pending:
         alert = transition.alert and not report.blast_radius_tripped
+        if alert and settings.global_alert_cap_per_day:
+            if queued_today >= settings.global_alert_cap_per_day:
+                # Shared fate, and that is why it is an error rather than a counter. Unlike the
+                # per-subscription cap - where the account being capped is the one that caused it -
+                # reaching this means somebody is not warned about weather that is happening, for a
+                # reason that is not theirs. If this ever fires, the right response is to find out
+                # whether it is real traffic or a bug, not to raise the number.
+                alert = False
+                transition = replace(transition, alert=False, decision="suppressed_daily_cap")
+                if not report.daily_cap_tripped:
+                    report.daily_cap_tripped = True
+                    logger.error(
+                        "daily alert cap reached: %d alerts in 24 h at the %d ceiling; "
+                        "further warnings are being suppressed for everyone",
+                        queued_today,
+                        settings.global_alert_cap_per_day,
+                    )
+            else:
+                queued_today += 1
         _persist(session, subscription, state_row, cycle, reading, transition, alert, now)
         report.decisions[transition.decision] = report.decisions.get(transition.decision, 0) + 1
         if transition.decision == "skipped_missing":
@@ -126,7 +152,29 @@ def evaluate_cycle(
     return report
 
 
-def _evaluate_one(session, subscription, cycle, frames, cache, now):
+def alerts_since(session, since: datetime, subscription_id=None) -> int:
+    """How many *alerts* have been queued since `since`, for one subscription or for all of them.
+
+    `event_id IS NOT NULL` is what makes it alerts rather than notifications: the liveness ping
+    writes a `Notification` with `event_id=None` (`jobs/liveness.py`), and counting a six-monthly
+    "are you still there" against a subscriber's rain-warning cap would be absurd - and would do it
+    silently, by making the cap one alert tighter than it says.
+
+    Counted from `notifications` rather than from `evaluations` because the cap is about what was
+    *sent*, not about what was decided. An evaluation that decided to alert and was then suppressed
+    for quiet hours cost nobody any quota or reputation.
+    """
+    stmt = (
+        select(func.count())
+        .select_from(Notification)
+        .where(Notification.event_id.is_not(None), Notification.queued_at >= since)
+    )
+    if subscription_id is not None:
+        stmt = stmt.where(Notification.subscription_id == subscription_id)
+    return session.execute(stmt).scalar_one()
+
+
+def _evaluate_one(session, subscription, cycle, frames, cache, now, settings):
     series = sample(frames, subscription.lat, subscription.lon, subscription.radius_m, cache)
     rule = AlertRule(
         threshold_mm_5min=float(subscription.threshold_mm_5min),
@@ -156,6 +204,7 @@ def _evaluate_one(session, subscription, cycle, frames, cache, now):
     policy = Policy(
         dry_clear_minutes=settings_dry_clear(subscription),
         min_gap_minutes=subscription.min_gap_minutes,
+        alert_cap_per_day=settings.alert_cap_per_subscription_per_day,
         quiet_hours_start=subscription.quiet_hours_start,
         quiet_hours_end=subscription.quiet_hours_end,
         timezone=subscription.timezone,
@@ -164,7 +213,16 @@ def _evaluate_one(session, subscription, cycle, frames, cache, now):
         state_row.state, state_row.dry_since, state_row.no_hit_cycles, state_row.last_alert_at
     )
     transition = suppress(
-        advance(view, reading, policy, cycle.nominal_time), view, policy, cycle.nominal_time
+        advance(view, reading, policy, cycle.nominal_time),
+        view,
+        policy,
+        cycle.nominal_time,
+        # Only asked for when the policy has a cap, so the common configuration adds no query.
+        alerts_last_day=(
+            alerts_since(session, now - timedelta(hours=24), subscription.id)
+            if policy.alert_cap_per_day
+            else 0
+        ),
     )
     return subscription, state_row, (series, reading), transition
 

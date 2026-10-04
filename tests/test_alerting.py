@@ -394,3 +394,178 @@ def test_the_mail_states_the_data_time_not_the_render_time(db, settings, frames)
     body = notifier.sent[0].text
     # T0 is 13:55 UTC = 15:55 Europe/Berlin
     assert "Radarbild von 15:55 Uhr" in body
+
+
+# --- the caps nobody can turn off (SECURITY_REVIEW.md F-15, F-2) --------------------------------
+
+
+def _past_alerts(session, subscription, how_many, now, *, as_liveness=False):
+    """Pre-load the rolling window with alerts (or liveness pings) already queued."""
+    from rainalert.db.models import Notification, RainEvent
+
+    for i in range(how_many):
+        event_id = None
+        if not as_liveness:
+            event = RainEvent(
+                subscription_id=subscription.id,
+                predicted_start_at=now - timedelta(hours=i + 1),
+                first_alert_at=now - timedelta(hours=i + 1),
+            )
+            session.add(event)
+            session.flush()
+            event_id = event.id
+        session.add(
+            Notification(
+                subscription_id=subscription.id,
+                event_id=event_id,
+                channel="email",
+                status="sent",
+                queued_at=now - timedelta(hours=i + 1),
+                payload={},
+            )
+        )
+    session.commit()
+
+
+def test_a_subscription_at_its_daily_cap_is_not_warned_again(db, settings, frames):
+    """F-15. `threshold=0.01, lead=120, radius=20000` is within spec on every axis and together
+    means "close to always" in a German autumn. What it spends is shared - a mail provider's daily
+    quota, a sending domain's reputation, one VAPID key's standing with three push services - so the
+    ceiling is not the subscriber's to set."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, settings.alert_cap_per_subscription_per_day, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+
+        assert report.alerts == 0
+        assert report.decisions.get("suppressed_cap") == 1
+        # Visible in `evaluations`, which is what F-15 asked for: suppressed silently would be
+        # indistinguishable from "it never rained".
+        from rainalert.db.models import Evaluation
+
+        latest = session.query(Evaluation).order_by(Evaluation.evaluated_at.desc()).first()
+        assert latest.decision == "suppressed_cap"
+
+
+def test_the_cap_still_advances_the_state(db, settings, frames):
+    """Same rule the other two throttles follow: the send is dropped, the state is not rolled back.
+
+    If it rolled back, the identical event would re-fire on the very next cycle and the cap would
+    have achieved nothing but a delay.
+    """
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, settings.alert_cap_per_subscription_per_day, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.WARNED
+
+
+def test_one_under_the_cap_still_warns(db, settings, frames):
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, settings.alert_cap_per_subscription_per_day - 1, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        assert report.alerts == 1
+
+
+def test_alerts_older_than_the_window_do_not_count(db, settings, frames):
+    """It is a *rolling* 24 h. Yesterday's weather must not mute today's."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        # All of them a comfortable margin outside the window.
+        _past_alerts(
+            session,
+            sub,
+            settings.alert_cap_per_subscription_per_day,
+            T0 - timedelta(hours=25),
+        )
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        assert report.alerts == 1
+
+
+def test_liveness_pings_do_not_count_against_the_cap(db, settings, frames):
+    """A six-monthly "are you still there" is not a rain warning, and counting it would make the cap
+    one tighter than it says - silently, which is the worst way to be wrong about a limit."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(
+            session,
+            sub,
+            settings.alert_cap_per_subscription_per_day + 5,
+            T0,
+            as_liveness=True,
+        )
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        assert report.alerts == 1
+
+
+def test_the_cap_can_be_turned_off(db, settings, frames):
+    """0 disables it, for a deployment that would rather have the noise than the ceiling."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, 50, T0)
+
+        loose = settings.model_copy(update={"alert_cap_per_subscription_per_day": 0})
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, loose, now=T0)
+        assert report.alerts == 1
+
+
+def test_the_global_ceiling_suppresses_and_says_so_loudly(db, settings, frames, caplog):
+    """F-2's per-run ceiling, widened to a day because the quota it protects is a daily one.
+
+    Logged at ERROR, and that is not decoration. Unlike the per-subscription cap - where the account
+    being capped is the one that caused it - reaching this means somebody is not warned about
+    weather that is happening, for a reason that is not theirs.
+    """
+    import logging
+
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+
+        # Under its own cap, over the global one. Attributed to this subscription only because the
+        # fixture has one; the global count does not care whose they were.
+        tight = settings.model_copy(
+            update={"global_alert_cap_per_day": 3, "alert_cap_per_subscription_per_day": 0}
+        )
+        _past_alerts(session, sub, 3, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        with caplog.at_level(logging.ERROR):
+            report = evaluate_cycle(session, add_cycle(session), approaching, tight, now=T0)
+
+        assert report.alerts == 0
+        assert report.daily_cap_tripped is True
+        assert report.decisions.get("suppressed_daily_cap") == 1
+        assert "daily alert cap reached" in caplog.text

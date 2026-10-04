@@ -88,6 +88,25 @@ class Settings(BaseSettings):
     #: far likelier to be broken than to be a nationwide squall, and mailing everyone also burns
     #: the day's sending quota so the genuine alerts later never arrive.
     blast_radius_max: int = 25
+    #: Hard ceiling on alerts one subscription may receive per rolling 24 h, whatever rule it has
+    #: set. SECURITY_REVIEW.md F-15: `threshold=0.01, lead=120, radius=20000` is within spec on
+    #: every axis and together means "close to always" in German autumn, and what it spends - a
+    #: mail provider's daily quota, a sending domain's reputation, one VAPID key's standing with
+    #: three push services - belongs to every other subscriber too.
+    #:
+    #: 12 is two an hour for six hours: more than a real day of weather needs, far less than a
+    #: pathological rule produces. 0 disables it.
+    alert_cap_per_subscription_per_day: int = 12
+    #: Ceiling on alerts across *all* subscriptions per rolling 24 h (F-2's "per-run global mail
+    #: ceiling", widened to a day because the quota it protects is a daily one).
+    #:
+    #: 300 is the mail provider free tier §6.2 budgets for. Deliberately far above
+    #: `alert_cap_per_subscription_per_day` times any plausible subscriber count, because unlike the
+    #: per-subscription cap this one is *shared fate*: once it is reached nobody is warned, which is
+    #: the service failing at its one job. It is the backstop for the case the per-subscription cap
+    #: cannot see - many accounts, each individually reasonable - and it is loud rather than quiet
+    #: (see `evaluate_cycle`). 0 disables it.
+    global_alert_cap_per_day: int = 300
 
     # --- Map timeline (D-22, §11.1) -----------------------------------------------------------
     #: The furthest back the map will go for anyone who asks - the whole window DWD keeps.

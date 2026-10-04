@@ -677,12 +677,35 @@ threshold floor is 0.01 rather than 0.05, and the lead ceiling is 120 rather tha
 reasoning on both is that the bound should come from the data — 0.01 is the smallest value RV
 can express, 120 is the whole forecast it carries — rather than from a guess about behaviour.
 
-That leaves the amplification path in this finding **open**, and narrower only in that
-`threshold=0.01, lead=120, radius=20000` is still reachable. The remaining half of the fix is
-the part that actually bounds the damage and does not narrow the knobs: a per-subscription cap
-on alerts per rolling 24 h, and the global per-day ceiling from F-2. Neither is built. Both
-should land before anyone but the author is a subscriber — which is also when the shared sending
-reputation this finding is about starts to exist.
+**Status (2026-10-04): closed.** The remaining half — the part that bounds the damage without
+narrowing the knobs — is built. `threshold=0.01, lead=120, radius=20000` is still reachable and
+still means "close to always"; it just cannot cost anyone else their warnings any more.
+
+- `alert_cap_per_subscription_per_day` (12) is a hard ceiling per subscription per rolling 24 h,
+  applied in `suppress()` alongside the two throttles the subscriber owns, and recorded in
+  `evaluations.decision` as `suppressed_cap` — visible, as this finding asked, because suppressed
+  silently is indistinguishable from "it never rained". 12 is two an hour for six hours: more than
+  a real day of weather needs, far less than a pathological rule produces.
+- `global_alert_cap_per_day` (300, the free tier §6.2 budgets for) is F-2's global ceiling, widened
+  from per-run to per-day because the quota it protects is a daily one. Recorded as
+  `suppressed_daily_cap` and logged at ERROR, deliberately: unlike the per-subscription cap, where
+  the account being capped is the one that caused it, reaching this means somebody is not warned
+  about weather that is happening for a reason that is not theirs. If it fires, the question is
+  whether the traffic is real — not whether to raise the number.
+- Both follow the rule the other throttles follow: the state still advances, only the send is
+  dropped. Rolling the transition back would re-fire the identical event on the next cycle and
+  achieve nothing but a delay.
+- The count comes from `notifications` with `event_id IS NOT NULL`, so the liveness ping does not
+  count against a rain-warning cap — which would have made the cap one tighter than it claims,
+  silently.
+
+D-9 was revised at the same time: it read "v1 throttling: none beyond the state machine", which had
+stopped being true and had stopped being safe.
+
+The two parameter tightenings this finding originally asked for remain **not taken**, by the product
+owner's decision recorded above — the threshold floor stays 0.01 and the lead ceiling 120, on the
+reasoning that a bound should come from what the data can express rather than from a guess about
+behaviour. The caps are what make that defensible.
 
 ---
 

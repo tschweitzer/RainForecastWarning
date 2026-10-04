@@ -66,7 +66,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-6 | Ingestion stores **full grids** (the original archives), not just samples | Enables replay, debugging, and the map overlay feature |
 | D-7 | Retention: raw archives **48 h**; forecast overlays **1 h**; observed overlays **14 h**; `evaluations` **48 h**; `rain_events` / `notifications` indefinitely | See D-23 |
 | D-8 | Alert de-duplication via a **per-subscription state machine** (§9), not a fixed cooldown | One mail per rain *event*, not per cycle |
-| D-9 | v1 throttling: **none beyond the state machine** — maximum notifications, for debugging | Explicit user choice |
+| D-9 | v1 throttling: **none the subscriber can turn off, except a hard ceiling** — `min_gap_minutes` and quiet hours stay off by default (D-10), so a normal subscriber still gets maximum notifications for debugging, but `alert_cap_per_subscription_per_day` (12) and `global_alert_cap_per_day` (300) bound it | Revised 2026-10-04. The original read "none beyond the state machine", which stopped being true and had stopped being safe: the state machine limits one alert per dry→warned *event*, and a rule of `threshold=0.01, lead=120, radius=20000` — in spec on every axis — widens "event" until it means most cycles in unsettled weather. What that spends is shared (SECURITY_REVIEW.md F-15), so the ceiling is not the subscriber's to set |
 | D-10 | `min_gap_minutes` ("only once per N minutes") and quiet hours exist in the schema and config now, default **off** (`0` / disabled) | Future-configurable without migration |
 | D-11 | Language: **Python everywhere** (FastAPI + Jinja2 templates, numpy) | Radar tooling is Python; one image, one language |
 | D-12 | Mail via a pluggable `Notifier`; default adapter a transactional provider (Brevo/Mailgun/SendGrid free tier); console adapter for dev | Deliverability; swappable via config |
@@ -513,7 +513,9 @@ CREATE TABLE evaluations (
   state_before           alert_state NOT NULL,
   state_after            alert_state NOT NULL,
   decision               text NOT NULL,       -- alert | no_rain | suppressed_state |
-                                              -- suppressed_gap | suppressed_quiet | skipped_missing
+                                              -- suppressed_gap | suppressed_quiet |
+                                              -- suppressed_cap | suppressed_daily_cap |
+                                              -- skipped_missing
   UNIQUE (subscription_id, cycle_id)
 );
 CREATE INDEX evaluations_by_sub_time ON evaluations (subscription_id, evaluated_at DESC);
@@ -683,14 +685,35 @@ provider's daily quota, so that the day's genuine alerts are never delivered. Th
 per-run absolute ceiling on mails, with confirmation mail drawing from a separate reserve so it
 cannot starve alert mail.
 
-**Suppression checks** (evaluated in this order, before queuing):
-1. `min_gap_minutes > 0` and `now - last_alert_at < min_gap_minutes` → `suppressed_gap`
-   (state still advances to `WARNED`, so no duplicate fires later).
+**Suppression checks** (evaluated in this order, before queuing). In all of them the state still
+advances to `WARNED`: rolling the transition back would re-fire the identical event on the next
+cycle and achieve nothing but a delay.
+
+1. `min_gap_minutes > 0` and `now - last_alert_at < min_gap_minutes` → `suppressed_gap`.
 2. quiet hours configured and local time inside the window → `suppressed_quiet` (dropped, not queued
    for later — a warning delivered at 06:00 about rain at 03:00 is noise).
+3. `alert_cap_per_subscription_per_day` alerts already queued for this subscription in the rolling
+   24 h → `suppressed_cap`.
+4. `global_alert_cap_per_day` alerts already queued across *all* subscriptions in the rolling 24 h →
+   `suppressed_daily_cap`, and logged at ERROR.
 
-Both are **disabled by default** per D-9. The code path exists and is unit-tested so enabling them
-later is a config change.
+The first two are the subscriber's own preferences and **disabled by default** per D-10; they are
+checked first so that when they apply, the reason recorded is the one the subscriber chose.
+
+The last two are limits imposed on them and are **on** by default (12 and 300) — they are what makes
+D-9's "maximum notifications" defensible rather than an amplification lever (SECURITY_REVIEW.md
+F-15, F-2). The ordering matters for what lands in `evaluations`: a cap is only interesting to see
+there when nothing the subscriber chose would have stopped the send anyway.
+
+Their asymmetry is deliberate. The per-subscription cap is fair — the account being capped is the
+one that caused it — so it is a quiet counter. The global ceiling is shared fate: reaching it means
+somebody is not warned about weather that is happening, for a reason that is not theirs, so it is an
+error in the log. If it fires the question is whether the traffic is real, not whether to raise the
+number.
+
+Counted from `notifications` with `event_id IS NOT NULL`, so the six-monthly liveness ping (which
+writes `event_id = NULL`) does not count against a rain-warning cap — which would otherwise make
+every cap one tighter than it claims, silently.
 
 **Why this shape:** a fixed cooldown either spams during showers or misses the second front. Tying
 suppression to the physical event (it must go dry again for 30 minutes) gives exactly one mail per
@@ -1401,7 +1424,7 @@ That is what makes §16.3 cheap to write and trustworthy.
 
 Each milestone ends with a working, demonstrable artefact.
 
-**M0 — DWD RV spike (half a day, do this first).**
+**M0 — DWD RV spike.** ✅ *done 2026-09-16*
 Download a real RV archive by hand. Document in `docs/DWD_RV_FORMAT.md`: exact `_LATEST` filename,
 inner member names and count, every header field with an example, the `PR` precision value, the flag
 bit meanings, file size, observed publication delay over a couple of hours, and **how far back the
@@ -1422,7 +1445,7 @@ this confirms are the grid and the clock - the point resolved to row 273, col 76
 there match what DWD draws over that spot, and 11:05 UTC printed as 13:05 local. The fixtures had
 only ever proved internal consistency.
 
-**M2 — ingest pipeline.** 🟡 *code complete 2026-09-16; first live run 2026-09-18, 24 h run outstanding*
+**M2 — ingest pipeline.** ✅ *deployed; running against the real DWD server on a 5-minute schedule, confirmed 2026-10-04*
 Politeness client, archiving, `radar_cycles`, idempotency, advisory lock, the §4.3.1 validation
 gates, retention. `make run-ingest` runs one cycle; 76 tests pass, including 14 politeness tests and
 an ingest suite against a real Postgres.
@@ -1442,7 +1465,7 @@ the first real 25-frame archive the decoder has ever seen.
 the per-cycle numbers go to structured logs); the GCS store is written but unexercised, there being
 no bucket yet (M6); Alembic arrives with M3, when there is more than one table to migrate.
 
-**M3 — subscriptions + mail.** 🟡 *code complete 2026-09-16*
+**M3 — subscriptions + mail.** ✅ *deployed. Push rather than mail is the live channel; the mail path is code-complete and unexercised (no `smtp_host` configured)*
 Schema and Alembic migrations, API (§10) minus `/forecast` and `/overlays`, double opt-in,
 subscribe/confirm/unsubscribe/privacy pages, `Notifier` adapters, rate limits, deletion. 98 tests.
 Verified end to end against a live server: subscribe → confirmation mail → GET leaves the state
@@ -1465,7 +1488,7 @@ behind the same `Notifier` protocol later if its delivery telemetry justifies th
 hostname appears; every link in every mail is built from the former. The defaults are working
 localhost placeholders, so nothing is blocked on choosing a domain.
 
-**M4 — alerting.** 🟡 *code complete 2026-09-17*
+**M4 — alerting.** ✅ *deployed 2026-10. Caps from F-15/F-2 landed 2026-10-04*
 Sampler, rules, state machine, dispatcher, `evaluations`/`rain_events`/`notifications`, and the
 verification job. 143 tests, including the §9 transition table row by row.
 Verified end to end: a real DWD cycle, a subscriber at a point that is dry now and wet in an hour,
@@ -1485,7 +1508,7 @@ picture: we know it is not raining here and we know rain is coming. Only the `no
 silent, which is the case that matters — rain already falling tells us nothing about whether the
 subscriber has just walked into it.
 
-**M5 — map UI.** 🟡 *code complete 2026-09-17*
+**M5 — map UI.** ✅ *deployed. Merged into `/` 2026-09-29 (D-48); `/map` deleted*
 Overlay renderer (obs + fc prefixes), `/api/v1/overlays/timeline`, re-render job, the radar page with
 the slider, staleness banner, gap rendering, legend and attribution. 164 tests.
 Verified against real data: the rendered overlay agrees with the source grid at six German cities
@@ -1500,11 +1523,13 @@ as gaps, and the observed/forecast boundary is unmistakable.
 *Deliberately deferred:* the subscribe form still takes coordinates with a geolocation button
 rather than a draggable map marker; the timeline is the map feature that earns its keep first.
 
-**M6 — deploy.** 🟡 *artifacts written 2026-09-17, nothing applied*
+**M6 — deploy.** ✅ *applied. Live at `https://rainalerts.web.app` behind Firebase Hosting (D-49 region note), 2026-10*
 Terraform for all §6.1 resources (project `rainchecker-195519`, `europe-west3`), Secret Manager,
 Cloud Run service + ingest job + migrate job, Cloud Scheduler at `4-59/5`, two buckets with
 lifecycle rules, monitoring alerts, `Dockerfile`, CI, and `docs/RUNBOOK.md`.
 *Done when:* the service has run unattended for a week with cycle age < 20 min at all times.
+*Not yet demonstrated* — but it is now measured rather than hoped for: `stale_radar` alerts on
+exactly that condition (D-50), so a week without that email is the evidence.
 
 *Decisions:* Terraform rather than shell scripts; CI runs lint and tests only, deploys are by hand
 from `make image-push` plus `terraform apply`.

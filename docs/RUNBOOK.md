@@ -639,15 +639,25 @@ look before the next run.
   confirm, unsubscribe, the magic link and a warning's location reference all ride in the URL
   fragment, which a browser never sends (D-26) — but the paths themselves still say who asked
   for what, and the logs carry client IPs.
-- **Nothing here has spoken to the real DWD server.** Every test uses fixtures or a local replay.
-- **Nothing here has spoken to a real push service either, and no real phone has been tested**
-  (Q-14). The encryption round-trips against a simulated browser; the service worker and the signup
-  page's JavaScript are now *executed* rather than grepped (`tests/js/`, bridged by
-  `tests/test_service_worker.py`), so what the worker does with a payload is checked; and Chromium
-  renders and drives the pages. Still unverified: a real permission prompt, a notification in an
-  Android shade, the action buttons drawing, whether FCM and Mozilla accept our RFC 8291 bodies, and
-  `pushsubscriptionchange` firing on a rotation. Treat the first real subscriber as the test, and
-  watch `notifications.status` on their first warning.
+- ~~**Nothing here has spoken to the real DWD server.**~~ *Closed 2026-10-04.* The ingest job runs
+  against the real server on its 5-minute schedule and produces cycles. Every *test* still uses
+  fixtures or a local replay, which is the right thing for a test suite — DWD is not a fixture — so
+  format drift is still only caught by the golden-fixture test plus the §4.3.1 validation gates at
+  runtime.
+- **A real push service and a real phone: mostly verified, 2026-10.** What has happened for real,
+  end to end on an Android phone and a desktop browser: the permission prompt, a subscription
+  against FCM, a confirmation notification arriving and being tapped, and a settings-link
+  notification arriving and opening `/manage` signed in. So FCM accepts our RFC 8291 bodies. Signup
+  also succeeded on Firefox, Edge and Opera earlier, which exercises Mozilla's push service at least
+  as far as `subscribe()`.
+
+  Still unverified, and worth knowing which: **an actual rain warning has never been delivered to a
+  real person** — every notification so far has been a confirmation or a settings link, which take a
+  different path through `mail.py` and carry different actions. Also unverified: the notification
+  *action* button (`Einstellungen`) being drawn and tapped, since the magic links so far were
+  requested from the settings gate rather than from a warning; Apple's push service at all; and
+  `pushsubscriptionchange` firing on a rotation. The first real warning is still the test — watch
+  `notifications.status` when it fires.
 - **No `Topic` header (RFC 8030 §5.4), deliberately.** A phone offline for 25 minutes comes back to
   several queued warnings; `Topic` would let the push service collapse them server-side so only the
   newest is delivered. It is not needed for the *reader's* experience, because the client-side `tag`
