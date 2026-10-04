@@ -44,16 +44,19 @@ resource "time_sleep" "metric_descriptors" {
   depends_on = [
     google_logging_metric.ingestion_halted,
     google_logging_metric.unknown_push_service,
+    google_logging_metric.stale_radar,
   ]
   create_duration = "300s"
 
-  # Without this the sleep is created once and never again - adding a third metric later would
-  # reintroduce the race for that metric. Keying it on the set of metric names means a new metric
-  # replaces the sleep, and the wait happens again.
+  # Without this the sleep is created once and never again - adding a metric later would reintroduce
+  # the race for that metric. Keying it on the set of metric names means a new metric replaces the
+  # sleep, and the wait happens again. `stale_radar` was the third, and it is why this is a set
+  # rather than a plain depends_on.
   triggers = {
     metrics = join(",", [
       google_logging_metric.ingestion_halted.name,
       google_logging_metric.unknown_push_service.name,
+      google_logging_metric.stale_radar.name,
     ])
   }
 }
@@ -178,8 +181,87 @@ resource "google_monitoring_alert_policy" "unknown_push_service" {
   }
 }
 
-# NOT DEFINED HERE, on purpose: the cycle-age SLI. It lives in the database, which Cloud Monitoring
-# cannot see. Getting it onto a dashboard needs something to scrape /metrics (Managed Service for
-# Prometheus, or a tiny scheduled job that reads it and writes a custom metric). The two alerts
-# above cover the same failure from the outside - a halted or failing job stops producing cycles -
-# so this is a gap in observability, not in safety. See RUNBOOK.md.
+# The radar going stale while every other signal stays green.
+#
+# This is the gap the other two alerts cannot see. `ingestion_halted` fires when the job logs a halt
+# and `job_not_completing` fires when no execution finishes - but a run that fetches, gets a 304 and
+# exits cleanly satisfies both while the data ages. That is exactly what DWD stopping publishing
+# looks like from here: green job, green logs, nobody warned.
+#
+# A log-based metric, and that choice is about cost rather than elegance. The SLI itself lives in the
+# database and is exported at /metrics, which Cloud Monitoring cannot reach; the textbook fixes are
+# Managed Service for Prometheus or a scheduled job writing a custom metric, and both add a billable
+# resource to a stack whose point is being cheap. The ingest job already runs every five minutes, so
+# having it log the number costs nothing and a metric over its output costs nothing either.
+#
+# Both conditions, in one metric. A cycle stamped in the future would read as "the freshest data we
+# ever had" and silence a threshold on age until real time caught up (SECURITY_REVIEW.md F-7), so
+# `log_cycle_staleness` logs that as its own sentence and this matches both. One alert, because the
+# operator's next step is the same either way: find out what DWD is serving.
+resource "google_logging_metric" "stale_radar" {
+  name   = "rainalert_stale_radar"
+  filter = <<-EOT
+    resource.type="cloud_run_job"
+    resource.labels.job_name="${google_cloud_run_v2_job.ingest.name}"
+    (textPayload:"radar data is stale" OR jsonPayload.msg:"radar data is stale"
+     OR textPayload:"cycle timestamp is in the future"
+     OR jsonPayload.msg:"cycle timestamp is in the future")
+  EOT
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+  }
+}
+
+resource "google_monitoring_alert_policy" "stale_radar" {
+  display_name = "RainAlert: radar data is stale"
+  combiner     = "OR"
+  depends_on   = [time_sleep.metric_descriptors]
+
+  conditions {
+    display_name = "newest cycle older than the staleness threshold"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.stale_radar.name}\" AND resource.type=\"cloud_run_job\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      # Two consecutive runs, not one. DWD publishes every five minutes and the threshold is twenty,
+      # so a single stale observation is already four missed cycles - but a one-off is also what a
+      # slow publish looks like, and this must not page for something that fixes itself in the next
+      # five minutes.
+      duration = "600s"
+      aggregations {
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_DELTA"
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.operator.id]
+  # Closes itself once cycles are flowing again, which is the common case: DWD had a bad hour.
+  alert_strategy { auto_close = "3600s" }
+
+  documentation {
+    content = <<-EOT
+      The newest radar cycle is older than `timeline_stale_after_minutes`, or is stamped in the
+      future. Either way the map is not showing the current situation and warnings are not going out
+      for weather that is happening.
+
+      The ingest job is probably healthy - that is the point of this alert. Check what DWD is
+      actually serving:
+
+          gcloud run jobs logs read rainalert-ingest --region europe-west3 --limit 50
+
+      Repeated "no new cycle (304)" means DWD has stopped publishing; there is nothing to fix on
+      this side, and it resolves itself. "cycle timestamp is in the future" means their clock or
+      their filename is wrong, and the age will read as healthy until real time catches up.
+
+      RUNBOOK.md section 3 has the rest.
+    EOT
+  }
+}
+
+# STILL NOT COVERED, on purpose: a deployment that has never ingested anything. `log_cycle_staleness`
+# is silent when there are no cycles at all, because a fresh project is empty between the `migrate`
+# job and the first ingest run, and paging then would teach an operator to ignore this alert on the
+# one day they are certainly watching. `job_not_completing` covers the case where that first run
+# never happens.

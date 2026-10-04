@@ -112,7 +112,12 @@ def ingest(args: argparse.Namespace) -> int:
 
     from rainalert.config import get_settings
     from rainalert.db.session import create_all, make_engine, make_session_factory
-    from rainalert.jobs.ingest import ingest_once, prune_archives, prune_overlays
+    from rainalert.jobs.ingest import (
+        ingest_once,
+        log_cycle_staleness,
+        prune_archives,
+        prune_overlays,
+    )
     from rainalert.notify import build_notifier
     from rainalert.radar.client import DWDClient
     from rainalert.storage import (
@@ -166,6 +171,10 @@ def ingest(args: argparse.Namespace) -> int:
         outcome = ingest_once(
             session, client, store, settings, notifier=notifier, overlays=overlays
         )
+        # After the run and on every path, including the ones that exited early. The failure this
+        # catches is a run that succeeds - fetch, 304, clean exit - while the data ages, so putting
+        # it inside `ingest_once` next to one of its returns would miss exactly the case it is for.
+        log_cycle_staleness(session, settings)
         if args.prune:
             log = logging.getLogger("rainalert.jobs.ingest")
             removed = prune_archives(store, settings)

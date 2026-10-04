@@ -28,6 +28,25 @@ from rainalert.db.models import (
 )
 
 
+def raw_cycle_age_seconds(session: Session, now: datetime | None = None) -> float | None:
+    """Seconds since the newest radar cycle's nominal time, or None when there are none.
+
+    Deliberately *raw*: negative when DWD has stamped a cycle in the future. Callers decide what to
+    do with that, because the two consumers want different things - `/metrics` clamps it at zero and
+    exports the negative case as its own series, and the ingest job logs it as a distinct condition.
+
+    One function rather than two because this is a definition, and this codebase has already paid
+    for duplicating definitions (the timeline window, `sameKey`/`usesOurKey`). A staleness alert that
+    disagreed with the staleness banner the reader sees would be worse than no alert.
+    """
+    latest = session.execute(
+        select(RadarCycle.nominal_time).order_by(RadarCycle.nominal_time.desc()).limit(1)
+    ).scalar_one_or_none()
+    if latest is None:
+        return None
+    return ((now or datetime.now(UTC)) - latest).total_seconds()
+
+
 def _line(name: str, value: float, help_text: str, kind: str = "gauge") -> str:
     return f"# HELP {name} {help_text}\n# TYPE {name} {kind}\n{name} {value}\n"
 
@@ -36,14 +55,7 @@ def render(session: Session, settings: Settings, now: datetime | None = None) ->
     now = now or datetime.now(UTC)
     out: list[str] = []
 
-    latest = session.execute(
-        select(RadarCycle.nominal_time).order_by(RadarCycle.nominal_time.desc()).limit(1)
-    ).scalar_one_or_none()
-
-    if latest is None:
-        raw_age = None
-    else:
-        raw_age = (now - latest).total_seconds()
+    raw_age = raw_cycle_age_seconds(session, now)
 
     out.append(
         _line(

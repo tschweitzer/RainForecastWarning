@@ -299,6 +299,41 @@ the signup succeeded so their browser showed the site as subscribed, and the pag
 input that was already correct. Nothing was logged. If a browser you have not personally tested is
 reported as broken, look here first.
 
+### "RainAlert: radar data is stale"
+
+The newest radar cycle is older than `timeline_stale_after_minutes` (20), or is stamped in the
+future. Either way the map is not showing the current situation and nobody is being warned about
+weather that is happening.
+
+**The ingest job is probably healthy** - that is the point of this alert. It exists for the one
+failure the other two cannot see: a run that fetches, gets a 304 and exits cleanly satisfies both
+`ingestion_halted` and `job_not_completing` while the data quietly ages, which is exactly what DWD
+stopping publishing looks like from here.
+
+    gcloud run jobs logs read rainalert-ingest --region europe-west3 --limit 50
+
+* Repeated `no new cycle (304)` - DWD has stopped publishing. Nothing to fix on this side; it
+  resolves itself and the alert auto-closes after an hour.
+* `cycle timestamp is in the future` - their clock or their filename is wrong. This is alerted
+  separately on purpose: a future stamp reads as "the freshest data we ever had", so an alert on age
+  alone would stay silent until real time caught up (SECURITY_REVIEW.md F-7).
+* Neither, and cycles are arriving - then the threshold or the alert is wrong, not the pipeline.
+
+**Why a log line and not a metric.** The SLI (`rainalert_cycle_age_seconds`) is computed from the
+database and served at `/metrics`, which Cloud Monitoring cannot reach. The textbook fixes - Managed
+Service for Prometheus, or a scheduled job writing a custom metric - each add a billable resource to
+a stack whose point is being cheap. The ingest job already runs every five minutes, so it logs the
+number and a log-based metric filters the words. Cost: nothing.
+
+That makes the log text an interface. `tests/test_outage.py` asserts the phrases in
+`infra/monitoring.tf` against the phrases actually logged, because rewording either side alone
+leaves a metric that never increments and an alert that never fires, with nothing failing anywhere.
+
+**Still not covered:** a deployment that has never ingested anything. `log_cycle_staleness` is silent
+with no cycles at all, because a fresh project is empty between the `migrate` job and the first
+ingest run and paging then would teach an operator to ignore this alert on the one day they are
+certainly watching. `job_not_completing` covers a first run that never happens.
+
 ### Tapping a notification does nothing at all
 
 The reader taps a notification and the page they are already looking at does not change. The tell,
@@ -586,10 +621,12 @@ look before the next run.
 
 ## 5. Known gaps
 
-- **The cycle-age SLI is not on a Cloud Monitoring dashboard.** It lives in the database, which
-  Monitoring cannot see; reaching it needs something to scrape `/metrics`. The two alert policies
-  in `infra/monitoring.tf` catch the same failure from the outside (a halted or failing job stops
-  producing cycles), so this is an observability gap rather than a safety one.
+- ~~**The cycle-age SLI is not alerted.**~~ *Closed 2026-10-04.* It is still not on a dashboard —
+  it lives in the database, which Monitoring cannot see, and putting it there needs something to
+  scrape `/metrics`. But the *alerting* gap is closed without that: the ingest job already runs every
+  five minutes, so `log_cycle_staleness` logs the age there and `google_logging_metric.stale_radar`
+  alerts on the words. No new schedule, no new billable resource. Section 3 has the playbook, and
+  the one case still uncovered (a deployment that has never ingested anything).
 - ~~**Leaflet and OSM tiles are third-party.**~~ *Closed 2026-09-27.* Leaflet is vendored under
   `rainalert/api/static/vendor/leaflet` and served by this app, so `script-src` and `style-src` are
   back to `'self'` and no CDN sees a visitor. The basemap now defaults to basemap.de Web Raster

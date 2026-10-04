@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from rainalert.alerting.dispatcher import deliver_queued, evaluate_cycle
+from rainalert.api.metrics import raw_cycle_age_seconds
 from rainalert.config import Settings
 from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.db.session import pipeline_lock
@@ -127,6 +128,52 @@ def render_overlays(
             overlays.put_forecast(frame.nominal_time, frame.lead_minutes, png)
         rendered += 1
     return rendered
+
+
+def log_cycle_staleness(
+    session: Session, settings: Settings, now: datetime | None = None
+) -> str | None:
+    """Say it out loud when the newest radar cycle is too old to warn anyone with.
+
+    This exists to close the one failure the other two alerts cannot see. `ingestion_halted` fires
+    when this job logs a halt, and `job_not_completing` fires when no execution finishes - but a run
+    that fetches, gets a 304 and exits cleanly satisfies both while the data quietly ages. That is
+    what happens when DWD stops publishing: every signal stays green and nobody is warned.
+
+    A log line rather than a metric, deliberately, and the reason is cost. The SLI for this lives in
+    the database (`/metrics`), which Cloud Monitoring cannot see, and the usual fixes - scraping with
+    Managed Service for Prometheus, or a scheduled job writing a custom metric - both add a billable
+    thing to a stack whose whole point is being cheap. This job already runs every five minutes, and
+    a log-based metric over its output costs nothing. So the number is logged where something is
+    already running, and `infra/monitoring.tf` alerts on the words.
+
+    Returns which condition fired, for the tests; the caller ignores it.
+    """
+    age = raw_cycle_age_seconds(session, now)
+    if age is None:
+        # No cycles at all. Deliberately silent: a fresh deployment is empty between `migrate` and
+        # the first ingest run, and paging on that would teach the operator to ignore this alert on
+        # the one day they are definitely watching. It stays uncovered, which RUNBOOK says.
+        return None
+
+    if age < 0:
+        # The clamp in /metrics exists because a cycle stamped in the future reads as "the freshest
+        # data we ever had" and would silence a staleness threshold until real time caught up
+        # (SECURITY_REVIEW.md F-7). Here it gets its own line so the alert cannot be fooled the same
+        # way: the condition is the opposite sign, not a bigger number.
+        logger.error("cycle timestamp is in the future by %.0f s: %s", -age, "check DWD's clock")
+        return "future"
+
+    if age > settings.timeline_stale_after_minutes * 60:
+        # The same threshold the page uses for its "radar data is stale" banner, so an operator
+        # being paged and a reader looking at the map never disagree about whether this is stale.
+        logger.error(
+            "radar data is stale: newest cycle is %.0f min old, over the %d min threshold",
+            age / 60,
+            settings.timeline_stale_after_minutes,
+        )
+        return "stale"
+    return None
 
 
 def ingest_once(
