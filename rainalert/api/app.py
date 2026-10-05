@@ -462,8 +462,16 @@ def create_app(
         session.execute(sql_text("SELECT 1"))
         # Reachable is not the same as usable. New code on an un-migrated database connects
         # fine and then 500s on the first request that touches what the migration added, a long
-        # way from the cause. On Cloud Run an unready revision also never takes traffic, which
-        # is exactly the right outcome for a deploy that skipped its migration.
+        # way from the cause - so this names the cause.
+        #
+        # It does NOT keep a behind-schema revision from taking traffic, whatever this comment
+        # used to say. The service's startup probe is `/healthz` (infra/run.tf), not this route,
+        # so a revision whose migration has not run yet becomes ready and serves. That is what
+        # makes "apply, then run the migrate job" a workable order - the apply is what puts the
+        # new migration into the migrate job's image - and it is why skipping the migrate step is
+        # not caught by the deploy. Wiring this in as the probe would catch it, at the price of
+        # reversing that order: the migrate job's image would have to be updated on its own first.
+        # The false claim here was repeated to the operator as advice before anyone checked it.
         complaint = schema_complaint(session)
         if complaint:
             logger.error("not ready: %s", complaint)
