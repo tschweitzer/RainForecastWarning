@@ -412,6 +412,30 @@ manage page will be telling them so.
 
 ---
 
+### The first page load after a quiet spell is slow
+
+Expected, within limits. The web service scales to zero (`min_instance_count = 0`), so after about 15
+minutes without a request Cloud Run stops the last instance, and the next visitor waits for a new
+one: the container starts, Python imports the app, and the startup probe on `/healthz` has to pass
+before the request is let through. The database plays no part - Cloud SQL never scales to zero, and
+the ingest job queries it every five minutes anyway.
+
+Two settings in `infra/run.tf` keep this short (D-51): the probe runs every second from the start,
+so a ready app waits at most a second for it, and `startup_cpu_boost` doubles the CPU during
+startup. Neither costs anything worth counting.
+
+To see how long it actually is: Cloud Run → `rainalert-api` → Metrics → *Container startup
+latency*. A few seconds is normal. If it is much longer, look at the revision's logs from the
+start of the instance before changing anything here.
+
+What would remove cold starts, and why it is not done:
+
+- `min_instance_count = 1` in `run.tf`: always warm, but an idle instance is billed all month -
+  several euros, which is a large share of this stack's bill.
+- Having the ingest job request `/healthz` on each run would keep an instance warm for nearly
+  nothing, but Cloud Run does not promise to keep idle instances, so it makes cold starts rare
+  rather than impossible. Worth doing only if the metric above says the fix in place is not enough.
+
 ## 3b. Putting a custom domain in front
 
 Cloud Run's own domain mapping is **not available in europe-west3**. The console says so outright:

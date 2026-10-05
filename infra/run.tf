@@ -66,6 +66,12 @@ resource "google_cloud_run_v2_service" "api" {
 
       resources {
         limits = { cpu = "1", memory = "512Mi" }
+        # With min instances at 0, the first visitor after ~15 quiet minutes waits for a cold
+        # start, and most of that is Python importing the app on one vCPU. The boost doubles the
+        # CPU for the startup and ~10 s after, and only then. It is billed at the normal CPU rate
+        # for those seconds - not free, but a few dozen cold starts a day stays inside the free
+        # tier (D-51).
+        startup_cpu_boost = true
       }
 
       volume_mounts {
@@ -136,11 +142,21 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
+      # No request reaches a new instance until this passes, so its spacing is part of every cold
+      # start. At 3 s + every 5 s, an app ready at 3.5 s waited until 8 s. Probing every second
+      # makes that wait at most one second. /healthz touches nothing, so probing it often costs
+      # nothing, and probes are not billed. A probe may not take longer than its period, which
+      # caps each one at 1 s; /healthz answers in milliseconds, and there are 30 tries. The
+      # failures before the app is up are expected and are not alerted on.
+      #
+      # The budget stays about where it was (30 s now, 33 s before): long enough that a slow
+      # start still comes up, short enough that a broken image fails its deploy (D-51).
       startup_probe {
         http_get { path = "/healthz" }
-        initial_delay_seconds = 3
-        period_seconds        = 5
-        failure_threshold     = 6
+        initial_delay_seconds = 0
+        period_seconds        = 1
+        timeout_seconds       = 1
+        failure_threshold     = 30
       }
     }
   }

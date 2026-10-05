@@ -657,3 +657,44 @@ def test_a_permission_error_is_not_reported_as_a_missing_schema(postgres_url, mo
     finally:
         engine.dispose()
         get_settings.cache_clear()
+
+
+def test_api_startup_probe_is_tight_and_still_valid():
+    """D-51: the probe's spacing is part of every cold start, so it is tight - and must stay legal.
+
+    No request reaches a new instance until the startup probe passes. At 3 s + every 5 s an app
+    ready at 3.5 s waited until 8 s, which is what a visitor after a quiet spell felt. Cloud Run
+    refuses a probe whose timeout exceeds its period, which only shows up at `terraform apply`, so
+    that is asserted here. The path stays `/healthz`: `/readyz` would make a skipped migration
+    fail the deploy, but it would also reverse the "apply, then migrate" order (see `readyz`).
+    Checked as text for the reason given in the hop-count test above.
+    """
+    run_tf = (pathlib.Path(__file__).resolve().parents[1] / "infra" / "run.tf").read_text(
+        encoding="utf-8"
+    )
+    service = run_tf[run_tf.index('resource "google_cloud_run_v2_service" "api"') :]
+    service = service[: service.index("\nresource ")]
+
+    probe = service[service.index("startup_probe {") :]
+    probe = probe[: probe.index("\n      }")]
+    values = {
+        key: int(value)
+        for key, value in re.findall(r"(\w+_seconds|failure_threshold)\s*=\s*(\d+)", probe)
+    }
+    assert 'http_get { path = "/healthz" }' in probe
+    assert values["period_seconds"] == 1, "a ready app should wait at most a second for traffic"
+    assert values["initial_delay_seconds"] == 0
+    assert values["timeout_seconds"] <= values["period_seconds"], (
+        "Cloud Run rejects a probe timeout longer than its period - the apply would fail"
+    )
+    budget = (
+        values["initial_delay_seconds"] + values["period_seconds"] * values["failure_threshold"]
+    )
+    assert 20 <= budget <= 60, (
+        f"startup budget {budget} s: too short fails slow-but-healthy starts, too long delays "
+        "the failure of a broken image"
+    )
+
+    assert re.search(r"^\s*startup_cpu_boost\s*=\s*true$", service, re.MULTILINE), (
+        "the API service's startup CPU boost is off - D-51"
+    )
