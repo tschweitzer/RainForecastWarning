@@ -569,3 +569,65 @@ def test_the_global_ceiling_suppresses_and_says_so_loudly(db, settings, frames, 
         assert report.daily_cap_tripped is True
         assert report.decisions.get("suppressed_daily_cap") == 1
         assert "daily alert cap reached" in caplog.text
+
+
+# --- one unreadable subscriber must not cost everyone their warning (F-3, 2026-10-05) -----------
+
+
+def test_an_unloadable_subscriber_does_not_take_the_cycle_down(db, settings, frames):
+    """Reproduces the production crash of 2026-10-05.
+
+    An `NTFY` subscriber survived its deletion migration (f3b8c21e7a94 deleted lowercase `ntfy`;
+    the ORM stores the name `NTFY`). Once `Channel.NTFY` left the enum the row could not be loaded,
+    and `_persist` lazy-loads the subscriber on the alert path - so when rain approached that
+    location the whole cycle raised. Every *other* subscriber's warning went with it, and since the
+    cycle row is committed before evaluation, none of them was ever retried.
+
+    F-3's isolation covered evaluation and not persisting. This asserts the half that was missing:
+    the healthy subscriber is warned anyway, and what it was warned with is actually committed.
+    """
+    from sqlalchemy import text
+
+    from rainalert.db.models import Notification, Subscription
+
+    with db() as session:
+        healthy = active_subscription(session, settings, email="healthy@example.com")
+        broken = active_subscription(session, settings, email="broken@example.com")
+        # Two more, dry and far away. Without them the cycle warns 2 of 2 subscribers, which is
+        # over the blast-radius limit of half - so nothing reaches the alert path at all, and the
+        # test would pass for the wrong reason. Real rain is local; this makes it look local.
+        for i, place in enumerate(((53.5511, 9.9937), (48.1351, 11.5820))):
+            active_subscription(session, settings, email=f"dry{i}@example.com", at=place)
+        for sub in (healthy, broken):
+            sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        healthy_id, broken_id = healthy.id, broken.id
+
+        # Exactly the production state: a channel the enum no longer has, written behind the ORM's
+        # back the way the surviving row was.
+        session.execute(
+            text("UPDATE subscribers SET channel = 'NTFY' WHERE id = :id"),
+            {"id": broken.subscriber_id},
+        )
+        session.commit()
+        # So the lazy load really goes back to the database, as it did in the job's fresh process.
+        session.expire_all()
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+
+        assert report.errors == 1
+        assert report.alerts == 1, "the healthy subscriber must still be warned"
+
+    # A fresh session, because "warned" has to mean committed, not merely pending in this one.
+    with db() as session:
+        queued = session.query(Notification).filter_by(subscription_id=healthy_id).all()
+        assert len(queued) == 1, "the healthy subscriber's warning was not persisted"
+        assert session.get(Subscription, broken_id).status is SubscriptionStatus.UNHEALTHY
+        # The half-write a bare `try` would leave. `_persist` adds a RainEvent and flushes it
+        # *before* the line that raised, so without the SAVEPOINT the broken subscriber would be
+        # committed with an event nobody was ever told about and its state moved to WARNED.
+        assert not session.query(RainEvent).filter_by(subscription_id=broken_id).all(), (
+            "the broken subscriber was committed half-written - that is what the SAVEPOINT is for"
+        )

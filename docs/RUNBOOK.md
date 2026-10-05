@@ -334,6 +334,30 @@ with no cycles at all, because a fresh project is empty between the `migrate` jo
 ingest run and paging then would teach an operator to ignore this alert on the one day they are
 certainly watching. `job_not_completing` covers a first run that never happens.
 
+### `LookupError: '…' is not among the defined enum values. Enum name: channel`
+
+A subscriber row holds a channel the code no longer knows. Seen on 2026-10-05 as `'NTFY'`: an ntfy
+subscriber that the migration meant to delete it (`f3b8c21e7a94`) had missed, because it deleted
+lowercase `ntfy` and `subscribers.channel` stores the uppercase enum *name*.
+
+What it costs is the important part. `_persist` loads the subscriber only on the alert path, so it
+raised precisely when rain approached that subscriber's location - and until 2026-10-05 it took
+every other subscriber's warning in that cycle with it, permanently, because the cycle row is
+committed before evaluation and is never re-evaluated. Persisting is now isolated per subscription
+in a SAVEPOINT, so the same row today costs one subscriber, is marked `unhealthy`, and is logged.
+
+The fix for the data is migration `a9e4d2c71f05`, which runs with the normal migrate step and prints
+what it found (always, including zero). To check by hand in Cloud SQL Studio:
+
+    SELECT channel, count(*) FROM subscribers GROUP BY channel;
+
+Anything other than `EMAIL` or `WEBPUSH` - including the lowercase forms - is a row the ORM cannot
+load.
+
+**Writing raw SQL against `channel`:** it is uppercase, and it is the only enum column here that is.
+Every other enum (`subscription_status`, `alert_state`, `cycle_status`, `token_purpose`) stores the
+lowercase value. Lowercase against `channel` matches nothing and reports success.
+
 ### Tapping a notification does nothing at all
 
 The reader taps a notification and the page they are already looking at does not change. The tell,
@@ -545,7 +569,7 @@ reaches here.
 
 `git revert` of the D-45 commit also reverts the migration *file*, so alembic's head drops back to
 `d5a1c7e93b42` while the database is still at `f3b8c21e7a94`. The old code then meets
-`push_p256dh`/`push_auth` columns it does not know and `channel = 'webpush'` rows it cannot route.
+`push_p256dh`/`push_auth` columns it does not know and `channel = 'WEBPUSH'` rows it cannot route.
 
 Downgrade the database **before** deploying the revert, not after:
 
@@ -590,7 +614,10 @@ delete their rows so the database does not hold coordinates for people who can n
 ```sh
 gcloud run jobs execute rainalert-migrate --region europe-west3   # nothing schema-related; just
 # ... then, with the proxy up:
-psql -c "delete from subscribers where channel = 'webpush';"
+# UPPERCASE. `subscribers.channel` stores the enum *name*, unlike every other enum column here,
+# which store the lowercase value - see `Channel` in rainalert/db/models.py. Lowercase matches no
+# rows and reports success, which is how f3b8c21e7a94 deleted nothing on 2026-09.
+psql -c "delete from subscribers where channel = 'WEBPUSH';"
 ```
 
 ### The liveness job

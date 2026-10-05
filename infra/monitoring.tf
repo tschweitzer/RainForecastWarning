@@ -85,24 +85,50 @@ resource "google_monitoring_alert_policy" "ingestion_halted" {
 }
 
 # A job that stops succeeding is the same outcome as a job that logs a failure, and more likely.
+#
+# *Succeeding*, and both halves of how it now says so were needed.
+#
+# This policy could not fire, and had not been able to since it was written. It was a threshold
+# condition - "fewer than 1 completed attempt in 30 minutes" - on `completed_task_attempt_count`
+# with no `result` label, and it was wrong twice over:
+#
+#   1. That metric counts *failed* attempts as completed. A job that crashed on every run still
+#      "completed" every five minutes, so the count never dropped below 1.
+#   2. A threshold condition is not evaluated at all when a series has no data - "fewer than 1" is
+#      not the same as "nothing arrived". So a job that stopped running entirely (scheduler broken,
+#      image missing) produced no data, and the condition simply never became true either.
+#
+# Filtering on `result="succeeded"` fixes the first and makes the second the *only* failure mode: a
+# job that fails every run emits nothing for `succeeded` at all. So this is a metric-absence
+# condition - "no successful attempt has been reported for 30 minutes" - which is the question
+# actually being asked, and it covers crashing and not-running alike.
+#
+# Not hypothetical. On 2026-10-05 an unloadable subscriber row raised out of every cycle in which rain
+# approached its location, taking every other subscriber's warning with it, and the operator found
+# out by reading logs. The comment above always said "stops succeeding"; the filter measured
+# something else, and the condition type could not have caught it even if the filter had been right.
+#
+# One property of absence conditions worth knowing: they arm only after at least one data point has
+# been seen since the policy was created or changed. The ingest job succeeds every five minutes in
+# normal operation, so this arms within minutes of an apply - but an apply made *while* the job is
+# already failing will not page until it has succeeded once.
 resource "google_monitoring_alert_policy" "job_not_completing" {
-  display_name = "RainAlert: ingest job has not completed recently"
+  display_name = "RainAlert: ingest job has not succeeded recently"
   combiner     = "OR"
 
   conditions {
-    display_name = "no completed executions in 30 minutes"
-    condition_threshold {
+    display_name = "no successful executions in 30 minutes"
+    condition_absent {
       filter = join(" AND ", [
         "metric.type=\"run.googleapis.com/job/completed_task_attempt_count\"",
+        "metric.label.result=\"succeeded\"",
         "resource.type=\"cloud_run_job\"",
         "resource.label.job_name=\"${google_cloud_run_v2_job.ingest.name}\"",
       ])
-      comparison      = "COMPARISON_LT"
-      threshold_value = 1
-      duration        = "1800s"
+      duration = "1800s"
       aggregations {
-        alignment_period   = "600s"
-        per_series_aligner = "ALIGN_DELTA"
+        alignment_period   = "300s"
+        per_series_aligner = "ALIGN_SUM"
       }
     }
   }

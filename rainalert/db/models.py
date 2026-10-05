@@ -115,6 +115,18 @@ class Subscriber(Base):
     __tablename__ = "subscribers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: Stored as the enum **name** - `EMAIL`, `WEBPUSH` - and this is the only enum column in the
+    #: schema that is. Every other one passes `values_callable` and stores the lowercase value.
+    #:
+    #: That inconsistency has already cost a deletion migration: `f3b8c21e7a94` deleted lowercase
+    #: `ntfy` rows, matched none, and the survivors crashed the alerting cycle months later
+    #: (repaired by `a9e4d2c71f05`). Raw SQL against this column must use uppercase, and
+    #: `tests/test_packaging.py` checks the runbook and new migrations for it.
+    #:
+    #: Left inconsistent on purpose rather than switched to values. Switching means the code and the
+    #: stored data have to change in the same instant: whichever is deployed first, the other one
+    #: cannot read rows for the minutes in between. Uppercase is readable by every revision that has
+    #: ever run, which makes any deploy order safe.
     channel: Mapped[Channel] = mapped_column(
         Enum(Channel, name="channel", native_enum=False, length=16), default=Channel.EMAIL
     )

@@ -40,6 +40,148 @@ def test_multi_cycle_archive_is_rejected_by_read_cycle(outage_cycles):
         read_cycle(outage_cycles)
 
 
+#: Migrations that predate the convention being written down. Both are applied, and editing an applied
+#: migration rewrites history rather than repairing it; `a9e4d2c71f05` is the repair and says why.
+_CHANNEL_CASE_GRANDFATHERED = {
+    "b7c31d9a4e10_channel_and_address.py",
+    "f3b8c21e7a94_webpush_replaces_ntfy.py",
+}
+
+
+def test_raw_sql_against_channel_uses_the_stored_case():
+    """`subscribers.channel` stores the enum *name*; every other enum column stores the value.
+
+    Writing `channel = 'webpush'` is the natural thing, it is what every other enum here would want,
+    and it matches nothing - silently, reporting success. `f3b8c21e7a94` did exactly that with a
+    DELETE and the rows it missed crashed the alerting cycle on 2026-10-05. The runbook's own
+    rollback step had the same mistake.
+
+    So this scans the places a human writes raw SQL against the column - the runbook and every
+    migration from the repair onwards - and refuses a lowercase channel literal.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1]
+    literal = re.compile(r"channel\s*(?:=|<>|!=|IN\s*\()\s*'([^']*)'", re.IGNORECASE)
+
+    # The runbook whole: everything in it is something an operator might paste.
+    sources = {"docs/RUNBOOK.md": (root / "docs" / "RUNBOOK.md").read_text(encoding="utf-8")}
+
+    # Migrations, but only the SQL that *executes* - the strings handed to `text(...)`. The first
+    # version of this scanned the whole file and failed on `a9e4d2c71f05`'s own docstring, which
+    # quotes f3b8c21e7a94's broken DELETE in order to explain it. A guard that cannot tell a
+    # description of the mistake from the mistake would push people to stop describing it.
+    for path in sorted((root / "migrations" / "versions").glob("*.py")):
+        if path.name in _CHANNEL_CASE_GRANDFATHERED:
+            continue
+        executed = []
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "attr", getattr(node.func, "id", None)) == "text"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                executed.append(node.args[0].value)
+        sources[f"migrations/versions/{path.name}"] = "\n".join(executed)
+
+    found = 0
+    for name, text_ in sources.items():
+        for match in literal.finditer(text_):
+            found += 1
+            value = match.group(1)
+            assert value == value.upper(), (
+                f"{name}: `{match.group(0)}` - subscribers.channel stores uppercase names, so this "
+                "matches nothing and reports success. See `Channel` in rainalert/db/models.py."
+            )
+    # Guards the guard: if the pattern stops matching anything, it is no longer checking anything.
+    assert found >= 2, "expected to find the runbook's and a9e4d2c71f05's channel literals"
+
+
+def test_the_stranded_ntfy_rows_are_removed_and_every_subscriber_loads(postgres_url, monkeypatch):
+    """Reproduces the production state that crashed the ingest job, then migrates past it.
+
+    `f3b8c21e7a94` deleted `WHERE channel = 'ntfy'`, but the ORM stores enum *names*, so the rows
+    said `NTFY` and survived. Once `Channel.NTFY` left the Python enum they could not be loaded, and
+    `_persist` lazy-loads the subscriber on the alert path - so rain at that subscriber's location
+    raised out of the whole cycle and nobody was warned.
+
+    The assertion that matters is the last one: after migrating, the ORM can load *every*
+    subscriber. Anything that cannot be loaded is a cycle waiting to crash.
+    """
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, select, text
+    from sqlalchemy.orm import Session
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+    engine = create_engine(postgres_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    try:
+        command.upgrade(config, "f3b8c21e7a94")
+
+        with engine.begin() as conn:
+            # Exactly what production held: an NTFY row that f3b8 failed to delete, with a
+            # subscription hanging off it so the cascade is exercised; a lowercase row, which is
+            # what b7c31d9a4e10's server_default could have produced; and a healthy WEBPUSH row.
+            for channel, address in (
+                ("NTFY", "stranded-topic"),
+                ("webpush", "https://fcm.example/lower"),
+                ("WEBPUSH", "https://fcm.example/upper"),
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO subscribers (id, channel, address, address_hash, locale, "
+                        "created_at) VALUES (gen_random_uuid(), :c, :a, "
+                        "decode(md5(:a), 'hex') || decode(md5(:a), 'hex'), 'de', now())"
+                    ),
+                    {"c": channel, "a": address},
+                )
+            conn.execute(
+                text(
+                    "INSERT INTO subscriptions (id, subscriber_id, status, lat, lon, "
+                    "location_updated_at, radius_m, threshold_mm_5min, lead_time_minutes, "
+                    "min_gap_minutes, timezone, created_at, updated_at) "
+                    # Lowercase here and uppercase above, and that asymmetry is the whole bug:
+                    # subscription_status is a native enum of *values*, channel stores *names*.
+                    "SELECT gen_random_uuid(), id, 'active', 50.1, 8.7, now(), 2000, 0.1, 30, 0, "
+                    "'Europe/Berlin', now(), now() FROM subscribers WHERE channel = 'NTFY'"
+                )
+            )
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            channels = sorted(conn.execute(text("SELECT channel FROM subscribers")).scalars().all())
+            orphans = conn.execute(
+                text(
+                    "SELECT count(*) FROM subscriptions s "
+                    "LEFT JOIN subscribers b ON b.id = s.subscriber_id WHERE b.id IS NULL"
+                )
+            ).scalar_one()
+        assert channels == ["WEBPUSH", "WEBPUSH"], channels
+        assert orphans == 0, "the NTFY subscriber's subscription must cascade with it"
+
+        from rainalert.db.models import Subscriber
+
+        with Session(engine) as session:
+            # The real test. Before the fix this raised LookupError: 'NTFY' is not among the
+            # defined enum values.
+            loaded = session.execute(select(Subscriber)).scalars().all()
+            assert [s.channel.value for s in loaded] == ["webpush", "webpush"]
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
 def test_migrations_match_the_models(postgres_url, monkeypatch):
     """Alembic and the ORM must not drift: a model change without a migration is a broken deploy."""
     from alembic import command

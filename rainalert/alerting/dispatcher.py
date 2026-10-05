@@ -115,26 +115,56 @@ def evaluate_cycle(
 
     for subscription, state_row, reading, transition in pending:
         alert = transition.alert and not report.blast_radius_tripped
-        if alert and settings.global_alert_cap_per_day:
-            if queued_today >= settings.global_alert_cap_per_day:
-                # Shared fate, and that is why it is an error rather than a counter. Unlike the
-                # per-subscription cap - where the account being capped is the one that caused it -
-                # reaching this means somebody is not warned about weather that is happening, for a
-                # reason that is not theirs. If this ever fires, the right response is to find out
-                # whether it is real traffic or a bug, not to raise the number.
-                alert = False
-                transition = replace(transition, alert=False, decision="suppressed_daily_cap")
-                if not report.daily_cap_tripped:
-                    report.daily_cap_tripped = True
-                    logger.error(
-                        "daily alert cap reached: %d alerts in 24 h at the %d ceiling; "
-                        "further warnings are being suppressed for everyone",
-                        queued_today,
-                        settings.global_alert_cap_per_day,
-                    )
-            else:
-                queued_today += 1
-        _persist(session, subscription, state_row, cycle, reading, transition, alert, now)
+        if (
+            alert
+            and settings.global_alert_cap_per_day
+            and queued_today >= settings.global_alert_cap_per_day
+        ):
+            # Shared fate, and that is why it is an error rather than a counter. Unlike the
+            # per-subscription cap - where the account being capped is the one that caused it -
+            # reaching this means somebody is not warned about weather that is happening, for a
+            # reason that is not theirs. If this ever fires, the right response is to find out
+            # whether it is real traffic or a bug, not to raise the number.
+            alert = False
+            transition = replace(transition, alert=False, decision="suppressed_daily_cap")
+            if not report.daily_cap_tripped:
+                report.daily_cap_tripped = True
+                logger.error(
+                    "daily alert cap reached: %d alerts in 24 h at the %d ceiling; "
+                    "further warnings are being suppressed for everyone",
+                    queued_today,
+                    settings.global_alert_cap_per_day,
+                )
+        # Isolated per subscription, and in a SAVEPOINT rather than a bare try.
+        #
+        # F-3 already said one bad row must not take the cycle down for everyone, and the loop
+        # above honours that - but only for *evaluation*. Persisting ran unprotected, and that is
+        # where it broke: a subscriber whose `channel` could not be loaded (an `NTFY` row that
+        # f3b8c21e7a94 failed to delete) raised from the lazy load in `_persist`. It only does that
+        # on the alert path, so it fired precisely when rain approached that subscriber - and it
+        # took every other subscriber's warnings in the cycle with it. The cycle row is committed
+        # before evaluation, so the next run saw it as already stored and never retried: those
+        # warnings were not delayed, they were lost.
+        #
+        # The SAVEPOINT is what makes "skip it and carry on" true rather than hopeful. `_persist`
+        # adds an Evaluation and moves the state row before it ever reaches the line that raised;
+        # without rolling those back, the bad subscription would be committed half-written. With
+        # it, everything persisted for *other* subscriptions in this loop survives.
+        try:
+            with session.begin_nested():
+                _persist(session, subscription, state_row, cycle, reading, transition, alert, now)
+        except Exception:
+            report.errors += 1
+            logger.exception(
+                "persisting the evaluation failed for subscription %s", subscription.id
+            )
+            subscription.status = SubscriptionStatus.UNHEALTHY
+            subscription.health_note = "Deine Warnung konnte nicht verschickt werden."
+            continue
+        # Counted only once the alert is actually queued. Counting before the savepoint would let a
+        # row that failed to persist consume the shared daily ceiling without warning anyone.
+        if alert:
+            queued_today += 1
         report.decisions[transition.decision] = report.decisions.get(transition.decision, 0) + 1
         if transition.decision == "skipped_missing":
             report.skipped_missing += 1
