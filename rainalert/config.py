@@ -305,6 +305,11 @@ class Settings(BaseSettings):
     #: unless something in the request says otherwise (SECURITY_REVIEW.md F-13).
     metrics_token: str | None = None
 
+    #: Requested once at the end of every ingest run, so the web service never sits idle long
+    #: enough to be scaled to zero (jobs/keepwarm.py, D-53). Empty turns it off - the default,
+    #: because locally and in tests there is nothing to keep warm.
+    keep_warm_url: str = ""
+
     log_level: str = "INFO"
     metrics_path: str | None = Field(default=None, description="write Prometheus text here on exit")
 

@@ -233,6 +233,11 @@ resource "google_cloud_run_v2_job" "ingest" {
             ARCHIVE_DIR     = ""
             GCS_BUCKET      = google_storage_bucket.archives.name
             DWD_USER_AGENT  = "RainAlert/0.1 (+${var.public_base_url}; contact: ${var.alert_email})"
+            # One request per run keeps a web instance from idling long enough to be stopped,
+            # which is what the ~8 s first page load was (D-53). The service's own URL rather
+            # than public_base_url, so it does not depend on whatever is in front, and
+            # /healthz because it touches nothing. Best-effort: it cannot fail this job.
+            KEEP_WARM_URL = "${google_cloud_run_v2_service.api.uri}/healthz"
           })
           content {
             name  = env.key

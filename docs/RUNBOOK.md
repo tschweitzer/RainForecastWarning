@@ -414,27 +414,35 @@ manage page will be telling them so.
 
 ### The first page load after a quiet spell is slow
 
-Expected, within limits. The web service scales to zero (`min_instance_count = 0`), so after about 15
-minutes without a request Cloud Run stops the last instance, and the next visitor waits for a new
-one: the container starts, Python imports the app, and the startup probe on `/healthz` has to pass
-before the request is let through. The database plays no part - Cloud SQL never scales to zero, and
-the ingest job queries it every five minutes anyway.
+The web service scales to zero (`min_instance_count = 0`), so after about 15 minutes without a
+request Cloud Run stops the last instance, and the next visitor waits for a new one - about 8 s,
+measured. The database plays no part: Cloud SQL never scales to zero.
 
-Two settings in `infra/run.tf` keep this short (D-51): the probe runs every second from the start,
-so a ready app waits at most a second for it, and `startup_cpu_boost` doubles the CPU during
-startup. Neither costs anything worth counting.
+Two things keep this rare and short:
 
-To see how long it actually is: Cloud Run → `rainalert-api` → Metrics → *Container startup
-latency*. A few seconds is normal. If it is much longer, look at the revision's logs from the
-start of the instance before changing anything here.
+- **The ingest job keeps an instance warm** (D-53). At the end of every run, every five minutes,
+  it requests the service's own `/healthz` once (`KEEP_WARM_URL`, set in `run.tf`). That is more
+  often than Cloud Run stops idle instances, and it costs ~100 ms of instance time per run.
+- **Cold starts that still happen are short** (D-51): the startup probe runs every second and
+  `startup_cpu_boost` doubles the CPU while the instance starts.
 
-What would remove cold starts, and why it is not done:
+Is keeping warm working? The job logs a line whenever its request found the service cold:
 
-- `min_instance_count = 1` in `run.tf`: always warm, but an idle instance is billed all month -
-  several euros, which is a large share of this stack's bill.
-- Having the ingest job request `/healthz` on each run would keep an instance warm for nearly
-  nothing, but Cloud Run does not promise to keep idle instances, so it makes cold starts rare
-  rather than impossible. Worth doing only if the metric above says the fix in place is not enough.
+```
+gcloud logging read 'resource.type="cloud_run_job" AND jsonPayload.msg:"found the web service cold"' \
+  --freshness=1d --limit=50 --format='value(timestamp, jsonPayload.msg)'
+```
+
+A few a day is Cloud Run recycling instances now and then, and expected. Most runs showing it means
+the instance is being stopped between runs anyway. `keep-warm request failed` or `answered NNN`
+lines mean the request is not getting through - look at the service, not the job: the request
+never fails the ingest run.
+
+If it is not enough, what is left is `min_instance_count = 1` in `run.tf`: always warm, but an idle
+instance is billed all month - several euros, a large share of this stack's bill.
+
+To turn keeping warm off, remove `KEEP_WARM_URL` from the ingest job in `run.tf` and apply; empty
+means off.
 
 ## 3b. Putting a custom domain in front
 
