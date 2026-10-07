@@ -698,25 +698,3 @@ def test_api_startup_probe_is_tight_and_still_valid():
     assert re.search(r"^\s*startup_cpu_boost\s*=\s*true$", service, re.MULTILINE), (
         "the API service's startup CPU boost is off - D-51"
     )
-
-
-def test_the_ingest_job_keeps_the_api_warm_through_its_own_url():
-    """D-53: the ingest job, and only it, requests the service's own `/healthz`.
-
-    The service's `uri` rather than `public_base_url`, so keeping warm does not depend on Firebase
-    Hosting or whatever is in front next. `/healthz` because it touches nothing - `/readyz` opens a
-    database connection on every request. Not on the service itself, which would be pinging itself.
-    """
-    run_tf = (pathlib.Path(__file__).resolve().parents[1] / "infra" / "run.tf").read_text(
-        encoding="utf-8"
-    )
-    job = run_tf[run_tf.index('resource "google_cloud_run_v2_job" "ingest"') :]
-    job = job[: job.index("\nresource ")]
-    service = run_tf[run_tf.index('resource "google_cloud_run_v2_service" "api"') :]
-    service = service[: service.index("\nresource ")]
-
-    assert 'KEEP_WARM_URL = "${google_cloud_run_v2_service.api.uri}/healthz"' in job
-    assert "KEEP_WARM_URL" not in service
-    assert "KEEP_WARM_URL" not in run_tf[: run_tf.index("\nresource ")], (
-        "not in common_env: every job and the service would then send it"
-    )

@@ -118,7 +118,6 @@ def ingest(args: argparse.Namespace) -> int:
         prune_archives,
         prune_overlays,
     )
-    from rainalert.jobs.keepwarm import keep_warm
     from rainalert.notify import build_notifier
     from rainalert.radar.client import DWDClient
     from rainalert.storage import (
@@ -185,10 +184,6 @@ def ingest(args: argparse.Namespace) -> int:
                 removed = prune_overlays(overlays, settings)
                 if removed:
                     log.info("pruned %d overlay frames", removed)
-
-    # Last, and outside everything above: it is not part of warning anyone, so it must not
-    # delay that work or decide the exit code (D-53).
-    keep_warm(settings.keep_warm_url)
 
     print(f"{outcome.status}: {outcome.nominal_time or ''} {outcome.reason or ''}".strip())
     # Halted ingestion means nobody gets warned: that is a non-zero exit so the scheduler notices.
