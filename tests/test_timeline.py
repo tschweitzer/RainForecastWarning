@@ -77,7 +77,7 @@ def test_dry_and_missing_are_both_transparent(wet_cycle):
     rgba = colorize(values)
     assert rgba[0, 0, 3] == 0  # NaN
     assert rgba[0, 1, 3] == 0  # dry
-    assert rgba[0, 2, 3] == 0  # below the first stop
+    assert rgba[0, 2, 3] > 0  # the smallest step RV reports is drawn (D-52)
     assert rgba[1, 0, 3] > 0  # light rain
     assert rgba[1, 2, 3] > rgba[1, 1, 3] or rgba[1, 2, 3] > 0  # heavier is more opaque
 

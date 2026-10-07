@@ -12,6 +12,7 @@ Two properties this module exists to guarantee:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -62,6 +63,19 @@ class MaskCache:
         return len(self._masks)
 
 
+def on_the_grid(value: float, precision: float) -> float:
+    """Snap a decoded reading back to the decimal the radar actually reported.
+
+    RV values are integers times ``precision`` (``raw * 0.01``), but the decoder keeps them as
+    float32, which cannot hold most hundredths: 35 comes back as 0.3499999940, 1 as 0.0099999998.
+    Thresholds arrive as the doubles of the same decimals (0.35, 0.01), so comparing the two
+    directly decided that a reading of exactly 0.35 is below 0.35. Rounding to the precision's
+    decimal places gives the double nearest the reported decimal, which is the very double the
+    threshold parses to - so "exactly at the threshold" compares as equal, as it should.
+    """
+    return round(value, round(-math.log10(precision)))
+
+
 def sample(
     frames: list[RVFrame], lat: float, lon: float, radius_m: int, cache: MaskCache | None = None
 ) -> SampleSeries:
@@ -89,5 +103,5 @@ def sample(
         if window_missing.all():
             rates[index] = None  # no data is not zero rain
         else:
-            rates[index] = float(np.nanmax(frame.values[rows, cols]))
+            rates[index] = on_the_grid(float(np.nanmax(frame.values[rows, cols])), frame.precision)
     return SampleSeries(tuple(rates), tuple(missing))

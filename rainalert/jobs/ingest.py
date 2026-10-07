@@ -291,9 +291,10 @@ def ingest_once(
         # decoded to almost nothing and a cycle full of rain log identically, and the only way
         # to tell them apart is to download the overlay and count its pixels - which is what
         # answering "is the map empty because it is dry, or because something is broken?"
-        # actually took. `wet` counts cells at or above the lowest band the map draws
-        # (0.05 mm/5min, about 0.6 mm/h): lighter returns are real and deliberately not drawn,
-        # so counting every non-zero cell would not answer the question being asked.
+        # actually took. `wet` counts cells at or above the lowest band the map draws. That band
+        # now starts at the product's quantum (D-52), so this is every non-zero cell; it stays
+        # tied to the band rather than to `> 0` so that raising the floor again keeps the log
+        # answering "how much of this is on the map".
         analysis = frames[0].values
         finite = analysis[np.isfinite(analysis)]
         peak = float(finite.max()) if finite.size else 0.0

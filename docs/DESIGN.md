@@ -79,6 +79,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-19 | Frontend: server-rendered HTML, no build step; Leaflet for the map, basemap tiles from a configured provider or none (§11.1) | Non-technical friends must be able to subscribe |
 | D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
+| D-52 | **Nothing the radar reports is cut.** The first band, `Nieselregen`, starts at 0.01 mm/5 min (~0.12 mm/h), RV's own quantum, for the map and for the threshold picker alike - so the faintest rain is drawn and can be warned on. It was 0.05 (~0.6 mm/h) | Prompted by drizzle that the DWD app showed, that was falling, and that this map did not draw: on a typical frame about two thirds of the wet cells sat below 0.05. The operator chose to see everything and judge the result rather than pick a new cut. Costs, accepted: the lowest steps carry the most non-rain echoes (clutter, insects, bright band), so the map is tinted more often and a subscriber on `Nieselregen` gets more warnings that turn out dry - bounded by the per-subscription daily cap (F-15) and by each subscriber choosing their own band; overlay PNGs grow (62 kB to 77 kB on a wet frame). Found on the way and fixed with it: the sampler compared float32 readings against double thresholds, and float32 cannot hold most hundredths, so a reading of exactly a band's start (0.01, 0.35, 0.70) counted as below it. Readings are now snapped to the product's precision before the comparison (`sampler.on_the_grid`); at a 0.01 floor the bug would have meant the faintest step could never trigger a warning. Stored thresholds are not migrated: a subscriber on the old 0.05 keeps it, shown as a custom value, until they pick `Nieselregen` again |
 | D-51 | **Cold starts are shortened, not prevented.** The web service keeps `min_instance_count = 0`; its startup probe checks `/healthz` every second from the start (was: after 3 s, then every 5 s), and `startup_cpu_boost` is on | The first visitor after ~15 quiet minutes waits for a new instance, and no request reaches it until the probe passes - so with 5 s spacing an app ready at 3.5 s sat idle until 8 s. Probing every second caps that dead time at one second, at no cost: probes are not billed and `/healthz` touches nothing. The CPU boost speeds up the part that is real work (Python importing the app on one vCPU); it is billed at the normal CPU rate, for startup plus ~10 s, which at a few dozen cold starts a day stays inside the free tier. Rejected: `min_instance_count = 1` removes cold starts but bills an idle instance all month, several euros, against a stack whose point is being cheap; pinging the service from the ingest job would keep it warm for nearly nothing but Cloud Run does not promise to keep idle instances, so it is held back until the cheaper fix is measured. The probe's budget stays near the old one (30 s, was 33 s), so a broken image still fails its deploy. Moving the database would not help: it is not the cold part, Cloud SQL never scales to zero |
 | D-50 | **The cycle-age SLI is alerted by logging it, not by exporting it.** `rainalert_cycle_age_seconds` lives in the database and is served at `/metrics`, which Cloud Monitoring cannot reach | Scraping it (Managed Service for Prometheus) or writing it as a custom metric from a scheduled job would each add a billable resource to a stack whose point is being cheap. The ingest job already runs every five minutes, so `log_cycle_staleness` logs the number there and a log-based metric filters the words - no new schedule, no new resource, no cost. Checked after the run and in the *caller*, because the failure being caught is a run that succeeds (fetch, 304, clean exit) while the data ages, so a check next to one of `ingest_once`'s returns would miss it. Two conditions, because a cycle stamped in the future reads as the freshest data we ever had and would silence a threshold on age (F-7). The trade: the log text is now an interface, so a test asserts the phrases in `monitoring.tf` against the phrases logged - rewording either alone disables the alert with nothing failing |
 | D-49 | **Every page a notification can open re-reads its fragment on `hashchange`.** `sw.js` reuses an open tab by navigating it, so when the target path matches that tab's path only the fragment changes — a same-document navigation, no script, token unread, nothing happens | Fixed on `/` for warning links, then found still broken on `/manage` (press "Link an diesen Browser senden", stay on the page, tap the notification) and on `/confirm`, where the cost is a signup silently purged. The fix belongs on the page, not the worker: the worker navigating same-path is deliberate, because opening a window instead left one tab per notification. Two subtleties: re-running a page's bootstrap has to be safe (`L.map()` on an initialised container throws), and the re-entry guard has to queue rather than discard, or a tap arriving during a slow redeem is dropped — the same bug, rarer. The target set is derived from the `click_url`s `mail.py` builds, so a new one fails the suite until its page can be re-entered |
@@ -958,9 +959,10 @@ the linear resolution of the product the service exists to show is a strange way
 
 **What is still lost, and deliberately:**
 
-- **Values below the first band.** 0.05 mm/5 min is the palette floor, so 98,300 cells of that
-  frame carrying 0 < v < 0.05 are transparent. That is a palette decision (§11.1.1), not a
-  sampling one, and the heaviest such cell was 0.040 mm/5 min.
+- ~~**Values below the first band.**~~ Nothing any more: the first band starts at 0.01 mm/5 min,
+  the smallest step RV reports (D-52). Until 2026-10-07 the floor was 0.05, which left 98,300
+  cells of that frame (0 < v < 0.05) transparent - a palette decision (§11.1.1), not a sampling
+  one.
 - **Exact values.** The PNG carries seven bands, not numbers. A pixel says "at least this much",
   which is what a legend can express.
 - **Cells outside `BOUNDS`.** The DE1200 rectangle reaches 45.69-56.22 N, the image 46-55.9 N.
@@ -979,7 +981,7 @@ same rain by construction, rather than because two lists were edited together.
 
 | mm / 5 min | ≈ mm / h | Name | Colour | Opacity |
 |---|---|---|---|---|
-| 0.05 | 0.6 | Nieselregen | pale blue | 0.55 |
+| 0.01 | 0.12 | Nieselregen | pale blue | 0.55 |
 | 0.15 | 1.8 | leichter Regen | blue | 0.68 |
 | 0.35 | 4.2 | mäßiger Regen | green | 0.78 |
 | 0.70 | 8.4 | kräftiger Regen | yellow | 0.85 |
@@ -1002,7 +1004,9 @@ lot of green landcover — the reason `MAP_TILE_URL` wants a muted, low-saturati
 LOCAL.md). If a green-heavy basemap is ever the only option, move this band rather than fighting
 it: the boundary is what carries meaning, the hue is free.
 
-Below 0.05 the pixel is fully transparent, so "no rain" and "no data" both read as nothing drawn.
+Below 0.01 - that is, at exactly zero - the pixel is fully transparent, so "no rain" and "no data"
+both read as nothing drawn. The first band starts at the product's quantum (D-52), so every reading
+the radar reports as non-zero is on the map.
 The map is not the place to distinguish them; the staleness banner and the gap markers are.
 
 **On the hourly column.** Rain intensity is conventionally classified in mm per *hour*, and RV

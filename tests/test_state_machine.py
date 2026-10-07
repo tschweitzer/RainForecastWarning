@@ -255,3 +255,38 @@ def test_mask_cache_is_actually_shared_between_subscribers():
     assert len(cache) == 1
     sample(frames, 53.5511, 9.9937, 2000, cache)  # elsewhere
     assert len(cache) == 2
+
+
+@pytest.mark.parametrize("raw", [1, 5, 15, 35, 70, 150])
+def test_a_reading_exactly_at_the_threshold_counts(raw):
+    """A cell at exactly a band's start must trigger that band's threshold.
+
+    Regression: the decoder stores `raw * 0.01` as float32, and float32 cannot hold most
+    hundredths - 35 decodes to 0.3499999940, 70 to 0.6999999881, 1 to 0.0099999998. The sampler
+    handed that to `>=` against the threshold, which arrives from the database's numeric(5,2) as
+    the double 0.35, so a reading of exactly "mäßiger Regen" did not reach "mäßiger Regen". With
+    the lowest band at the product's quantum (D-52) it would have meant the faintest rain the radar
+    reports could never trigger a warning at all. Built through the decoder's own arithmetic so
+    the test fails the way production did, not the way a hand-typed float would.
+    """
+    from dataclasses import replace
+    from decimal import Decimal
+
+    import numpy as np
+
+    from rainalert.alerting.rules import AlertRule, evaluate
+    from rainalert.alerting.sampler import sample
+    from rainalert.radar.decoder import read_frames
+    from tests.helpers import FIXTURES
+
+    analysis = read_frames(FIXTURES / "DE1200_RV2609161355_trimmed.tar.bz2")[0]
+    assert analysis.lead_minutes == 0 and analysis.precision == 0.01
+    raw_grid = np.full(analysis.values.shape, raw, dtype=np.uint16)
+    values = (raw_grid * analysis.precision).astype(np.float32)  # what decode_frame does
+    frame = replace(analysis, values=values, missing=np.zeros(values.shape, dtype=bool))
+
+    threshold = float(Decimal(raw) / 100)  # numeric(5,2) -> float, as dispatcher.py does
+    series = sample([frame], 50.1109, 8.6821, 2000)
+    assert evaluate(series, AlertRule(threshold_mm_5min=threshold)).now_wet, (
+        f"a reading of exactly {threshold} mm/5min did not reach a threshold of {threshold}"
+    )

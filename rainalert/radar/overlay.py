@@ -64,7 +64,13 @@ _PROJECTION_BAND_ROWS = 100
 #: invisible. Two opacities multiplying is also a bad way to reason about a palette, so the
 #: layer is now drawn at 1.0 and this column is what you actually see.
 INTENSITY_BANDS: tuple[tuple[float, tuple[int, int, int, int], str], ...] = (
-    (0.05, (120, 180, 255, 140), "Nieselregen"),  # ~0.6 mm/h
+    # From the product's own quantum (`PR E-02`: values are `raw * 0.01`), so every non-zero
+    # reading is drawn and can be warned on - nothing the radar reports is cut. It was 0.05
+    # (~0.6 mm/h) until 2026-10-07, which left about two thirds of the wet cells in a typical
+    # frame transparent and missed drizzle that the DWD app showed and that was falling. The
+    # lowest steps carry the most non-rain echoes (clutter, insects); that is the price of
+    # seeing everything, and the operator chose it (D-52).
+    (0.01, (120, 180, 255, 140), "Nieselregen"),  # ~0.12 mm/h
     (0.15, (60, 140, 240, 173), "leichter Regen"),  # ~1.8 mm/h
     (0.35, (40, 190, 150, 199), "mäßiger Regen"),  # ~4.2 mm/h
     (0.70, (245, 210, 70, 217), "kräftiger Regen"),  # ~8.4 mm/h

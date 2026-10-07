@@ -161,3 +161,27 @@ def test_missing_data_stays_transparent_and_does_not_become_zero(projection):
 
 def test_the_width_is_the_one_the_projection_uses(projection):
     assert projection.width == WIDTH
+
+
+def test_every_band_starts_where_it_says_and_the_first_at_the_quantum():
+    """A cell decoded at exactly a band's start is drawn in that band, from the lowest step up.
+
+    The decoder stores `raw * 0.01` as float32, which cannot hold most hundredths (35 is
+    0.3499999940). Under NumPy's promotion rules the threshold is cast to float32 too, so the
+    comparison happens to agree - this pins that it keeps agreeing, through the decoder's own
+    arithmetic rather than a hand-typed float. And it pins D-52: the first band starts at the
+    product's quantum, so no non-zero reading is left off the map.
+    """
+    from rainalert.radar.overlay import colorize
+
+    raws = [round(threshold * 100) for threshold, _ in COLOR_STOPS]
+    assert raws[0] == 1, "the lowest band must start at the smallest step RV reports (D-52)"
+
+    values = (np.array(raws, dtype=np.uint16) * 0.01).astype(np.float32)  # as decode_frame
+    drawn = colorize(values)
+    for index, (raw, (_, colour)) in enumerate(zip(raws, COLOR_STOPS, strict=True)):
+        assert tuple(drawn[index]) == colour, (
+            f"a reading of exactly {raw / 100} drew the wrong band"
+        )
+
+    assert colorize(np.array([0.0], dtype=np.float32))[0, 3] == 0, "dry must stay transparent"
