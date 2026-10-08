@@ -251,7 +251,7 @@ from what is configured, and it has to name the overlay bucket as well as the ti
 the browser console says so plainly. Local development cannot reproduce it: `LocalOverlayStore`
 serves overlays from the app itself, which is already `'self'`.
 
-**The radar draws but the land underneath is blank.** That is the basemap, not the radar, and the
+**The radar draws but the land underneath is blank.** On the vector map (the default since D-59), see §3c first: the tile server or the CSP. What follows is the raster basemap, which only the Leaflet fallback draws. That is the basemap, not the radar, and the
 network tab tells the cases apart:
 
 - **Tiles 404, or return something that is not an image.** The tile URL is wrong. Run
@@ -388,7 +388,7 @@ Reported instances, for shape recognition:
 If a fourth page ever receives a token, it needs the same three lines. Two things make a naive fix
 insufficient, both learned the hard way:
 
-* **Re-running the page's bootstrap must be safe.** `manage.html` builds a Leaflet map, and
+* **Re-running the page's bootstrap must be safe.** `manage.html` builds a map (MapLibre, or Leaflet as the fallback), and
   `L.map()` on an already-initialised container throws `Map container is already initialized`, which
   kills the rest of the handler. `buildMap()` returns early and re-places the pin instead.
 * **The re-entry guard must queue, not discard.** A flag that simply returns while a run is in
@@ -411,6 +411,18 @@ If their subscription shows `unhealthy`, evaluation has been failing for them sp
 manage page will be telling them so.
 
 ---
+
+### After a deploy, a browser still behaves like the old version
+
+Scripts and styles are loaded by content-versioned URL (`/static/radar.js?v=<hash>`, DESIGN.md
+D-57), so a changed file is a new URL and no browser can keep the old one. The pages themselves are
+`no-cache`, so the next page load picks up the new URLs. If a browser still shows old behaviour:
+
+- **The tab was open across the deploy.** It runs the scripts it loaded; a reload fixes it.
+- **The deploy did not happen.** Compare the `?v=` in the page source with
+  `sha256sum rainalert/api/static/<file> | cut -c1-12` from the commit you meant to deploy.
+- **A file is referenced without `static_url()`.** `tests/test_assets.py` fails for that on the
+  pages it checks; a new page or template must use it too.
 
 ### The first page load after a quiet spell is slow
 
@@ -589,6 +601,14 @@ only the fallback.
   and `MAP_TILE_URL`, as before D-58. This is also the way back if the OSMF ever blocks the site.
 - **Where a page falls back to Leaflet by itself:** no WebGL, a browser without module scripts,
   or MapLibre failing to load. Both pages load Leaflet as well for exactly that.
+- **Open item: the OSMF vector tile usage policy.** It was not readable from the development
+  sandbox, so nobody has checked that it covers this use - read
+  <https://operations.osmfoundation.org/policies/vector/> and note the outcome here. The raster
+  servers' policy rules apps out (DESIGN.md, basemap); the vector service's is separate. If it does
+  not fit, point `VECTOR_TILE_URL` at another Shortbread provider or clear it.
+- **Privacy:** the tile server sees each visitor's IP and map area - on the settings page, the area
+  around their warning location. The privacy page names the configured hosts; change them and it
+  follows by itself.
 - **Changing the map's look:** the styles are generated, not hand-edited. `scripts/map-style/`
   builds `rainalert/api/static/map/gray.json` and `gray-dark.json` (the dark one is lightened
   there, D-59); see its `build.mjs`.

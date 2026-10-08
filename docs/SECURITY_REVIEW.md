@@ -768,6 +768,22 @@ except a nonce for the map bootstrap". That is a good start and above average. N
   the wrong one: an image request is a page view reported to a third party, on a map showing
   somebody's home.
 
+**Status (2026-10-08): third-party map tiles, again.** The maps now draw OpenStreetMap vector tiles
+from the OSMF's server (DESIGN.md D-58, D-59), with basemap.de raster tiles as the Leaflet fallback.
+What changed for this finding:
+
+- **Still a disclosure, now stated.** Every visitor's browser fetches tiles directly; the server
+  sees the IP and the map area, and on `/manage` the map opens on the warning location at zoom 11.
+  The privacy page now says so and names the configured hosts (it said nothing about map tiles
+  before, for basemap.de either).
+- **Referer:** origin only, tiles only - MapLibre's `transformRequest` sets
+  `strict-origin-when-cross-origin` per tile request; the page policy stays `no-referrer`.
+- **No new script origin:** MapLibre, its worker and the label fonts are vendored and hash-pinned;
+  the styles are stripped of VersaTiles' glyph server and sprite. CSP: `connect-src` gains the tile
+  server and the overlay bucket, `img-src` gains `blob:`, `worker-src` stays `'self'`.
+- **Open:** the OSMF vector tile usage policy was not readable from the development sandbox; that
+  it permits this use is unverified (RUNBOOK §3c).
+
 ---
 
 ### F-17 — Location updates silently suppress alerting for a moving user

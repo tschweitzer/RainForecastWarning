@@ -27,6 +27,25 @@ deinen Standort nicht – er enthält einen signierten Verweis, den wir auflöse
 nur noch die normale Karte. Eine alte Benachrichtigung verrät also auch dann nichts über deinen
 Ort, wenn jemand anders sie zu sehen bekommt.</p>
 
+{# Every visitor's browser fetches the map from a third party, and on the settings page the map is
+   centred on the subscriber's warning location - so the tile server learns roughly where they
+   live. That is the one disclosure of a location this service makes, and it was not on this page
+   at all (SECURITY_REVIEW.md, third-party map tiles; DESIGN.md D-59). Names the hosts this
+   deployment is configured with. #}
+{% if vector_tile_host or raster_tile_host %}
+<h2>Die Karte</h2>
+<p>Die Kartengrundlage – Straßen, Orte, Gewässer – lädt dein Browser direkt von einem
+Kartenserver{% if vector_tile_host == 'vector.openstreetmap.org' %} der OpenStreetMap Foundation{%
+endif %} (<code>{{ vector_tile_host or raster_tile_host }}</code>){% if vector_tile_host and
+raster_tile_host %}, und nur wenn dein Browser diese Karte nicht darstellen kann, stattdessen von
+<code>{{ raster_tile_host }}</code>{% endif %}. Dabei sieht der Kartenserver deine IP-Adresse und
+welchen Kartenausschnitt du ansiehst – auf der Seite „Einstellungen“ ist das die Gegend um deinen
+Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber nicht von welcher
+Seite und nichts aus einem Link. Wir selbst geben ihm keine Daten weiter, und es werden dafür
+keine Cookies gesetzt.</p>
+<p>Die Regenbilder und alles andere auf dieser Seite kommen von uns.</p>
+{% endif %}
+
 <h2>Wie lange</h2>
 <p>Bis du dich abmeldest. Nicht bestätigte Anmeldungen werden nach
 {{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>

@@ -173,3 +173,28 @@ def test_a_tap_on_the_pin_does_not_move_it():
     picker = js_function((STATIC / "radar-gl.js").read_text(encoding="utf-8"), "picker")
     handler = picker[picker.index("view.gl.on('click'") :]
     assert handler.index("closest('.maplibregl-marker')") < handler.index("place(event.lngLat")
+
+
+def test_the_privacy_page_names_the_map_servers_it_uses(db, tmp_path):
+    """Every visitor's browser fetches the map from these hosts, and on the settings page the map
+    is centred on the warning location - so the privacy page has to say who they are. It said
+    nothing about map tiles before D-59, for basemap.de either."""
+    page = make_client(db, tmp_path).get("/privacy").text
+    assert "<h2>Die Karte</h2>" in page
+    assert "<code>tiles.example.org</code>" in page
+    assert "Warnort" in page, "it must say that the settings page shows the warning area"
+
+    default = (
+        make_client(
+            db,
+            tmp_path,
+            vector_tile_url="https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt",
+        )
+        .get("/privacy")
+        .text
+    )
+    assert "OpenStreetMap Foundation" in default
+    assert "<code>sgx.geodatenzentrum.de</code>" in default, "the Leaflet fallback's host too"
+
+    none = make_client(db, tmp_path, vector_tile_url="", map_tile_url="").get("/privacy").text
+    assert "<h2>Die Karte</h2>" not in none, "no map servers, nothing to disclose"

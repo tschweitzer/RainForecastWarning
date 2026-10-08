@@ -1277,7 +1277,16 @@ def create_app(
 
     @app.get("/privacy", response_class=HTMLResponse, include_in_schema=False)
     def privacy(request: Request) -> HTMLResponse:
-        return page(request, "privacy.html")
+        # The map servers every visitor's browser contacts, by host, so the page names what this
+        # deployment actually uses rather than what it used when the text was written (D-59).
+        return page(
+            request,
+            "privacy.html",
+            {
+                "vector_tile_host": urlparse(settings.vector_tile_url).hostname or "",
+                "raster_tile_host": urlparse(settings.map_tile_url or "").hostname or "",
+            },
+        )
 
     # The pages' own scripts. Served from 'self', which the CSP already allows, so the shared
     # geolocation helper does not have to be inlined into three templates and drift between them.
