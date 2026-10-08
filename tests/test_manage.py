@@ -915,3 +915,14 @@ def test_the_address_limiter_is_not_an_existence_oracle(behind_proxy, settings, 
     assert codes.count(202) == settings.manage_link_limit_per_hour
     assert 429 in codes
     assert notifier.sent == [], "nothing may be sent for an address nobody subscribed"
+
+
+def test_the_threshold_picker_cannot_widen_the_page(client):
+    """A flex item does not shrink below its content unless told to, and a select's content is its
+    longest option. Without `min-width:0` the picker was 379px wide on a 360px phone, the page
+    scrolled sideways, and the browser zoomed the whole settings page out to fit it - found while
+    measuring the map height in Chromium (D-54)."""
+    page = client.get("/manage").text
+    rule = page[page.index(".threshold-row select {") :]
+    rule = rule[: rule.index("}")]
+    assert "min-width:0" in rule.replace(" ", "")

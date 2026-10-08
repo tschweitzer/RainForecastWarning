@@ -4,6 +4,7 @@ The manifest's job is to be honest about three things - which frames are observa
 forecasts, which slots have no data at all, and how old the newest cycle is.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -617,17 +618,31 @@ def test_the_legend_is_on_the_map_rather_than_between_it_and_the_form(client):
 
 
 def test_the_map_leaves_room_for_the_slider(client):
-    """The slider is a control people come to this page for.
+    """The slider and the timestamp under it stay on screen; the map takes the rest (D-54).
 
-    Sized in svh rather than vh: on a phone `vh` is the viewport with the browser chrome
-    *hidden*, so a map sized in vh is taller than what is on screen. Shorter than the old radar
-    page, because this one has a form under it.
+    The height is the screen minus a per-page reserve, in svh: on a phone `vh` is the viewport
+    with the browser chrome *hidden*, so a map sized in vh is taller than what is on screen.
+    Capped at 1.5x its width, floored at 200px. The reserves themselves were measured in
+    Chromium; what this guards is that the rule is still the one both maps use, that each page
+    still sets its own reserve, and that nothing inline overrides the stylesheet.
     """
-    page = client.get("/").text
-    assert "45svh" in page
-    assert "48vh" in page, "the vh fallback must stay for browsers without svh"
-    # No inline height on the element, or it would win over the stylesheet.
-    assert 'id="map" style=' not in page
+    base = client.get("/").text
+    rule = re.search(r"\.radar-map \{([^}]*)\}", base)
+    assert rule, "the shared map rule is gone from base.html"
+    body = " ".join(rule.group(1).split())
+    assert "height:48vh" in body, "the vh fallback must stay for browsers without svh"
+    assert "calc(100svh - var(--map-reserve" in body
+    assert "calc(min(100vw - 32px, 34rem) * 1.5)" in body
+    assert "clamp(200px," in body
+
+    for path in ("/", "/manage"):
+        page = client.get(path).text
+        assert re.search(r'<div id="map" class="radar-map"></div>', page), path
+        assert re.search(r"#map \{ --map-reserve: [\d.]+rem; \}", page), (
+            f"{path} must set its own reserve - the default is a guess"
+        )
+        # No inline height on the element, or it would win over the stylesheet.
+        assert 'id="map" style=' not in page, path
 
 
 def test_the_page_does_not_explain_the_slider(client):

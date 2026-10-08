@@ -22,15 +22,11 @@
  data-window-pinned="{{ window_pinned | tojson }}"{% endblock %}
 {% block body %}
 <style>
-  /* svh, not vh: on a phone `vh` is the viewport with the browser chrome *hidden*, so a map
-     sized in vh is taller than what is on screen and pushes the slider below the fold. The vh
-     line stays first as the fallback for browsers that do not know svh.
-
-     Shorter than the old /map (55vh) because this page has a form under it, taller than the old
-     / (38vh) because the radar is now the reason to be here rather than an aid to putting a pin
-     somewhere. */
-  #map { height:48vh; height:45svh; min-height:240px;
-         border-radius:10px; border:1px solid var(--line); }
+  /* Sized by .radar-map in base.html. The reserve is what must stay on screen besides the map:
+     the padding and headline above it, the slider row and the timestamp below it, and a little
+     air. Measured in Chromium rather than added up: at 360x640 it leaves the timestamp 10px
+     clear of the bottom edge (D-54). */
+  #map { --map-reserve: 9.25rem; }
   /* By id: Leaflet's stylesheet is linked further down the page, so it would win against
      `.leaflet-container` here. With no tile provider the container otherwise shows Leaflet's
      default light grey, which is a bright slab on a dark page. */
@@ -91,7 +87,7 @@
   {{ settings.locate_link_ttl_minutes }} Minuten – die Karte zeigt deshalb nicht mehr deinen
   Ort. Über <a href="/manage">Einstellungen</a> siehst du ihn jederzeit.</p>
 
-<div id="map"></div>
+<div id="map" class="radar-map"></div>
 <div class="controls" id="radar-controls" hidden>
   <button type="button" id="play" aria-label="Abspielen">▶</button>
   <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"

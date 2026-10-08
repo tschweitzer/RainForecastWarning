@@ -87,7 +87,7 @@
   <p class="hint" id="panel-note" hidden></p>
   <div id="panel-banner" class="note" hidden></div>
 
-  <div id="map" style="height:46vh;min-height:280px;border-radius:10px;border:1px solid var(--line)"></div>
+  <div id="map" class="radar-map"></div>
   <div class="controls" id="radar-controls" hidden>
     <button type="button" id="play" aria-label="Abspielen">▶</button>
     <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
@@ -179,6 +179,10 @@
 
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
 <style>
+  /* Sized by .radar-map in base.html. More reserve than the start page: the line saying which
+     subscription this is sits between the headline and the map. Measured in Chromium: at
+     360x640 the timestamp ends 9px clear of the bottom edge (D-54). */
+  #map { --map-reserve: 11.75rem; }
   .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
   .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
   .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
@@ -186,7 +190,10 @@
   .stamp { font-size:.85rem; color:var(--muted); margin:.4rem 0 0;
            font-variant-numeric:tabular-nums; }
   .threshold-row { display:flex; gap:.6rem; align-items:center; }
-  .threshold-row select { flex:1; padding:.6rem .7rem; font-size:1rem; border:1px solid var(--line);
+  /* min-width:0, because a flex item will not shrink below its content by default, and a
+     select's content is its longest option ("extremer Starkregen – ab 6.0 mm/5 min"). On a 360px
+     phone that made the page wider than the screen, so the browser zoomed the whole page out. */
+  .threshold-row select { flex:1; min-width:0; padding:.6rem .7rem; font-size:1rem; border:1px solid var(--line);
                           border-radius:8px; background:var(--bg); color:var(--fg); }
   /* The selected band's colour, shown separately because option backgrounds are honoured by
      some browsers and ignored by others - notably iOS Safari. This one works everywhere. */
