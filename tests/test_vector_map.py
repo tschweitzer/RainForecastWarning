@@ -248,3 +248,40 @@ def test_switching_tile_provider_is_configuration_not_a_rebuild():
     default = Settings.model_fields["vector_tile_url"].default
     block = variables_tf[variables_tf.index('variable "vector_tile_url"') :]
     assert f'default     = "{default}"' in block[: block.index("\n}\n")]
+
+
+# --- reading the map up close --------------------------------------------------------------------
+
+
+def test_the_vector_map_zooms_two_levels_past_the_raster_one():
+    """20 on Leaflet's scale, so house numbers (style minzoom 17, Leaflet 18) get two levels in
+    which to be read; the Leaflet fallback stays at 18, where its raster tiles end."""
+    gl = (STATIC / "radar-gl.js").read_text(encoding="utf-8")
+    assert "const MAX_ZOOM = 20;" in gl
+    assert "maxZoom: MAX_ZOOM - ZOOM_OFFSET," in gl
+    assert "maxZoom: 18" in (STATIC / "radar.js").read_text(encoding="utf-8")
+
+
+def _luminance(rgb):
+    channels = [int(c) / 255 for c in re.fullmatch(r"rgb\((\d+),(\d+),(\d+)\)", rgb).groups()]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+@pytest.mark.parametrize("theme", ["gray", "gray-dark"])
+def test_house_numbers_stand_out_from_the_buildings_they_sit_on(theme):
+    """WCAG's 4.5:1 for text against the building fill. As generated they were translucent and
+    came out near 1.9:1."""
+    layers = {
+        layer["id"]: layer
+        for layer in json.loads((STATIC / "map" / f"{theme}.json").read_text(encoding="utf-8"))[
+            "layers"
+        ]
+    }
+    paint = layers["label-address-housenumber"]["paint"]
+    fill = layers["building"]["paint"]["fill-color"]
+    text, back = _luminance(paint["text-color"]), _luminance(fill)
+    assert (max(text, back) + 0.05) / (min(text, back) + 0.05) >= 4.5
+    assert paint["text-halo-color"] == fill
+    size = layers["label-address-housenumber"]["layout"]["text-size"]
+    assert size[3:] == [17, 10, 19, 13], "the size the street names have, not small print"

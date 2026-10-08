@@ -17,6 +17,7 @@
 import { Map as GLMap, Marker, NavigationControl } from 'maplibre-gl';
 
 const ZOOM_OFFSET = 1;          // Leaflet zoom = MapLibre zoom + 1
+const MAX_ZOOM = 20;            // on Leaflet's scale, like every zoom the callers pass
 const RING_COLOUR = '#1f6fb2';  // the picker's and the settings page's circle
 
 function webglAvailable() {
@@ -42,7 +43,10 @@ function createMap(id, opts) {
     container: id,
     style: '/map-style/' + (dark ? 'gray-dark' : 'gray') + '.json',
     ...view0,
-    maxZoom: 18 - ZOOM_OFFSET,
+    // Two levels further in than the Leaflet map's 18, which stops where its raster tiles stop.
+    // These tiles are vectors and stay sharp when scaled; 20 is close enough to read a house
+    // number beside its door, and the data has nothing finer to show past that.
+    maxZoom: MAX_ZOOM - ZOOM_OFFSET,
     // North stays up. A rain radar read at an angle is a radar read wrong, and a two-finger
     // twist is easy to make by accident while zooming.
     dragRotate: false,

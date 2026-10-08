@@ -64,6 +64,26 @@ for (const theme of ['gray', 'gray-dark']) {
     && !(layer.paint && ('fill-pattern' in layer.paint || 'line-pattern' in layer.paint)));
   style['font-faces'] = { noto_sans_regular: face(400), noto_sans_bold: face(700) };
 
+  // House numbers as generated are the label colour at 30 % opacity, which over a building comes
+  // out at about 1.9:1 - readable only if you already know the number. Solid instead, chosen for
+  // at least 4.5:1 against the building fill they sit on (light 5.7:1, dark 4.9:1), with a halo
+  // in the building's own colour so an outline running through a number does not cut it up.
+  const BUILDING_FILL = theme === 'gray-dark' ? 'rgb(89,89,89)' : 'rgb(233,233,233)';
+  const HOUSENUMBER = theme === 'gray-dark' ? 'rgb(215,215,215)' : 'rgb(90,90,90)';
+  const building = style.layers.find((layer) => layer.id === 'building');
+  if (!building || building.paint['fill-color'] !== BUILDING_FILL) {
+    throw new Error(`${theme}: the building fill changed - recheck the house-number contrast`);
+  }
+  const housenumber = style.layers.find((layer) => layer.id === 'label-address-housenumber');
+  // And a little larger: the generated 8 px (10 px two levels in) is small print on a phone, and
+  // with the extra zoom levels (radar-gl.js MAX_ZOOM) the buildings around the numbers get big.
+  housenumber.layout['text-size'] = ['interpolate', ['linear'], ['zoom'], 17, 10, 19, 13];
+  housenumber.paint = {
+    'text-color': HOUSENUMBER,
+    'text-halo-color': BUILDING_FILL,
+    'text-halo-width': 1,
+  };
+
   for (const source of Object.values(style.sources)) {
     if (source.type !== 'vector') { continue; }
     // The placeholder has no `{z}`, so the generator took it for a TileJSON address and resolved

@@ -13427,17 +13427,18 @@
       "zoom"
      ],
      17,
-     8,
+     10,
      19,
-     10
+     13
     ],
     "text-font": [
      "noto_sans_regular"
     ]
    },
    "paint": {
-    "icon-color": "rgba(225,225,225,0.302)",
-    "text-color": "rgba(225,225,225,0.302)"
+    "text-color": "rgb(215,215,215)",
+    "text-halo-color": "rgb(89,89,89)",
+    "text-halo-width": 1
    },
    "minzoom": 17,
    "source": "versatiles-shortbread"
