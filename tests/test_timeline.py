@@ -4,7 +4,10 @@ The manifest's job is to be honest about three things - which frames are observa
 forecasts, which slots have no data at all, and how old the newest cycle is.
 """
 
+import json
 import re
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -791,3 +794,57 @@ def test_the_map_reads_the_reference_from_the_fragment_and_erases_it(client):
     assert "'/api/v1/locate'" in body
     # An expired link says so rather than silently opening somewhere else.
     assert 'id="stale-link"' in body
+
+
+RADAR_JS = Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "radar.js"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_slider_buzzes_exactly_when_a_drag_crosses_now():
+    """D-56: one short vibration when the reader's drag crosses or lands on "jetzt".
+
+    Run, not read: the rule is small enough to get subtly wrong - buzzing again on leaving 0, or
+    not at all when a 10-minute step jumps straight over it - and both are only visible on a phone
+    in a hand.
+    """
+    from tests.helpers import js_function
+
+    rule = js_function(RADAR_JS.read_text(encoding="utf-8"), "crossesNow")
+    cases = [
+        # before, after, buzz?
+        (None, -5, False),  # the first frame shown is not a crossing
+        (-10, -5, False),
+        (-5, 0, True),  # lands on now
+        (0, 5, False),  # leaving now: it buzzed on arrival
+        (0, -5, False),
+        (-5, 5, True),  # jumps over now (a frame missing at 0, or a fast drag)
+        (10, -10, True),
+        (5, 0, True),
+        (5, 10, False),
+    ]
+    script = (
+        rule
+        + "\nconsole.log(JSON.stringify("
+        + json.dumps(cases)
+        + ".map(c => crossesNow(c[0], c[1]))));"
+    )
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == [expected for _, _, expected in cases]
+
+
+def test_only_the_readers_own_moves_buzz():
+    """Playback and range changes move the slider too. They set `slider.value`, which fires no
+    `input` event - so tying the vibration to `input` is what keeps the animation from buzzing
+    every loop. This pins that the buzz is reachable from the input handler and nowhere else, and
+    that it stays guarded: Safari has no `navigator.vibrate` at all."""
+    from tests.helpers import js_function
+
+    source = RADAR_JS.read_text(encoding="utf-8")
+    assert source.count("buzz()") == 2, "buzz() is defined once and called once"
+    handler = source[source.index("slider.addEventListener('input'") :]
+    handler = handler[: handler.index("});") + 3]
+    assert "if (crossesNow(before, current)) { buzz(); }" in handler
+    assert "if (navigator.vibrate)" in js_function(source, "buzz")
+    # The bubble is decoration for sighted readers; the slider says the same to a screen reader.
+    assert "bubble.setAttribute('aria-hidden', 'true')" in source
+    assert "slider.setAttribute('aria-valuetext'" in source

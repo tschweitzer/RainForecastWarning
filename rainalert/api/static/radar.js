@@ -226,6 +226,52 @@
     var MAX_CACHED = 100;
     var WINDOW = 6;                 // how far either side of the cursor to prefetch
     var slider = opts.slider, play = opts.play, stamp = opts.stamp, banner = opts.banner;
+    var current = null;             // offset_minutes of the frame on screen
+
+    /* The bubble over the knob while it is held (D-56): how far the frame under the finger is
+       from the latest radar image - the same "jetzt" the stamp line uses. Above the knob because
+       on a phone the finger covers the knob and the stamp line below it. aria-hidden, because
+       the slider's own aria-valuetext (set in show()) already says it to a screen reader. */
+    var bubble = null;
+    if (slider && slider.parentNode) {
+      bubble = document.createElement('span');
+      bubble.className = 'slider-bubble';
+      bubble.setAttribute('aria-hidden', 'true');
+      bubble.hidden = true;
+      slider.parentNode.appendChild(bubble);
+    }
+    // The browsers' default range thumb is 16-20px; the error is a couple of pixels of bubble.
+    var THUMB_PX = 16;
+
+    function placeBubble() {
+      var frame = frames[+slider.value];
+      if (!bubble || !frame) { return; }
+      bubble.textContent = relative(frame.offset_minutes);
+      bubble.hidden = false;
+      var min = +slider.min || 0, max = +slider.max || 0;
+      var fraction = max > min ? (+slider.value - min) / (max - min) : 0;
+      var centre = slider.offsetLeft + THUMB_PX / 2 + fraction * (slider.offsetWidth - THUMB_PX);
+      // Kept inside the row at both ends rather than centred on the knob and cut off.
+      var width = bubble.offsetWidth, room = slider.parentNode.clientWidth;
+      bubble.style.left = Math.max(0, Math.min(room - width, centre - width / 2)) + 'px';
+    }
+
+    function hideBubble() { if (bubble) { bubble.hidden = true; } }
+
+    /* A short buzz when a drag crosses or lands on "jetzt", the line between measured and
+       forecast (D-56). Only from `input`, which fires for the reader's own moves and never for
+       playback or a range change, so the animation does not buzz every loop. Android browsers
+       only: Safari has no vibration API and Firefox removed it, and both simply skip this. */
+    function crossesNow(before, after) {
+      if (before === null || before === 0) { return false; }
+      return after === 0 || (after > 0) !== (before > 0);
+    }
+
+    function buzz() {
+      try {
+        if (navigator.vibrate) { navigator.vibrate(12); }
+      } catch (e) { /* not worth a broken slider */ }
+    }
 
     function say(text) {
       if (!banner) { return; }
@@ -276,7 +322,9 @@
     function show(index) {
       var frame = frames[index];
       if (!frame) { return; }
+      current = frame.offset_minutes;
       if (stamp) { stamp.innerHTML = label(frame); }
+      if (slider) { slider.setAttribute('aria-valuetext', relative(frame.offset_minutes)); }
 
       if (gapAt(frame.offset_minutes)) {
         // Deliberately blank rather than holding the previous image: pretending the radar saw
@@ -319,6 +367,7 @@
     if (play) {
       play.addEventListener('click', function () {
         if (timer) { stop(); return; }
+        hideBubble();
         play.textContent = '❚❚';
         var start = frames.findIndex(function (f) { return f.offset_minutes >= -60; });
         if (+slider.value >= frames.length - 1) { slider.value = Math.max(0, start); }
@@ -344,7 +393,20 @@
     }
 
     if (slider) {
-      slider.addEventListener('input', function () { stop(); show(+slider.value); });
+      slider.addEventListener('input', function () {
+        var before = current;
+        stop();
+        show(+slider.value);
+        placeBubble();
+        if (crossesNow(before, current)) { buzz(); }
+      });
+      // Shown while pressed, from the first touch rather than the first move, and gone on
+      // release. On the window, because the release can happen anywhere once the finger slides
+      // off the slider. Keyboard moves show it through `input` and hide it on blur.
+      slider.addEventListener('pointerdown', placeBubble);
+      window.addEventListener('pointerup', hideBubble);
+      window.addEventListener('pointercancel', hideBubble);
+      slider.addEventListener('blur', hideBubble);
     }
 
     /* The fetch is a function rather than a statement, so the range picker can ask for a new

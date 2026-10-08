@@ -98,6 +98,14 @@
                height:clamp(200px, calc(100svh - var(--map-reserve, 10rem)),
                             calc(min(100vw - 32px, 34rem) * 1.36));
                border-radius:10px; border:1px solid var(--line); }
+  /* The bubble over the time slider's knob while it is held (radar.js, D-56). Here rather than
+     in the two page styles, because both pages' sliders get one. Above everything Leaflet draws
+     (its controls are z-index 1000), since it overlaps the bottom edge of the map. */
+  .controls { position:relative; }
+  .slider-bubble { position:absolute; bottom:calc(100% + 8px); left:0; z-index:1001;
+                   padding:.15rem .55rem; border-radius:6px; background:var(--fg); color:var(--bg);
+                   font-size:.9rem; font-weight:600; font-variant-numeric:tabular-nums;
+                   white-space:nowrap; pointer-events:none; box-shadow:0 1px 4px rgba(0,0,0,.3); }
   .locate-control a { font-size:1.1rem; line-height:30px; text-align:center; cursor:pointer;
                       display:block; width:30px; height:30px; }
   .locate-control a.busy { opacity:.45; cursor:progress; }
