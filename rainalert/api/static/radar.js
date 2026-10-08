@@ -267,11 +267,12 @@
       return after === 0 || (after > 0) !== (before > 0);
     }
 
-    // 30 ms, not the 12 it was: a phone's vibration motor needs a moment to spin up, and on many
-    // a pulse much shorter than ~20 ms is too weak to feel at all.
+    // 12 ms: a tick, not a buzz. It was raised to 30 while the vibration seemed not to work at
+    // all - the real cause was a stale cached script (D-57) - and 30 then felt too strong on the
+    // phone it was tried on. 12 was felt there once the current script was running.
     function buzz() {
       try {
-        if (navigator.vibrate) { navigator.vibrate(30); }
+        if (navigator.vibrate) { navigator.vibrate(12); }
       } catch (e) { /* not worth a broken slider */ }
     }
 
