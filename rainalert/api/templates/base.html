@@ -9,8 +9,8 @@
    Android, Chrome never offers to install, and the notification keeps the bare-origin label that
    `/manifest.webmanifest`'s own docstring says the manifest exists to replace. #}
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="icon" href="{{ static_url('icon.svg') }}" type="image/svg+xml">
+<link rel="apple-touch-icon" href="{{ static_url('icon-192.png') }}">
 <meta name="theme-color" content="#1f6fb2">
 <title>{% block title %}Regenwarnung{% endblock %}</title>
 <style>

@@ -264,9 +264,9 @@
   <p id="result" role="status"></p>
 </section>
 
-<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
-<script nonce="{{ request.state.csp_nonce }}" src="/static/vendor/leaflet/leaflet.js"></script>
-<script nonce="{{ request.state.csp_nonce }}" src="/static/geolocate.js"></script>
-<script nonce="{{ request.state.csp_nonce }}" src="/static/radar.js"></script>
-<script nonce="{{ request.state.csp_nonce }}" src="/static/signup.js" defer></script>
+<link rel="stylesheet" href="{{ static_url('vendor/leaflet/leaflet.css') }}">
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('vendor/leaflet/leaflet.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('geolocate.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('signup.js') }}" defer></script>
 {% endblock %}

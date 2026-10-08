@@ -267,9 +267,11 @@
       return after === 0 || (after > 0) !== (before > 0);
     }
 
+    // 30 ms, not the 12 it was: a phone's vibration motor needs a moment to spin up, and on many
+    // a pulse much shorter than ~20 ms is too weak to feel at all.
     function buzz() {
       try {
-        if (navigator.vibrate) { navigator.vibrate(12); }
+        if (navigator.vibrate) { navigator.vibrate(30); }
       } catch (e) { /* not worth a broken slider */ }
     }
 

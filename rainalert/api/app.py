@@ -38,6 +38,7 @@ from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from rainalert import subscriptions as svc
+from rainalert.api.assets import VersionedStaticFiles, static_url
 from rainalert.api.mail import (
     confirmation_message,
     deletion_receipt,
@@ -86,6 +87,9 @@ TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # Available to every template without threading it through every context dict. The credit
 # belongs on every page, so it should not depend on each handler remembering to pass it.
 TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
+# Scripts and styles by content-versioned URL, so a deploy cannot be hidden by a cached copy
+# (assets.py, D-57).
+TEMPLATES.env.globals["static_url"] = static_url
 
 #: The settings-page session.
 #:
@@ -1230,7 +1234,7 @@ def create_app(
     # geolocation helper does not have to be inlined into three templates and drift between them.
     app.mount(
         "/static",
-        StaticFiles(directory=str(Path(__file__).parent / "static")),
+        VersionedStaticFiles(directory=str(Path(__file__).parent / "static")),
         name="static",
     )
 

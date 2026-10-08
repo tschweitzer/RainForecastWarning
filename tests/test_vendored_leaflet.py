@@ -139,8 +139,12 @@ def test_the_vendored_assets_are_served(client, path, content_type):
 @pytest.mark.parametrize("path", MAP_PAGES)
 def test_every_map_page_loads_leaflet_from_this_app(client, path):
     body = client.get(path).text
-    assert '<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">' in body
-    assert 'src="/static/vendor/leaflet/leaflet.js"' in body
+    # With the content version D-57 adds, so a vendored upgrade reaches browsers that cached the
+    # old one.
+    assert re.search(
+        r'<link rel="stylesheet" href="/static/vendor/leaflet/leaflet\.css\?v=[0-9a-f]{12}">', body
+    )
+    assert re.search(r'src="/static/vendor/leaflet/leaflet\.js\?v=[0-9a-f]{12}"', body)
 
 
 @pytest.mark.parametrize("path", MAP_PAGES)
