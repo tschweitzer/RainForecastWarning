@@ -566,18 +566,19 @@
     showLead();
     showRadius();
 
-    /* Not the address, for push. `current.address` is the endpoint - 200-odd characters of Google
-       URL - and this line is the largest text on the page: a reader expecting to see themselves saw
-       a machine identifier and could reasonably think they were looking at someone else's account.
-       "Push-Thema" was worse: *Thema* is ntfy's word for the topic this change deleted. The endpoint
-       identifies nothing to the reader and they have exactly one, so naming the browser is both
-       truthful and sufficient. */
-    var where = current.channel === 'email' ? current.address : 'Push auf diesen Browser';
+    /* Only for email: the address says whose warnings these are. For push there is nothing to
+       show. `current.address` is the endpoint - 200-odd characters of Google URL that identify
+       nothing to the reader - and the stand-in "Push auf diesen Browser · aktiv" read as
+       nonsense: the page is open on whatever browser it is open on, which need not be the one
+       subscribed. The states that matter are not lost with it: pending and unhealthy each put a
+       notice in #panel-banner below, and nothing sets paused. */
+    var who = document.getElementById('who');
     var state = {
       active: 'aktiv', pending: 'noch nicht bestätigt',
       unhealthy: 'gestört', paused: 'pausiert'
     }[current.status] || current.status;
-    document.getElementById('who').textContent = where + ' · ' + state;
+    who.hidden = current.channel !== 'email';
+    who.textContent = who.hidden ? '' : current.address + ' · ' + state;
 
     /* Both notices, not whichever runs last. These were two independent writes to the same
        element, so a pending subscription that also carried a health note lost "es werden noch keine

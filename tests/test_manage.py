@@ -849,6 +849,20 @@ def test_the_settings_page_says_why_nothing_happens_without_script(client):
     assert "JavaScript" in body[body.index("<noscript>") : body.index("</noscript>")]
 
 
+def test_the_settings_page_names_no_channel_for_push(client):
+    """The line "Push auf diesen Browser · aktiv" read as nonsense - the page is open on some
+    browser, not necessarily the subscribed one - so a push subscription gets no line at all. Email
+    keeps the address, which says whose warnings these are. The states worth saying get their own
+    notice."""
+    fill = js_function(client.get("/manage").text, "fill")
+    assert "'Push auf diesen Browser'" not in fill
+    assert "who.hidden = current.channel !== 'email';" in fill
+    assert "current.address + ' · ' + state" in fill
+    assert (
+        "notices.push(current.health_note)" in fill and "if (current.status === 'pending')" in fill
+    )
+
+
 @pytest.fixture()
 def behind_proxy(db, settings, notifier):
     """A client whose `X-Forwarded-For` is trusted, so a test can rotate the apparent source IP.
