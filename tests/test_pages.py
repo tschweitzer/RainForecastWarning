@@ -87,9 +87,9 @@ def test_every_map_has_an_on_map_locate_control(client, db):
     assert "locate-control" in gl and "Zu meinem Standort" in gl
     assert "event.stopPropagation();" in gl
 
-    # The start page calls whichever engine it chose; the settings page is Leaflet only.
-    assert "Engine.locateControl(" in page_source(client, "/")
-    assert "RainRadar.locateControl(" in page_source(client, "/manage")
+    # Both pages call whichever engine they chose (D-59).
+    for path in ("/", "/manage"):
+        assert "Engine.locateControl(" in page_source(client, path), path
 
 
 def enclosing_ids(markup: str, element_id: str) -> list[str]:

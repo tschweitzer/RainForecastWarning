@@ -92,7 +92,7 @@ TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 # (assets.py, D-57).
 TEMPLATES.env.globals["static_url"] = static_url
 
-#: The basemap styles the vector map trial can ask for: one for each colour scheme (D-58).
+#: The basemap styles the vector map can ask for: one for each colour scheme (D-58).
 MAP_THEMES = ("gray", "gray-dark")
 
 
@@ -427,11 +427,11 @@ def create_app(
             # development never showed it because LocalOverlayStore serves them from this app,
             # which *is* 'self'.
             #
-            # `blob:` for the vector map trial (D-58): MapLibre decodes images through blob URLs
+            # `blob:` for the vector map (D-58): MapLibre decodes images through blob URLs
             # where `createImageBitmap` is missing.
             f"img-src 'self' data: blob: {image_origin(settings.map_tile_url)} "
             f"{image_origin(settings.overlay_public_base_url or '')}; "
-            # Also the vector map trial: MapLibre fetches its tiles, and the radar overlays it
+            # Also the vector map: MapLibre fetches its tiles, and the radar overlays it
             # draws, with fetch() rather than <img> - so the tile server and the overlay bucket
             # have to be here as well as in img-src. The bucket already allows this site in its
             # CORS policy, which fetch() needs and <img> did not.
@@ -1137,7 +1137,7 @@ def create_app(
     WINDOW_CHOICES = (3, 6, 12, 24, 48)
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def index(request: Request, hours: str | None = None, karte: str | None = None) -> HTMLResponse:
+    def index(request: Request, hours: str | None = None) -> HTMLResponse:
         """The radar and the signup form, on one page.
 
         `/map` used to be separate and is gone - not redirected. It was still in development and
@@ -1164,15 +1164,11 @@ def create_app(
             except ValueError:
                 window = settings.timeline_default_hours
         window = min(max(window, 1), settings.timeline_past_hours)
-        # The vector map trial (D-58): opt-in per visit, so the ordinary page is untouched and the
-        # two can be compared side by side. The page falls back to Leaflet by itself where
-        # MapLibre cannot run (no WebGL, no module support).
-        engine = "vector" if karte == "vektor" and settings.vector_tile_url else "leaflet"
         return page(
             request,
             "index.html",
             {
-                "map_engine": engine,
+                "map_engine": map_engine(),
                 "layer_opacity": LAYER_OPACITY,
                 "window_hours": window,
                 "window_pinned": pinned,
@@ -1180,9 +1176,15 @@ def create_app(
             },
         )
 
+    def map_engine() -> str:
+        """Which library draws the maps: MapLibre on vector tiles wherever a tile server is
+        configured (D-59), Leaflet otherwise. The pages fall back to Leaflet by themselves where
+        MapLibre cannot run."""
+        return "vector" if settings.vector_tile_url else "leaflet"
+
     @app.get("/map-style/{theme}.json", include_in_schema=False)
     def map_style(theme: str) -> JSONResponse:
-        """A basemap style for the vector map trial, with this deployment's URLs filled in (D-58).
+        """A basemap style for the vector map, with this deployment's URLs filled in (D-58).
 
         The committed styles (static/map/, built by scripts/map-style/build.mjs) leave the tile
         server as a placeholder and name their fonts by static-file path. Both are resolved here:
@@ -1210,7 +1212,9 @@ def create_app(
         time whether this request carries one. The page asks.
         """
         return page(
-            request, "manage.html", {"bounds": rule_bounds(), "layer_opacity": LAYER_OPACITY}
+            request,
+            "manage.html",
+            {"bounds": rule_bounds(), "layer_opacity": LAYER_OPACITY, "map_engine": map_engine()},
         )
 
     #: Served from the root, not from /static. A service worker's default scope is the directory

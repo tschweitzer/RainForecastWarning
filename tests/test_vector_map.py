@@ -1,10 +1,11 @@
-"""The vector map trial on the start page, `/?karte=vektor` (DESIGN.md D-58).
+"""The vector map: MapLibre on Shortbread tiles, the default on every page with a map (DESIGN.md
+D-58 trial, D-59 default).
 
-What a browser run showed and these keep true: the switch is opt-in and the ordinary page carries
-none of it; the style the page gets names this deployment's tile server and nobody else's; and the
-CSP lets MapLibre fetch tiles and overlays and start its worker. The drawing itself - labels above
-the radar, the picker, the fallback to Leaflet without WebGL - was verified in Chromium against
-synthetic Shortbread tiles; it is in the commit, not here.
+What a browser run showed and these keep true: both map pages load MapLibre and keep Leaflet as the
+fallback; without a tile server they are plain Leaflet pages; the style the page gets names this
+deployment's tile server and nobody else's; and the CSP lets MapLibre fetch tiles and overlays and
+start its worker. The drawing itself - labels above the radar, the picker, the fallback without
+WebGL - was verified in Chromium against synthetic Shortbread tiles; it is in the commits, not here.
 """
 
 import hashlib
@@ -41,15 +42,21 @@ def client(db, tmp_path):
     return make_client(db, tmp_path)
 
 
-def test_the_ordinary_page_carries_none_of_it(client):
-    page = client.get("/").text
-    assert 'data-map-engine="leaflet"' in page
-    assert "maplibre" not in page and "radar-gl.js" not in page and "importmap" not in page
+def test_without_a_tile_server_the_pages_are_plain_leaflet(db, tmp_path):
+    client = make_client(db, tmp_path, vector_tile_url="")
+    for path in ("/", "/manage"):
+        page = client.get(path).text
+        assert "maplibre" not in page and "radar-gl.js" not in page and "importmap" not in page, (
+            path
+        )
+    assert 'data-map-engine="leaflet"' in client.get("/").text
+    assert 'var MAP_ENGINE = "leaflet";' in client.get("/manage").text
+    assert client.get("/map-style/gray.json").status_code == 404
 
 
-def test_the_trial_page_loads_maplibre_by_versioned_url_and_keeps_leaflet(client):
-    page = client.get("/?karte=vektor").text
-    assert 'data-map-engine="vector"' in page
+@pytest.mark.parametrize("path", ["/", "/manage"])
+def test_both_map_pages_load_maplibre_by_versioned_url_and_keep_leaflet(client, path):
+    page = client.get(path).text
     importmap = re.search(
         r'<script type="importmap" nonce="[^"]+">\s*(\{.*?\})\s*</script>', page, re.DOTALL
     )
@@ -59,15 +66,25 @@ def test_the_trial_page_loads_maplibre_by_versioned_url_and_keeps_leaflet(client
     assert 'type="module" nonce="' in page and assets.static_url("radar-gl.js") in page
     # The fallback: where MapLibre cannot run, signup.js uses Leaflet, so Leaflet must be here.
     assert assets.static_url("vendor/leaflet/leaflet.js") in page
-    # The module before signup.js: a module runs in document order with `defer` scripts, and
-    # signup.js reads what the module defines.
+    # After radar.js, whose timeline and pin the module reuses.
+    assert page.index(assets.static_url("radar.js")) < page.index("radar-gl.js")
+
+
+def test_each_page_asks_for_the_vector_engine(client):
+    assert 'data-map-engine="vector"' in client.get("/").text
+    # The start page's script runs `defer`, after the module; the settings page's runs inline, so
+    # it must wait for the module before choosing - or a quick session reply builds Leaflet.
+    page = client.get("/").text
     assert page.index("radar-gl.js") < page.index("signup.js")
-
-
-def test_no_tile_server_means_no_trial(db, tmp_path):
-    client = make_client(db, tmp_path, vector_tile_url="")
-    assert 'data-map-engine="leaflet"' in client.get("/?karte=vektor").text
-    assert client.get("/map-style/gray.json").status_code == 404
+    manage = client.get("/manage").text
+    assert 'var MAP_ENGINE = "vector";' in manage
+    build = manage[manage.index("function buildMap()") :]
+    assert build.index("if (!parsed) {") < build.index("Engine.createMap(")
+    # The event, not readyState: 'interactive' arrives before the module has run.
+    assert (
+        "document.addEventListener('DOMContentLoaded', function () { parsed = true; });" in manage
+    )
+    assert "readyState" not in build
 
 
 @pytest.mark.parametrize("theme", ["gray", "gray-dark"])

@@ -1,7 +1,7 @@
 # MapLibre GL JS 6.13.0, vendored
 
-Used only by the vector map trial on the start page (`/?karte=vektor`, DESIGN.md D-58). The
-default start page and the settings page still use Leaflet (`../leaflet/`).
+Draws the maps on the start and settings pages (DESIGN.md D-58, the default since D-59). Leaflet
+(`../leaflet/`) stays as the fallback where MapLibre cannot run.
 
 Served from this app rather than a CDN, for the reason in `../leaflet/README.md`: a CDN would
 learn every visitor's IP before the map draws.

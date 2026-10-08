@@ -27,7 +27,7 @@ function config() {
     windowHours: parseInt(d.windowHours, 10) || 12,
     maxHours: parseInt(d.maxHours, 10) || 48,
     windowPinned: d.windowPinned === 'true',
-    // 'vector' for the MapLibre trial (`/?karte=vektor`, D-58), otherwise 'leaflet'.
+    // 'vector' wherever the server offers vector tiles (D-59), otherwise 'leaflet'.
     mapEngine: d.mapEngine || 'leaflet'
   };
 }
@@ -133,9 +133,9 @@ var radar = null;
 /* Which library draws the map: the same set of functions either way (`createMap`, `picker`,
    `timeline`, ...), so nothing below needs to know.
 
-   The vector trial only where it can actually run. `RainRadarGL` is defined by radar-gl.js, a
+   The vector map only where it can actually run. `RainRadarGL` is defined by radar-gl.js, a
    module that does not define it without WebGL and cannot run at all without module support or
-   if MapLibre failed to load - and each of those falls back to Leaflet, which the trial page
+   if MapLibre failed to load - and each of those falls back to Leaflet, which the page
    loads too, rather than to an empty box. */
 function chooseEngine() {
   if (CONFIG.mapEngine === 'vector' && typeof RainRadarGL !== 'undefined') { return RainRadarGL; }

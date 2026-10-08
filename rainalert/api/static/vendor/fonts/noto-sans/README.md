@@ -1,6 +1,6 @@
 # Noto Sans, vendored
 
-The label font of the vector map trial (DESIGN.md D-58), declared in the map styles' `font-faces`
+The label font of the vector map (DESIGN.md D-58, D-59), declared in the map styles' `font-faces`
 (`../../map/*.json`, built by `scripts/map-style/build.mjs`). Self-hosted so that drawing a town
 name does not mean asking a third-party glyph server.
 

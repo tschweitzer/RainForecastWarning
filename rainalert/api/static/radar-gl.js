@@ -1,5 +1,5 @@
-/* The vector map trial: the start page's map drawn by MapLibre on OpenStreetMap vector tiles
- * (DESIGN.md D-58, `/?karte=vektor`).
+/* The vector map: the start and settings pages' maps drawn by MapLibre on OpenStreetMap vector
+ * tiles (DESIGN.md D-58, the default since D-59).
  *
  * The same functions as `RainRadar` in radar.js - createMap, basemap, picker, mark, timeline,
  * locateControl, legendControl - so signup.js picks one set and does not care which. The radar
@@ -30,15 +30,18 @@ function webglAvailable() {
 
 /* The map, wrapped in the handful of Leaflet-shaped calls signup.js makes. */
 function createMap(id, opts) {
-  const [[south, west], [north, east]] = opts.bounds;
+  // The start page fits Germany; the settings page opens on a place and a zoom (Leaflet's scale).
+  const view0 = opts.bounds
+    ? { bounds: [[opts.bounds[0][1], opts.bounds[0][0]], [opts.bounds[1][1], opts.bounds[1][0]]],
+        fitBoundsOptions: { padding: opts.padding || 0 } }
+    : { center: [opts.center[1], opts.center[0]], zoom: opts.zoom - ZOOM_OFFSET };
   // The colour scheme the page itself follows (base.html), chosen once at load. Switching the
   // style live when the system theme changes would rebuild every layer, the radar included.
   const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const gl = new GLMap({
     container: id,
     style: '/map-style/' + (dark ? 'gray-dark' : 'gray') + '.json',
-    bounds: [[west, south], [east, north]],
-    fitBoundsOptions: { padding: opts.padding || 0 },
+    ...view0,
     maxZoom: 18 - ZOOM_OFFSET,
     // North stays up. A rain radar read at an angle is a radar read wrong, and a two-finger
     // twist is easy to make by accident while zooming.

@@ -20,7 +20,7 @@
    "id": "background",
    "type": "background",
    "paint": {
-    "background-color": "rgb(39,39,39)"
+    "background-color": "rgb(78,78,78)"
    }
   },
   {
@@ -52,7 +52,7 @@
     "glacier"
    ],
    "paint": {
-    "fill-color": "rgb(70,70,70)",
+    "fill-color": "rgb(116,116,116)",
     "fill-opacity": [
      "interpolate",
      [
@@ -89,7 +89,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(43,43,43)",
+    "fill-color": "rgb(84,84,84)",
     "fill-opacity": [
      "interpolate",
      [
@@ -127,7 +127,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(44,44,44)",
+    "fill-color": "rgb(85,85,85)",
     "fill-opacity": [
      "interpolate",
      [
@@ -164,7 +164,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(41,41,41)",
+    "fill-color": "rgb(81,81,81)",
     "fill-opacity": [
      "interpolate",
      [
@@ -205,7 +205,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(43,43,43)",
+    "fill-color": "rgb(84,84,84)",
     "fill-opacity": [
      "interpolate",
      [
@@ -241,7 +241,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(65,65,65)",
+    "fill-color": "rgb(111,111,111)",
     "fill-opacity": [
      "interpolate",
      [
@@ -279,7 +279,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgba(50,50,50,0.5)",
+    "fill-color": "rgba(93,93,93,0.5)",
     "fill-opacity": [
      "interpolate",
      [
@@ -316,7 +316,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(50,50,50)",
+    "fill-color": "rgb(93,93,93)",
     "fill-opacity": [
      "interpolate",
      [
@@ -353,7 +353,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(53,53,53)",
+    "fill-color": "rgb(97,97,97)",
     "fill-opacity": [
      "interpolate",
      [
@@ -391,7 +391,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(42,42,42)",
+    "fill-color": "rgb(82,82,82)",
     "fill-opacity": [
      "interpolate",
      [
@@ -429,7 +429,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(40,40,40)",
+    "fill-color": "rgb(80,80,80)",
     "fill-opacity": [
      "interpolate",
      [
@@ -465,7 +465,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(48,48,48)",
+    "fill-color": "rgb(90,90,90)",
     "fill-opacity": [
      "interpolate",
      [
@@ -504,7 +504,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(47,47,47)",
+    "fill-color": "rgb(89,89,89)",
     "fill-opacity": [
      "interpolate",
      [
@@ -541,7 +541,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(45,45,45)",
+    "fill-color": "rgb(86,86,86)",
     "fill-opacity": [
      "interpolate",
      [
@@ -578,7 +578,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(43,43,43)",
+    "fill-color": "rgb(84,84,84)",
     "fill-opacity": [
      "interpolate",
      [
@@ -617,7 +617,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(45,45,45)",
+    "fill-color": "rgb(86,86,86)",
     "fill-opacity": [
      "interpolate",
      [
@@ -648,7 +648,7 @@
     "sports_centre"
    ],
    "paint": {
-    "fill-color": "rgba(40,40,40,0.149)",
+    "fill-color": "rgba(80,80,80,0.149)",
     "fill-opacity": [
      "interpolate",
      [
@@ -686,7 +686,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgba(75,75,75,0.125)",
+    "fill-color": "rgba(122,122,122,0.125)",
     "fill-opacity": [
      "interpolate",
      [
@@ -717,7 +717,7 @@
     "hospital"
    ],
    "paint": {
-    "fill-color": "rgba(141,141,141,0.102)",
+    "fill-color": "rgba(184,184,184,0.102)",
     "fill-opacity": [
      "interpolate",
      [
@@ -754,7 +754,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(47,47,47)",
+    "fill-color": "rgb(89,89,89)",
     "fill-opacity": [
      "interpolate",
      [
@@ -804,7 +804,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(18,18,18)",
+    "line-color": "rgb(44,44,44)",
     "line-width": [
      "interpolate",
      [
@@ -859,7 +859,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(18,18,18)",
+    "line-color": "rgb(44,44,44)",
     "line-width": [
      "interpolate",
      [
@@ -914,7 +914,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(18,18,18)",
+    "line-color": "rgb(44,44,44)",
     "line-width": [
      "interpolate",
      [
@@ -969,7 +969,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(18,18,18)",
+    "line-color": "rgb(44,44,44)",
     "line-width": [
      "interpolate",
      [
@@ -1105,7 +1105,7 @@
     "dam"
    ],
    "paint": {
-    "fill-color": "rgb(39,39,39)",
+    "fill-color": "rgb(78,78,78)",
     "fill-opacity": [
      "interpolate",
      [
@@ -1184,7 +1184,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(39,39,39)",
+    "fill-color": "rgb(78,78,78)",
     "fill-opacity": [
      "interpolate",
      [
@@ -1222,7 +1222,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-width": [
      "interpolate",
      [
@@ -1269,7 +1269,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(57,57,57)",
+    "fill-color": "rgb(101,101,101)",
     "fill-opacity": [
      "interpolate",
      [
@@ -1300,7 +1300,7 @@
     "taxiway"
    ],
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -1343,7 +1343,7 @@
     "runway"
    ],
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -1392,7 +1392,7 @@
     "taxiway"
    ],
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -1435,7 +1435,7 @@
     "runway"
    ],
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -1489,7 +1489,7 @@
    "type": "fill",
    "source-layer": "buildings",
    "paint": {
-    "fill-color": "rgb(55,55,55)",
+    "fill-color": "rgb(99,99,99)",
     "fill-opacity": [
      "interpolate",
      [
@@ -1512,7 +1512,7 @@
    "type": "fill",
    "source-layer": "buildings",
    "paint": {
-    "fill-color": "rgb(47,47,47)",
+    "fill-color": "rgb(89,89,89)",
     "fill-translate": [
      -2,
      -2
@@ -1565,7 +1565,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(49,49,49)",
+    "fill-color": "rgb(92,92,92)",
     "fill-opacity": [
      "interpolate",
      [
@@ -1611,7 +1611,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -1676,7 +1676,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -1741,7 +1741,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -1806,7 +1806,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -1879,7 +1879,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -1952,7 +1952,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -2025,7 +2025,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -2106,7 +2106,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2179,7 +2179,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2252,7 +2252,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2325,7 +2325,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -2400,7 +2400,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2475,7 +2475,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2554,7 +2554,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2633,7 +2633,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(46,46,46)",
+    "line-color": "rgb(88,88,88)",
     "line-width": [
      "interpolate",
      [
@@ -2700,7 +2700,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(61,61,61)",
+    "line-color": "rgb(106,106,106)",
     "line-dasharray": [
      1.5,
      0.75
@@ -2756,7 +2756,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(61,61,61)",
+    "line-color": "rgb(106,106,106)",
     "line-dasharray": [
      0.5,
      0.25
@@ -2812,7 +2812,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(61,61,61)",
+    "line-color": "rgb(106,106,106)",
     "line-dasharray": [
      1.5,
      0.75
@@ -2868,7 +2868,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(59,59,59)",
+    "line-color": "rgb(104,104,104)",
     "line-dasharray": [
      1.5,
      0.75
@@ -2928,7 +2928,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -2993,7 +2993,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(45,45,45)",
+    "line-color": "rgb(86,86,86)",
     "line-width": [
      "interpolate",
      [
@@ -3058,7 +3058,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(52,52,52)",
+    "line-color": "rgb(95,95,95)",
     "line-width": [
      "interpolate",
      [
@@ -3123,7 +3123,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -3196,7 +3196,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -3269,7 +3269,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(52,52,52)",
+    "line-color": "rgb(95,95,95)",
     "line-width": [
      "interpolate",
      [
@@ -3342,7 +3342,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -3422,7 +3422,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(42,42,42)",
+    "line-color": "rgb(82,82,82)",
     "line-width": [
      "interpolate",
      [
@@ -3497,7 +3497,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -3578,7 +3578,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(53,53,53)",
+    "line-color": "rgb(97,97,97)",
     "line-width": [
      "interpolate",
      [
@@ -3651,7 +3651,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(53,53,53)",
+    "line-color": "rgb(97,97,97)",
     "line-width": [
      "interpolate",
      [
@@ -3724,7 +3724,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -3797,7 +3797,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -3872,7 +3872,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(53,53,53)",
+    "line-color": "rgb(97,97,97)",
     "line-width": [
      "interpolate",
      [
@@ -3947,7 +3947,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(53,53,53)",
+    "line-color": "rgb(97,97,97)",
     "line-width": [
      "interpolate",
      [
@@ -4026,7 +4026,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(53,53,53)",
+    "line-color": "rgb(97,97,97)",
     "line-width": [
      "interpolate",
      [
@@ -4105,7 +4105,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -4185,7 +4185,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -4254,7 +4254,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -4308,7 +4308,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(50,50,50)",
+    "line-color": "rgb(93,93,93)",
     "line-width": [
      "interpolate",
      [
@@ -4447,7 +4447,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -4511,7 +4511,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -4582,7 +4582,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -4638,7 +4638,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(40,40,40)",
+    "line-color": "rgb(80,80,80)",
     "line-dasharray": [
      2,
      2
@@ -4800,7 +4800,7 @@
      20,
      5
     ],
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-opacity": 0.5
    },
    "minzoom": 13,
@@ -4811,7 +4811,7 @@
    "type": "fill",
    "source-layer": "bridges",
    "paint": {
-    "fill-color": "rgb(43,43,43)",
+    "fill-color": "rgb(84,84,84)",
     "fill-antialias": true,
     "fill-opacity": 0.8
    },
@@ -4850,7 +4850,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(49,49,49)",
+    "fill-color": "rgb(92,92,92)",
     "fill-opacity": [
      "interpolate",
      [
@@ -4904,7 +4904,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -4977,7 +4977,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -5050,7 +5050,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -5123,7 +5123,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -5204,7 +5204,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -5285,7 +5285,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -5366,7 +5366,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -5455,7 +5455,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -5536,7 +5536,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -5617,7 +5617,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -5698,7 +5698,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -5781,7 +5781,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -5864,7 +5864,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -5951,7 +5951,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -6038,7 +6038,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -6113,7 +6113,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      1.5,
      0.75
@@ -6177,7 +6177,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      0.5,
      0.25
@@ -6241,7 +6241,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      1.5,
      0.75
@@ -6305,7 +6305,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(76,76,76)",
+    "line-color": "rgb(123,123,123)",
     "line-dasharray": [
      1.5,
      0.75
@@ -6373,7 +6373,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -6446,7 +6446,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(49,49,49)",
+    "line-color": "rgb(92,92,92)",
     "line-width": [
      "interpolate",
      [
@@ -6519,7 +6519,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(63,63,63)",
+    "line-color": "rgb(108,108,108)",
     "line-width": [
      "interpolate",
      [
@@ -6592,7 +6592,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -6673,7 +6673,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -6754,7 +6754,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(63,63,63)",
+    "line-color": "rgb(108,108,108)",
     "line-width": [
      "interpolate",
      [
@@ -6835,7 +6835,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -6923,7 +6923,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -7006,7 +7006,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -7095,7 +7095,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -7176,7 +7176,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -7257,7 +7257,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(58,58,58)",
+    "line-color": "rgb(103,103,103)",
     "line-width": [
      "interpolate",
      [
@@ -7338,7 +7338,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -7421,7 +7421,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -7504,7 +7504,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -7591,7 +7591,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -7678,7 +7678,7 @@
     "line-cap": "round"
    },
    "paint": {
-    "line-color": "rgb(58,58,58)",
+    "line-color": "rgb(103,103,103)",
     "line-width": [
      "interpolate",
      [
@@ -7766,7 +7766,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -7843,7 +7843,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -7904,7 +7904,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(59,59,59)",
+    "line-color": "rgb(104,104,104)",
     "line-width": [
      "interpolate",
      [
@@ -8075,7 +8075,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -8127,7 +8127,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -8194,7 +8194,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -8273,7 +8273,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -8336,7 +8336,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(41,41,41)",
+    "line-color": "rgb(81,81,81)",
     "line-dasharray": [
      2,
      2
@@ -8530,7 +8530,7 @@
      20,
      5
     ],
-    "line-color": "rgb(56,56,56)"
+    "line-color": "rgb(100,100,100)"
    },
    "minzoom": 13,
    "source": "versatiles-shortbread"
@@ -8561,7 +8561,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -8593,7 +8593,7 @@
    "source-layer": "ferries",
    "minzoom": 10,
    "paint": {
-    "line-color": "rgb(77,77,77)",
+    "line-color": "rgb(124,124,124)",
     "line-width": 1.1,
     "line-opacity": [
      "interpolate",
@@ -8646,7 +8646,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -8697,7 +8697,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -8754,7 +8754,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -8805,7 +8805,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -8870,7 +8870,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -8937,7 +8937,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -9009,7 +9009,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -9084,7 +9084,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -9165,7 +9165,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9226,7 +9226,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9287,7 +9287,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9348,7 +9348,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -9423,7 +9423,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": [
      "interpolate",
      [
@@ -9498,7 +9498,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9565,7 +9565,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9632,7 +9632,7 @@
     "line-join": "round"
    },
    "paint": {
-    "line-color": "rgb(43,43,43)",
+    "line-color": "rgb(84,84,84)",
     "line-opacity": 0.5,
     "line-width": [
      "interpolate",
@@ -9687,7 +9687,7 @@
     ]
    ],
    "paint": {
-    "fill-color": "rgb(57,57,57)",
+    "fill-color": "rgb(101,101,101)",
     "fill-opacity": [
      "interpolate",
      [
@@ -9733,7 +9733,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -9798,7 +9798,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -9863,7 +9863,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -9928,7 +9928,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -10001,7 +10001,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -10074,7 +10074,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(48,48,48)",
+    "line-color": "rgb(90,90,90)",
     "line-width": [
      "interpolate",
      [
@@ -10147,7 +10147,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -10228,7 +10228,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10301,7 +10301,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10374,7 +10374,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10447,7 +10447,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(87,87,87)",
+    "line-color": "rgb(134,134,134)",
     "line-width": [
      "interpolate",
      [
@@ -10522,7 +10522,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10597,7 +10597,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10676,7 +10676,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10755,7 +10755,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(51,51,51)",
+    "line-color": "rgb(94,94,94)",
     "line-width": [
      "interpolate",
      [
@@ -10822,7 +10822,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      1.5,
      0.75
@@ -10878,7 +10878,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      0.5,
      0.25
@@ -10934,7 +10934,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(80,80,80)",
+    "line-color": "rgb(127,127,127)",
     "line-dasharray": [
      1.5,
      0.75
@@ -10990,7 +10990,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(76,76,76)",
+    "line-color": "rgb(123,123,123)",
     "line-dasharray": [
      1.5,
      0.75
@@ -11050,7 +11050,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11115,7 +11115,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11180,7 +11180,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(63,63,63)",
+    "line-color": "rgb(108,108,108)",
     "line-width": [
      "interpolate",
      [
@@ -11245,7 +11245,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11318,7 +11318,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11391,7 +11391,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(63,63,63)",
+    "line-color": "rgb(108,108,108)",
     "line-width": [
      "interpolate",
      [
@@ -11464,7 +11464,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -11544,7 +11544,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(44,44,44)",
+    "line-color": "rgb(85,85,85)",
     "line-width": [
      "interpolate",
      [
@@ -11619,7 +11619,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11700,7 +11700,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -11773,7 +11773,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -11846,7 +11846,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(58,58,58)",
+    "line-color": "rgb(103,103,103)",
     "line-width": [
      "interpolate",
      [
@@ -11919,7 +11919,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(57,57,57)",
+    "line-color": "rgb(101,101,101)",
     "line-width": [
      "interpolate",
      [
@@ -11994,7 +11994,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -12069,7 +12069,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -12148,7 +12148,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(65,65,65)",
+    "line-color": "rgb(111,111,111)",
     "line-width": [
      "interpolate",
      [
@@ -12227,7 +12227,7 @@
     "line-cap": "butt"
    },
    "paint": {
-    "line-color": "rgb(58,58,58)",
+    "line-color": "rgb(103,103,103)",
     "line-width": [
      "interpolate",
      [
@@ -12307,7 +12307,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -12379,7 +12379,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -12435,7 +12435,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(59,59,59)",
+    "line-color": "rgb(104,104,104)",
     "line-width": [
      "interpolate",
      [
@@ -12577,7 +12577,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(56,56,56)",
+    "line-color": "rgb(100,100,100)",
     "line-width": [
      "interpolate",
      [
@@ -12643,7 +12643,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -12717,7 +12717,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-dasharray": [
      2,
      2
@@ -12775,7 +12775,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(41,41,41)",
+    "line-color": "rgb(81,81,81)",
     "line-dasharray": [
      2,
      2
@@ -12940,7 +12940,7 @@
      20,
      5
     ],
-    "line-color": "rgb(56,56,56)"
+    "line-color": "rgb(100,100,100)"
    },
    "layout": {
     "line-cap": "butt"
@@ -12987,7 +12987,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-opacity": 0.75,
     "line-width": [
      "interpolate",
@@ -13044,7 +13044,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-opacity": 0.75,
     "line-width": [
      "interpolate",
@@ -13101,7 +13101,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(39,39,39)",
+    "line-color": "rgb(78,78,78)",
     "line-opacity": 0.75,
     "line-width": [
      "interpolate",
@@ -13158,7 +13158,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(102,102,102)",
+    "line-color": "rgb(149,149,149)",
     "line-width": [
      "interpolate",
      [
@@ -13214,7 +13214,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(81,81,81)",
+    "line-color": "rgb(128,128,128)",
     "line-width": [
      "interpolate",
      [
@@ -13273,7 +13273,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(102,102,102)",
+    "line-color": "rgb(149,149,149)",
     "line-width": [
      "interpolate",
      [
@@ -13347,7 +13347,7 @@
     ]
    ],
    "paint": {
-    "line-color": "rgb(8,8,8)",
+    "line-color": "rgb(22,22,22)",
     "line-width": [
      "interpolate",
      [
@@ -13436,8 +13436,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgba(194,194,194,0.302)",
-    "text-color": "rgba(194,194,194,0.302)"
+    "icon-color": "rgba(225,225,225,0.302)",
+    "text-color": "rgba(225,225,225,0.302)"
    },
    "minzoom": 17,
    "source": "versatiles-shortbread"
@@ -13483,8 +13483,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 1,
     "text-halo-blur": 1
@@ -13530,7 +13530,7 @@
    "paint": {
     "icon-color": "rgb(0,0,0)",
     "text-color": "rgb(0,0,0)",
-    "text-halo-color": "rgb(58,58,58)",
+    "text-halo-color": "rgb(103,103,103)",
     "text-halo-width": 0.1,
     "text-halo-blur": 1
    },
@@ -13581,8 +13581,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13634,8 +13634,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13687,8 +13687,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13740,8 +13740,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13793,8 +13793,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13846,8 +13846,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13899,8 +13899,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -13952,8 +13952,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -14005,8 +14005,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -14058,8 +14058,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -14122,8 +14122,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14220,8 +14220,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14318,8 +14318,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14416,8 +14416,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14501,8 +14501,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -14560,8 +14560,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(119,119,119)",
-    "text-color": "rgb(119,119,119)",
+    "icon-color": "rgb(165,165,165)",
+    "text-color": "rgb(165,165,165)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -14611,8 +14611,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14689,8 +14689,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14779,8 +14779,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14869,8 +14869,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -14958,8 +14958,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -15047,8 +15047,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -15139,8 +15139,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(225,225,225)",
-    "text-color": "rgb(225,225,225)",
+    "icon-color": "rgb(247,247,247)",
+    "text-color": "rgb(247,247,247)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -15202,8 +15202,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -15291,8 +15291,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -15380,8 +15380,8 @@
     ]
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "icon-opacity": [
      "interpolate",
@@ -15483,8 +15483,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -15568,8 +15568,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1
@@ -15645,8 +15645,8 @@
     "text-transform": "uppercase"
    },
    "paint": {
-    "icon-color": "rgb(237,237,237)",
-    "text-color": "rgb(237,237,237)",
+    "icon-color": "rgb(255,255,255)",
+    "text-color": "rgb(255,255,255)",
     "text-halo-color": "rgba(0,0,0,0.8)",
     "text-halo-width": 2,
     "text-halo-blur": 1

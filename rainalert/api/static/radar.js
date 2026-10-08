@@ -22,7 +22,7 @@
      library came from, which `img-src` does not allow and should not - a third party would learn
      the visitor's IP on every map view. Inline SVG needs no request and no CSP exception. */
   // 20x29 is 26x38 at ~75%. The viewBox stays 0 0 26 38, so the path is untouched. A constant
-  // because the vector map trial draws the same pin (radar-gl.js, D-58).
+  // because the vector map draws the same pin (radar-gl.js, D-58).
   var PIN_SVG = '<svg viewBox="0 0 26 38" width="20" height="29" role="img"'
     + ' aria-label="Dein Standort">'
     + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
@@ -52,10 +52,15 @@
      maxZoom on the map as well as on the tile layer: with no basemap configured there is no tile
      layer to take it from, and Leaflet would then let the graticule zoom forever.
 
-     `radar-gl.js` has the same function for the vector map trial (D-58); the page picks one. */
+     `radar-gl.js` has the same function for the vector map (D-58); the page picks one. */
   function createMap(id, opts) {
     var map = L.map(id, { zoomControl: true, maxZoom: 18, zoomSnap: 0 });
-    map.fitBounds(opts.bounds, { padding: [opts.padding || 0, opts.padding || 0] });
+    if (opts.bounds) {
+      map.fitBounds(opts.bounds, { padding: [opts.padding || 0, opts.padding || 0] });
+    } else {
+      // A place and a zoom instead: the settings page opens on the subscriber's location.
+      map.setView(opts.center, opts.zoom);
+    }
     map.options.zoomSnap = 1;
     return map;
   }
@@ -230,7 +235,7 @@
   }
 
   /* How the timeline puts a frame on the map: `show(url, bounds)` and `hide()`. This one is a
-     Leaflet image overlay; the vector map trial passes its own as `opts.overlay` (radar-gl.js,
+     Leaflet image overlay; the vector map passes its own as `opts.overlay` (radar-gl.js,
      D-58), so the loop, the slider and the stamp below are shared rather than written twice. */
   function leafletOverlay(map, opts) {
     var layer = null;

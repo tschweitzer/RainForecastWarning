@@ -40,15 +40,6 @@
   .stamp .kind, .stamp .day { color:var(--muted); }
   .stamp .future { color:var(--accent); font-weight:600; }
 
-  /* The vector map trial's controls (D-58). The page's own `button` rule gives every button a top
-     margin, which MapLibre's stylesheet does not reset - the + and - came apart into two boxes.
-     And the locate link is a plain <a> there, where Leaflet's bar styled it. */
-{% if map_engine == 'vector' %}
-  .maplibregl-ctrl button { margin:0; }
-  .maplibregl-ctrl.locate-control a { width:29px; height:29px; line-height:29px; color:#333;
-                                      text-decoration:none; }
-  .maplibregl-ctrl.locate-control a.on { color:var(--accent); }
-{% endif %}
 
   /* The range picker. Buttons rather than the links /map used, because the choice is now
      remembered in this browser rather than carried in the URL. */
@@ -279,17 +270,6 @@
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('vendor/leaflet/leaflet.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('geolocate.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar.js') }}"></script>
-{% if map_engine == 'vector' %}
-{# The vector map trial (D-58). Leaflet above stays loaded: it is the fallback where MapLibre
-   cannot run, and it is small next to MapLibre. The import map gives the library a versioned URL
-   like every other static file; `radar-gl.js` imports it by that bare name. A module runs after
-   parsing, in document order with `defer` scripts - so before signup.js, which reads what it
-   defines. If it fails to load at all, signup.js finds no `RainRadarGL` and uses Leaflet. #}
-<link rel="stylesheet" href="{{ static_url('vendor/maplibre/maplibre-gl.css') }}">
-<script type="importmap" nonce="{{ request.state.csp_nonce }}">
-{"imports": {"maplibre-gl": {{ static_url('vendor/maplibre/maplibre-gl.mjs') | tojson }}}}
-</script>
-<script type="module" nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar-gl.js') }}"></script>
-{% endif %}
+{% include '_map_engine.html' %}
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('signup.js') }}" defer></script>
 {% endblock %}

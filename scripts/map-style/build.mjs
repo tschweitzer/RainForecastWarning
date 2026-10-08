@@ -1,4 +1,4 @@
-/* Builds the two basemap styles the vector map trial uses (DESIGN.md D-58):
+/* Builds the two basemap styles the vector map uses (DESIGN.md D-58, D-59):
 
      cd scripts/map-style && npm ci && npm run build
 
@@ -42,6 +42,13 @@ for (const theme of ['gray', 'gray-dark']) {
     // extra work - and the radar image is laid out in Web Mercator.
     projection: 'mercator',
     urls: { osm: TILES },
+    // The dark theme as generated is near-black (background rgb 39, 2% luminance) with black
+    // water, so land and water barely differ (1.4:1) and the translucent rain colours sink into
+    // it. A gamma lift spreads the dark tones apart rather than raising them all evenly, as plain
+    // brightness would: background 39 -> 78, water/land 1.4 -> 2.5:1, borders and roads clearer,
+    // labels still white on a dark halo. Lighter than this starts to read as a grey slab on the
+    // dark page (DESIGN.md D-59).
+    ...(theme === 'gray-dark' ? { recolor: { gamma: 0.6, contrast: 1.1 } } : {}),
   });
 
   // No glyph server (fonts come from `font-faces`) and no sprite: the sprite is the icon sheet for
