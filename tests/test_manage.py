@@ -940,3 +940,10 @@ def test_the_threshold_picker_cannot_widen_the_page(client):
     rule = page[page.index(".threshold-row select {") :]
     rule = rule[: rule.index("}")]
     assert "min-width:0" in rule.replace(" ", "")
+
+
+def test_the_colour_hint_is_plain_text(client):
+    """Plain text: the hint names the radar map, it does not send anyone there."""
+    assert '<p class="hint">Die Farben sind dieselben wie auf der Radarkarte.</p>' in (
+        client.get("/manage").text
+    )
