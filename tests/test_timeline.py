@@ -6,6 +6,7 @@ forecasts, which slots have no data at all, and how old the newest cycle is.
 
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -622,7 +623,8 @@ def test_the_map_leaves_room_for_the_slider(client):
 
     The height is the screen minus a per-page reserve, in svh: on a phone `vh` is the viewport
     with the browser chrome *hidden*, so a map sized in vh is taller than what is on screen.
-    Capped at 1.5x its width, floored at 200px. The reserves themselves were measured in
+    Capped at 1.36x its width - Germany's shape, which the start view is fitted to (D-55) - and
+    floored at 200px. The reserves themselves were measured in
     Chromium; what this guards is that the rule is still the one both maps use, that each page
     still sets its own reserve, and that nothing inline overrides the stylesheet.
     """
@@ -632,7 +634,7 @@ def test_the_map_leaves_room_for_the_slider(client):
     body = " ".join(rule.group(1).split())
     assert "height:48vh" in body, "the vh fallback must stay for browsers without svh"
     assert "calc(100svh - var(--map-reserve" in body
-    assert "calc(min(100vw - 32px, 34rem) * 1.5)" in body
+    assert "calc(min(100vw - 32px, 34rem) * 1.36)" in body
     assert "clamp(200px," in body
 
     for path in ("/", "/manage"):
@@ -643,6 +645,37 @@ def test_the_map_leaves_room_for_the_slider(client):
         )
         # No inline height on the element, or it would win over the stylesheet.
         assert 'id="map" style=' not in page, path
+
+
+def test_the_start_view_is_germany_and_the_map_is_its_shape():
+    """D-55: the first view is fitted to Germany, and the map's height cap is Germany's shape.
+
+    The two numbers live in different files - the box in signup.js, the ratio in base.html - and
+    they only make sense together: the cap is "the height at which Germany fills the map". So the
+    ratio is recomputed here from the box, in Web Mercator, and the CSS must agree with it. It
+    did not, once: the cap was 1.5 from a miscalculation and a tenth of the map stayed empty.
+    """
+    import math
+
+    static = Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static"
+    signup = (static / "signup.js").read_text(encoding="utf-8")
+    box = re.search(r"const germany = \[\[([\d.]+), ([\d.]+)\], \[([\d.]+), ([\d.]+)\]\];", signup)
+    assert box, "the start view is no longer fitted to a box"
+    south, west, north, east = map(float, box.groups())
+
+    def mercator_y(lat):
+        return math.log(math.tan(math.pi / 4 + math.radians(lat) / 2))
+
+    aspect = (mercator_y(north) - mercator_y(south)) / math.radians(east - west)
+
+    base = (static.parent / "templates" / "base.html").read_text(encoding="utf-8")
+    cap = float(re.search(r"calc\(min\(100vw - 32px, 34rem\) \* ([\d.]+)\)", base).group(1))
+    assert abs(cap - aspect) < 0.01, f"map cap {cap} but Germany's box is {aspect:.3f}"
+
+    # Unsnapped for the first view only. Left unsnapped, every later zoom would land between
+    # tile levels too, and the basemap would be drawn scaled for the whole visit.
+    fit = signup[signup.index("zoomSnap: 0") :]
+    assert fit.index("map.fitBounds(germany") < fit.index("map.options.zoomSnap = 1;")
 
 
 def test_the_page_does_not_explain_the_slider(client):

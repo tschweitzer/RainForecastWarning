@@ -141,9 +141,20 @@ var radar = null;
   // Opens on the whole country: a new visitor has not told us anything yet, so any closer view
   // would be a guess, and a guess here is a wrong location nobody notices.
   //
+  // Fitted to Germany rather than a fixed zoom (D-55). The map's height follows the screen
+  // (D-54), and at the old fixed zoom 5 Germany was ~210x320px whatever the map's size - on a
+  // desktop that was a third of a 544x816 map, the rest empty. Integer zooms cannot fix it: the
+  // map is 330-544px wide and Germany is 211px wide at zoom 5 but 423px at zoom 6, so most widths
+  // fall between the two. So the first view alone is fitted without snapping, and snapping is
+  // restored straight after: the first press of + or - lands on a whole zoom level again, where
+  // tiles are drawn at their own size.
+  //
   // maxZoom on the map as well as on the tile layer: with no basemap configured there is no tile
   // layer to take it from, and Leaflet would then let the graticule zoom forever.
-  map = L.map('map', { zoomControl: true, maxZoom: 18 }).setView([51.2, 10.4], 5);
+  const germany = [[47.27, 5.87], [55.06, 15.04]];
+  map = L.map('map', { zoomControl: true, maxZoom: 18, zoomSnap: 0 });
+  map.fitBounds(germany, { padding: [12, 12] });
+  map.options.zoomSnap = 1;
   RainRadar.basemap(map, {
     tileUrl: CONFIG.tileUrl,
     tileAttribution: CONFIG.tileAttribution,

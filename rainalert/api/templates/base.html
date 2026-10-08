@@ -84,16 +84,19 @@
      - svh, not vh: svh is the screen with the address bar *shown*, so the slider is visible
        before anything has been scrolled; and unlike dvh it does not change while scrolling,
        which would make Leaflet redraw the map under the reader's finger.
-     - At most 1.5x the map's width: Germany is about 1.5 times taller than wide in this
-       projection, so anything taller only adds sea and Alps. It also leaves page showing
-       below the map on most phones, which is where a finger can scroll the page rather than
-       pan the map.
+     - At most 1.36x the map's width: Germany's own shape on this map (47.27-55.06 N,
+       5.87-15.04 E is 1.36 times taller than wide in Web Mercator, measured in the browser),
+       and the start page fits its first view to exactly that box (D-55) - so the cap is the
+       height at which Germany fills the map, and anything taller would only add sea and Alps.
+       It was 1.5 from a miscalculation, which left a tenth of the map empty. It also leaves
+       page showing below the map on most phones, which is where a finger can scroll the page
+       rather than pan the map.
      - At least 200px. Below that a map is not worth having, so on a very short screen - a phone
        in landscape - the slider takes a short scroll instead.
      The plain vh line is for browsers without svh, which drop the whole clamp(). */
   .radar-map { height:48vh; min-height:200px;
                height:clamp(200px, calc(100svh - var(--map-reserve, 10rem)),
-                            calc(min(100vw - 32px, 34rem) * 1.5));
+                            calc(min(100vw - 32px, 34rem) * 1.36));
                border-radius:10px; border:1px solid var(--line); }
   .locate-control a { font-size:1.1rem; line-height:30px; text-align:center; cursor:pointer;
                       display:block; width:30px; height:30px; }
