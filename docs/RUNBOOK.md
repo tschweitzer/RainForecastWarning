@@ -575,6 +575,30 @@ Cloud Shell with `cloud-sql-proxy` is the other clean option if a real psql prom
    subscribers the clean move is to delete the subscriber rows at cutover. Setting the service's
    `ingress` to load-balancer-only also stops the `*.a.run.app` origin being a second front door.
 
+## 3c. The vector map trial
+
+The start page can draw its map with MapLibre on OpenStreetMap's vector tiles instead of Leaflet on
+raster tiles (DESIGN.md D-58). It is opt-in per visit: open
+
+    https://<your site>/?karte=vektor
+
+and compare it with the plain `/`. Nothing else changes - the settings page, the warnings, and the
+start page without the parameter are exactly as before.
+
+- **Where the tiles come from:** `VECTOR_TILE_URL`, by default the OpenStreetMap Foundation's
+  server (`vector.openstreetmap.org`, Shortbread schema), under its vector tile usage policy -
+  best effort, no SLA, heavy users may be blocked without notice. Every browser on the trial page
+  fetches tiles from there directly, sending this site's origin as Referer.
+- **Turning it off:** set `VECTOR_TILE_URL` to an empty string. `?karte=vektor` then shows the
+  ordinary map.
+- **Where it falls back to Leaflet by itself:** no WebGL, a browser without module scripts, or
+  MapLibre failing to load. The trial page loads Leaflet as well for exactly that.
+- **Changing the map's look:** the styles are generated, not hand-edited. `scripts/map-style/`
+  builds `rainalert/api/static/map/gray.json` and `gray-dark.json`; see its `build.mjs`.
+- **If the map is blank but the radar and the labels-free page work:** the tile server is not
+  answering, or the CSP is blocking it. The browser console says which; the CSP's `connect-src`
+  lists the tile server's origin, derived from `VECTOR_TILE_URL`.
+
 ## 4. Routine operations
 
 ### Schema changes

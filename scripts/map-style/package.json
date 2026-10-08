@@ -1,0 +1,8 @@
+{
+  "name": "rainalert-map-style",
+  "private": true,
+  "description": "Builds the vector basemap styles in rainalert/api/static/map/ (DESIGN.md D-58). Not part of the app.",
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": { "@versatiles/style": "6.3.1" }
+}

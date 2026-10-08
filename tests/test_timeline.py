@@ -616,7 +616,7 @@ def test_the_legend_is_on_the_map_rather_than_between_it_and_the_form(client):
     """A strip under the map is a row every visitor scrolls past on every visit, and on this page
     it would sit between the radar and the signup form. As a collapsed control it costs nothing
     until someone wants it."""
-    assert "RainRadar.legendControl()" in page_source(client)
+    assert "Engine.legendControl()" in page_source(client)
     # The old radar page had a bare `<div id="legend">` in its markup. The control builds its own.
     assert '<div id="legend"' not in client.get("/").text
 
@@ -677,8 +677,11 @@ def test_the_start_view_is_germany_and_the_map_is_its_shape():
 
     # Unsnapped for the first view only. Left unsnapped, every later zoom would land between
     # tile levels too, and the basemap would be drawn scaled for the whole visit.
-    fit = signup[signup.index("zoomSnap: 0") :]
-    assert fit.index("map.fitBounds(germany") < fit.index("map.options.zoomSnap = 1;")
+    # The box goes to the engine, which fits to it (radar.js createMap for Leaflet).
+    assert "Engine.createMap('map', { bounds: germany," in signup
+    radar = (static / "radar.js").read_text(encoding="utf-8")
+    fit = radar[radar.index("zoomSnap: 0") :]
+    assert fit.index("map.fitBounds(opts.bounds") < fit.index("map.options.zoomSnap = 1;")
 
 
 def test_the_page_does_not_explain_the_slider(client):

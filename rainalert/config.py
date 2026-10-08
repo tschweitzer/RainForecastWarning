@@ -189,6 +189,12 @@ class Settings(BaseSettings):
         '&copy; <a href="https://www.bkg.bund.de">BKG</a> (basemap.de) '
         '<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>'
     )
+    #: Vector tiles for the start page's map trial, `/?karte=vektor` (DESIGN.md D-58): Shortbread
+    #: tiles, which is the schema the styles in static/map/ are built for. By default the
+    #: OpenStreetMap Foundation's own server, under its vector tile usage policy - best effort, no
+    #: SLA, may block heavy users without notice. Empty turns the trial off and `?karte=vektor`
+    #: shows the ordinary map.
+    vector_tile_url: str = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt"
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
     #: console | file | smtp | webpush | push | auto. SMTP reaches every provider worth using, so

@@ -82,8 +82,14 @@ def test_every_map_has_an_on_map_locate_control(client, db):
     # a click that reached the map would move the subscriber's pin to wherever the button is.
     assert "L.DomEvent.disableClickPropagation" in module
 
-    for path in ("/", "/manage"):
-        assert "RainRadar.locateControl(" in page_source(client, path), path
+    # The vector map trial's engine (D-58) has its own, with the same guard in DOM terms.
+    gl = client.get("/static/radar-gl.js").text
+    assert "locate-control" in gl and "Zu meinem Standort" in gl
+    assert "event.stopPropagation();" in gl
+
+    # The start page calls whichever engine it chose; the settings page is Leaflet only.
+    assert "Engine.locateControl(" in page_source(client, "/")
+    assert "RainRadar.locateControl(" in page_source(client, "/manage")
 
 
 def enclosing_ids(markup: str, element_id: str) -> list[str]:
@@ -820,7 +826,11 @@ def test_the_picker_map_does_not_depend_on_the_radar(client):
     basemap, not the radar - gating the whole map on it left the signup page with no way to
     choose a location at all on a fresh install."""
     body = page_source(client)
-    assert "L.map(" in body and "RainRadar.picker(" in body
+    assert "Engine.createMap(" in body and "Engine.picker(" in body
+    # Choosing the engine must not consult the radar flag either - it decides whether there is a
+    # map at all (D-58).
+    choose = body[body.index("function chooseEngine()") :]
+    assert "hasOverlay" not in choose[: choose.index("\n}\n")]
 
     # The precise invariant: whatever decides to hide the map must not consult the radar flag.
     # Asserting only that both strings exist passes with the flag moved back into that branch,

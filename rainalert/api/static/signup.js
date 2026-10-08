@@ -26,7 +26,9 @@ function config() {
     emailAvailable: d.emailAvailable === 'true',
     windowHours: parseInt(d.windowHours, 10) || 12,
     maxHours: parseInt(d.maxHours, 10) || 48,
-    windowPinned: d.windowPinned === 'true'
+    windowPinned: d.windowPinned === 'true',
+    // 'vector' for the MapLibre trial (`/?karte=vektor`, D-58), otherwise 'leaflet'.
+    mapEngine: d.mapEngine || 'leaflet'
   };
 }
 /* `const`, not `var`, and that is the whole point of this line.
@@ -128,8 +130,23 @@ function setPlace(lat, lon, fromMap) {
    loop is conditional. */
 var radar = null;
 
+/* Which library draws the map: the same set of functions either way (`createMap`, `picker`,
+   `timeline`, ...), so nothing below needs to know.
+
+   The vector trial only where it can actually run. `RainRadarGL` is defined by radar-gl.js, a
+   module that does not define it without WebGL and cannot run at all without module support or
+   if MapLibre failed to load - and each of those falls back to Leaflet, which the trial page
+   loads too, rather than to an empty box. */
+function chooseEngine() {
+  if (CONFIG.mapEngine === 'vector' && typeof RainRadarGL !== 'undefined') { return RainRadarGL; }
+  if (typeof L !== 'undefined' && typeof RainRadar !== 'undefined') { return RainRadar; }
+  return null;
+}
+var Engine = null;
+
 (function () {
-  if (typeof L === 'undefined' || typeof RainRadar === 'undefined') {
+  Engine = chooseEngine();
+  if (!Engine) {
     // No Leaflet: the map area would be an empty box, so take it away and offer the fields.
     document.getElementById('map').hidden = true;
     document.getElementById('map-hint').hidden = true;
@@ -139,23 +156,11 @@ var radar = null;
   }
 
   // Opens on the whole country: a new visitor has not told us anything yet, so any closer view
-  // would be a guess, and a guess here is a wrong location nobody notices.
-  //
-  // Fitted to Germany rather than a fixed zoom (D-55). The map's height follows the screen
-  // (D-54), and at the old fixed zoom 5 Germany was ~210x320px whatever the map's size - on a
-  // desktop that was a third of a 544x816 map, the rest empty. Integer zooms cannot fix it: the
-  // map is 330-544px wide and Germany is 211px wide at zoom 5 but 423px at zoom 6, so most widths
-  // fall between the two. So the first view alone is fitted without snapping, and snapping is
-  // restored straight after: the first press of + or - lands on a whole zoom level again, where
-  // tiles are drawn at their own size.
-  //
-  // maxZoom on the map as well as on the tile layer: with no basemap configured there is no tile
-  // layer to take it from, and Leaflet would then let the graticule zoom forever.
+  // would be a guess, and a guess here is a wrong location nobody notices. Fitted to Germany
+  // rather than set to a fixed zoom (D-55); how, is in `createMap`.
   const germany = [[47.27, 5.87], [55.06, 15.04]];
-  map = L.map('map', { zoomControl: true, maxZoom: 18, zoomSnap: 0 });
-  map.fitBounds(germany, { padding: [12, 12] });
-  map.options.zoomSnap = 1;
-  RainRadar.basemap(map, {
+  map = Engine.createMap('map', { bounds: germany, padding: 12 });
+  Engine.basemap(map, {
     tileUrl: CONFIG.tileUrl,
     tileAttribution: CONFIG.tileAttribution,
     graticule: true
@@ -179,12 +184,12 @@ var radar = null;
 
   if (!CONFIG.hasOverlay) { return; }
 
-  var legend = RainRadar.legendControl();
+  var legend = Engine.legendControl();
   map.addControl(legend);
 
   var controls = document.getElementById('radar-controls');
   controls.hidden = false;
-  radar = RainRadar.timeline(map, {
+  radar = Engine.timeline(map, {
     pastHours: initialWindow(),
     layerOpacity: CONFIG.layerOpacity,
     slider: document.getElementById('slider'),
@@ -316,7 +321,7 @@ function openOnTheWarningsPlace() {
       stale.hidden = false;
       return;
     }
-    RainRadar.mark(map, place.lat, place.lon, place.radius_m);
+    Engine.mark(map, place.lat, place.lon, place.radius_m);
     // 11 is what the settings map opens on - about 40 km across, enough to see which town you are
     // in and to judge a shower's distance against it.
     map.setView([place.lat, place.lon], 11);
@@ -400,14 +405,14 @@ function decideSignupState() {
    settings page rebuilt in a second place. */
 function enablePicking() {
   if (!map) { return; }
-  pick = RainRadar.picker(map, {
+  pick = Engine.picker(map, {
     radius: CONFIG.radius,
     onChange: function (lat, lon) { setPlace(lat, lon, true); }
   });
 
   // On the map rather than under it: this is a map control, it belongs where a map keeps them,
   // and here it sets the pin rather than merely showing where the device is.
-  map.addControl(RainRadar.locateControl({
+  map.addControl(Engine.locateControl({
     onStatus: function (text, kind) {
       if (kind === 'error' && text) {
         var hint = document.getElementById('map-hint');
@@ -439,7 +444,7 @@ function enablePicking() {
 function enableViewing() {
   if (!map) { return; }
   var banner = document.getElementById('banner');
-  map.addControl(RainRadar.locateControl({
+  map.addControl(Engine.locateControl({
     onStatus: function (text, kind) {
       // Reuses the page's banner rather than the signup form's hint, which is hidden in this
       // state - an error message inside a hidden section is an error nobody is told about.
@@ -450,7 +455,7 @@ function enableViewing() {
     },
     onFound: function (lat, lon, accuracy) {
       banner.hidden = true;
-      RainRadar.mark(map, lat, lon, Math.max(accuracy || 0, 50));
+      Engine.mark(map, lat, lon, Math.max(accuracy || 0, 50));
       map.setView([lat, lon], Math.max(map.getZoom(), 10));
     }
   }));

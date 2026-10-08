@@ -21,19 +21,43 @@
   /* The marker Leaflet cannot draw for us: its default icon is a PNG fetched from wherever the
      library came from, which `img-src` does not allow and should not - a third party would learn
      the visitor's IP on every map view. Inline SVG needs no request and no CSP exception. */
+  // 20x29 is 26x38 at ~75%. The viewBox stays 0 0 26 38, so the path is untouched. A constant
+  // because the vector map trial draws the same pin (radar-gl.js, D-58).
+  var PIN_SVG = '<svg viewBox="0 0 26 38" width="20" height="29" role="img"'
+    + ' aria-label="Dein Standort">'
+    + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
+    + 'C14.7 35.6 26 22.1 26 13 26 5.8 20.2 0 13 0z" fill="#1f6fb2" stroke="#fff"'
+    + ' stroke-width="2"/>'
+    + '<circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>';
+
   function pinIcon() {
     return L.divIcon({
       className: 'pin',             // replaces leaflet-div-icon, which is a white box
-      // 20x29 is 26x38 at ~75%. The viewBox stays 0 0 26 38, so the path is untouched.
-      html: '<svg viewBox="0 0 26 38" width="20" height="29" role="img"'
-        + ' aria-label="Dein Standort">'
-        + '<path d="M13 0C5.8 0 0 5.8 0 13c0 9.1 11.3 22.6 12.2 23.6a1 1 0 0 0 1.6 0'
-        + 'C14.7 35.6 26 22.1 26 13 26 5.8 20.2 0 13 0z" fill="#1f6fb2" stroke="#fff"'
-        + ' stroke-width="2"/>'
-        + '<circle cx="13" cy="13" r="4.5" fill="#fff"/></svg>',
+      html: PIN_SVG,
       iconSize: [20, 29],
       iconAnchor: [10, 29]          // the tip, not the middle, sits on the coordinate
     });
+  }
+
+  /* The start page's map, opened on `opts.bounds` (D-55).
+
+     Fitted rather than set to a fixed zoom. The map's height follows the screen (D-54), and at
+     the old fixed zoom 5 Germany was ~210x320px whatever the map's size - on a desktop that was a
+     third of a 544x816 map, the rest empty. Integer zooms cannot fix it: the map is 330-544px wide
+     and Germany is 211px wide at zoom 5 but 423px at zoom 6, so most widths fall between the two.
+     So the first view alone is fitted without snapping, and snapping is restored straight after:
+     the first press of + or - lands on a whole zoom level again, where tiles are drawn at their
+     own size.
+
+     maxZoom on the map as well as on the tile layer: with no basemap configured there is no tile
+     layer to take it from, and Leaflet would then let the graticule zoom forever.
+
+     `radar-gl.js` has the same function for the vector map trial (D-58); the page picks one. */
+  function createMap(id, opts) {
+    var map = L.map(id, { zoomControl: true, maxZoom: 18, zoomSnap: 0 });
+    map.fitBounds(opts.bounds, { padding: [opts.padding || 0, opts.padding || 0] });
+    map.options.zoomSnap = 1;
+    return map;
   }
 
   /* Tiles when a provider is configured, otherwise enough reference to aim by. */
@@ -205,10 +229,35 @@
     map.__rainalertMark = [circle, pin];
   }
 
+  /* How the timeline puts a frame on the map: `show(url, bounds)` and `hide()`. This one is a
+     Leaflet image overlay; the vector map trial passes its own as `opts.overlay` (radar-gl.js,
+     D-58), so the loop, the slider and the stamp below are shared rather than written twice. */
+  function leafletOverlay(map, opts) {
+    var layer = null;
+    return {
+      show: function (url, bounds) {
+        if (layer) {
+          layer.setUrl(url);
+        } else {
+          // The alpha is baked into the PNG (radar/overlay.py INTENSITY_BANDS), so this is 1.0
+          // and the palette is the single place that decides how strong rain looks.
+          layer = L.imageOverlay(url, bounds, { opacity: opts.layerOpacity }).addTo(map);
+          // Under the pin, or the radar hides the thing being positioned.
+          if (opts.behindMarkers) { layer.bringToBack(); }
+        }
+        if (!layer._map) { layer.addTo(map); }
+      },
+      hide: function () {
+        if (layer) { map.removeLayer(layer); layer = null; }
+      }
+    };
+  }
+
   /* The radar loop. Every element is optional except the map, so a page can take the overlay
      and the stamp without the slider and the play button. */
   function timeline(map, opts) {
-    var layer = null, frames = [], gaps = [], bounds = null, timer = null;
+    var frames = [], gaps = [], bounds = null, timer = null;
+    var overlay = opts.overlay || leafletOverlay(map, opts);
     var cache = new Map();          // url -> Image, LRU-evicted
     /* Frames held as decoded Images. 100 covers six hours outright and most of twelve, which is
        the default range.
@@ -332,21 +381,12 @@
       if (gapAt(frame.offset_minutes)) {
         // Deliberately blank rather than holding the previous image: pretending the radar saw
         // something it did not is exactly the failure this service must not have.
-        if (layer) { map.removeLayer(layer); layer = null; }
+        overlay.hide();
         if (stamp) { stamp.innerHTML += ' · <span class="kind">keine Daten</span>'; }
         return;
       }
       preload(frame.url);
-      if (layer) {
-        layer.setUrl(frame.url);
-      } else {
-        // The alpha is baked into the PNG (radar/overlay.py INTENSITY_BANDS), so this is 1.0
-        // and the palette is the single place that decides how strong rain looks.
-        layer = L.imageOverlay(frame.url, bounds, { opacity: opts.layerOpacity }).addTo(map);
-        // Under the pin, or the radar hides the thing being positioned.
-        if (opts.behindMarkers) { layer.bringToBack(); }
-      }
-      if (!layer._map) { layer.addTo(map); }
+      overlay.show(frame.url, bounds);
       for (var d = -WINDOW; d <= WINDOW; d++) {
         var neighbour = frames[index + d];
         if (neighbour && !gapAt(neighbour.offset_minutes)) { preload(neighbour.url); }
@@ -445,7 +485,7 @@
           if (!frames.length || !bounds) {
             // Removed, not left behind: on a reload the map would otherwise keep showing a frame
             // from the window we just navigated away from, with nothing on the slider to match it.
-            if (layer) { map.removeLayer(layer); layer = null; }
+            overlay.hide();
             say('Noch keine Radardaten vorhanden.');
             if (opts.onEmpty) { opts.onEmpty(); }
             return;
@@ -489,7 +529,7 @@
   }
 
   global.RainRadar = {
-    basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon, mark: mark,
-    locateControl: locateControl, legendControl: legendControl
+    createMap: createMap, basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon,
+    mark: mark, locateControl: locateControl, legendControl: legendControl, PIN_SVG: PIN_SVG
   };
 })(window);

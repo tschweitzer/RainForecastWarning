@@ -11,3 +11,4 @@ terraform.tfvars
 build/
 *.egg-info/
 dist/
+node_modules/

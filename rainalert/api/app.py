@@ -13,6 +13,7 @@ Shape notes that are security decisions rather than style:
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -90,6 +91,16 @@ TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 # Scripts and styles by content-versioned URL, so a deploy cannot be hidden by a cached copy
 # (assets.py, D-57).
 TEMPLATES.env.globals["static_url"] = static_url
+
+#: The basemap styles the vector map trial can ask for: one for each colour scheme (D-58).
+MAP_THEMES = ("gray", "gray-dark")
+
+
+def map_style_template(theme: str) -> dict:
+    """A fresh copy of a committed style, parsed. A copy because the caller fills it in."""
+    path = Path(__file__).parent / "static" / "map" / f"{theme}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
 
 #: The settings-page session.
 #:
@@ -415,9 +426,17 @@ def create_app(
             # frame and then nothing, with the radar working perfectly behind it. Local
             # development never showed it because LocalOverlayStore serves them from this app,
             # which *is* 'self'.
-            f"img-src 'self' data: {image_origin(settings.map_tile_url)} "
+            #
+            # `blob:` for the vector map trial (D-58): MapLibre decodes images through blob URLs
+            # where `createImageBitmap` is missing.
+            f"img-src 'self' data: blob: {image_origin(settings.map_tile_url)} "
             f"{image_origin(settings.overlay_public_base_url or '')}; "
-            "connect-src 'self'; "
+            # Also the vector map trial: MapLibre fetches its tiles, and the radar overlays it
+            # draws, with fetch() rather than <img> - so the tile server and the overlay bucket
+            # have to be here as well as in img-src. The bucket already allows this site in its
+            # CORS policy, which fetch() needs and <img> did not.
+            f"connect-src 'self' {image_origin(settings.vector_tile_url)} "
+            f"{image_origin(settings.overlay_public_base_url or '')}; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
         # Without this the token in a confirm URL leaks to any third-party resource the page loads.
@@ -1118,7 +1137,7 @@ def create_app(
     WINDOW_CHOICES = (3, 6, 12, 24, 48)
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def index(request: Request, hours: str | None = None) -> HTMLResponse:
+    def index(request: Request, hours: str | None = None, karte: str | None = None) -> HTMLResponse:
         """The radar and the signup form, on one page.
 
         `/map` used to be separate and is gone - not redirected. It was still in development and
@@ -1145,16 +1164,42 @@ def create_app(
             except ValueError:
                 window = settings.timeline_default_hours
         window = min(max(window, 1), settings.timeline_past_hours)
+        # The vector map trial (D-58): opt-in per visit, so the ordinary page is untouched and the
+        # two can be compared side by side. The page falls back to Leaflet by itself where
+        # MapLibre cannot run (no WebGL, no module support).
+        engine = "vector" if karte == "vektor" and settings.vector_tile_url else "leaflet"
         return page(
             request,
             "index.html",
             {
+                "map_engine": engine,
                 "layer_opacity": LAYER_OPACITY,
                 "window_hours": window,
                 "window_pinned": pinned,
                 "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
             },
         )
+
+    @app.get("/map-style/{theme}.json", include_in_schema=False)
+    def map_style(theme: str) -> JSONResponse:
+        """A basemap style for the vector map trial, with this deployment's URLs filled in (D-58).
+
+        The committed styles (static/map/, built by scripts/map-style/build.mjs) leave the tile
+        server as a placeholder and name their fonts by static-file path. Both are resolved here:
+        the tile server is a setting, and the fonts get content-versioned URLs like every other
+        static file (assets.py), so a font update reaches browsers that cached the old one.
+        """
+        if theme not in MAP_THEMES or not settings.vector_tile_url:
+            raise HTTPException(status.HTTP_404_NOT_FOUND)
+        style = map_style_template(theme)
+        for source in style["sources"].values():
+            if source.get("type") == "vector":
+                source.pop("url", None)  # a template, never a TileJSON address
+                source["tiles"] = [settings.vector_tile_url]
+        for faces in style.get("font-faces", {}).values():
+            for face in faces:
+                face["url"] = static_url(face["url"])
+        return JSONResponse(style, headers={"Cache-Control": "no-cache"})
 
     @app.get("/manage", response_class=HTMLResponse, include_in_schema=False)
     def manage_page(request: Request) -> HTMLResponse:
