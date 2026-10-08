@@ -206,12 +206,90 @@ def build_projection(spec: GridSpec = DE1200, width: int = WIDTH) -> Projection:
     return Projection(rows, cols, inside, width, height, source, starts, target[starts])
 
 
+#: How many shades each band is drawn in (D-60). Not a continuous blend: every distinct colour
+#: costs PNG compression, and a continuous gradient made a wet frame 282 KB instead of 77 KB - on
+#: a map that loads a frame every five minutes of the window, over mobile data. 32 per band is
+#: 7 x 32 + 1 = 225 colours, which still fits a PNG palette (at most 256; one byte a pixel instead
+#: of four), and it is the smallest count at which every one of `Nieselregen`'s fourteen possible
+#: readings gets a shade of its own (16 gave 11 of 14). Measured on a wet frame: 107 KB.
+SHADES_PER_BAND = 32
+
+_STOP_VALUES = np.array([threshold for threshold, _ in COLOR_STOPS], dtype=np.float64)
+_STOP_LOGS = np.log(_STOP_VALUES)
+_STOP_COLOURS = np.array([colour for _, colour in COLOR_STOPS], dtype=np.float64)
+
+
+def _palette() -> np.ndarray:
+    """The RGBA of every palette index: 0 is transparent, then each band's shades in order.
+
+    Shade `s` of band `b` is the colour `s / SHADES_PER_BAND` of the way from band `b`'s colour to
+    the next band's, so shade 0 is exactly the band's own colour. The last band has no next one
+    and keeps its colour in every shade.
+    """
+    table = np.zeros((1 + len(COLOR_STOPS) * SHADES_PER_BAND, 4), dtype=np.float64)
+    for band in range(len(COLOR_STOPS)):
+        nxt = min(band + 1, len(COLOR_STOPS) - 1)
+        for shade in range(SHADES_PER_BAND):
+            t = shade / SHADES_PER_BAND
+            table[1 + band * SHADES_PER_BAND + shade] = _STOP_COLOURS[band] + t * (
+                _STOP_COLOURS[nxt] - _STOP_COLOURS[band]
+            )
+    return np.rint(table).astype(np.uint8)
+
+
+#: Index -> RGBA. Built once; `render_frame` writes it into the PNG as its palette.
+PALETTE = _palette()
+
+
+def palette_index(values: np.ndarray) -> np.ndarray:
+    """Values in mm/5min to palette indices: 0 for NaN and anything below the first band.
+
+    **A gradient, not seven flat steps** (DESIGN.md D-60). Each band's own colour is drawn exactly
+    at the value where the band starts - so the legend and the threshold picker, which show those
+    colours, still name what you see - and a value between two band starts is shaded toward the
+    next band's colour by how far along it is. Flat steps hid most of what the radar says: since
+    D-52 `Nieselregen` alone runs from 0.01 to 0.15 mm/5 min, fourteen distinct readings, and all
+    fourteen were the same pale blue.
+
+    How far along is measured on a **log** scale, because that is how the bands are spaced
+    (0.01, 0.15, 0.35, 0.7, 1.5, 3, 6 - each step roughly doubling) and how rain is felt: 0.02 is
+    twice 0.01, while 0.14 against 0.13 is the same rain. Linearly, the first band's 0.01-0.07
+    would all sit in its palest third. Above the last band start the colour stays the last one.
+
+    Interpolated in sRGB, alpha included. The stops were chosen as neighbours (blue, blue, teal,
+    yellow, orange, red, violet), so the straight line between two of them passes through no
+    muddy middle that a perceptual colour space would be needed to avoid.
+    """
+    v = np.asarray(values, dtype=np.float64)
+    # Snapped to well below the product's 0.01 quantum first. The decoder keeps readings as
+    # float32, where 0.35 is 0.3499999940 - and a reading of exactly a band's start must get
+    # exactly that band's colour, not the end of the band below (the trap D-52 fixed in the
+    # sampler).
+    v = np.round(np.nan_to_num(v, nan=-1.0), 6)
+
+    index = np.zeros(v.shape, dtype=np.uint8)
+    band = np.searchsorted(_STOP_VALUES, v, side="right") - 1  # -1 below the first band
+    drawn = band >= 0
+    if not drawn.any():
+        return index
+    b = band[drawn]
+    last = len(_STOP_VALUES) - 1
+    nxt = np.minimum(b + 1, last)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        fraction = np.where(
+            b < last, (np.log(v[drawn]) - _STOP_LOGS[b]) / (_STOP_LOGS[nxt] - _STOP_LOGS[b]), 0.0
+        )
+    shade = np.clip(np.floor(fraction * SHADES_PER_BAND), 0, SHADES_PER_BAND - 1).astype(np.int64)
+    index[drawn] = (1 + b * SHADES_PER_BAND + shade).astype(np.uint8)
+    return index
+
+
 def colorize(values: np.ndarray) -> np.ndarray:
-    """Values in mm/5min to an RGBA image array. NaN and sub-threshold are transparent."""
-    rgba = np.zeros((*values.shape, 4), dtype=np.uint8)
-    for threshold, colour in COLOR_STOPS:
-        rgba[np.nan_to_num(values, nan=-1.0) >= threshold] = colour
-    return rgba
+    """Values in mm/5min to an RGBA image array - the colours `render_frame` draws.
+
+    NaN and anything below the first band are transparent. See `palette_index` for the scale.
+    """
+    return PALETTE[palette_index(values)]
 
 
 def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
@@ -247,10 +325,13 @@ def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
     flat[projection.scatter_pixels] = np.where(combined < 0, np.nan, combined)
     sampled = flat.reshape(projection.height, projection.width)
 
-    image = Image.fromarray(colorize(sampled), mode="RGBA")
+    # A palette PNG: one byte a pixel and the colour table once, with each entry's alpha in the
+    # tRNS chunk. Browsers decode it to exactly the RGBA `colorize` gives (D-60).
+    image = Image.fromarray(palette_index(sampled), mode="P")
+    image.putpalette(PALETTE[:, :3].ravel().tolist())
     buffer = io.BytesIO()
     # optimize=True costs a little CPU per frame and saves rather more bandwidth on 168 of them.
-    image.save(buffer, format="PNG", optimize=True)
+    image.save(buffer, format="PNG", optimize=True, transparency=PALETTE[:, 3].tobytes())
     return buffer.getvalue()
 
 

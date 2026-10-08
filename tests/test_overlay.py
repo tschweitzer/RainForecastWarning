@@ -19,8 +19,12 @@ from rainalert.radar.decoder import read_analysis_frame
 from rainalert.radar.grid import DE1200
 from rainalert.radar.overlay import (
     COLOR_STOPS,
+    PALETTE,
+    SHADES_PER_BAND,
     WIDTH,
     build_projection,
+    colorize,
+    palette_index,
     render_frame,
 )
 from tests.helpers import FIXTURES
@@ -51,21 +55,20 @@ def frame():
 
 
 def band_of(values) -> np.ndarray:
-    """Which palette band a value falls in; -1 for nothing drawn."""
-    out = np.full(np.shape(values), -1, dtype=np.int64)
-    for index, (threshold, _) in enumerate(COLOR_STOPS):
-        out[np.nan_to_num(values, nan=-1.0) >= threshold] = index
-    return out
+    """How strong a value is drawn: its palette index, 0 for nothing drawn.
+
+    The index is ordered by rain - band by band, shade by shade (D-60) - so "drawn at least as
+    strongly" is a comparison of indices. Finer than the seven bands this used to compare: a cell
+    drawn one shade too light now fails too.
+    """
+    return palette_index(values).astype(np.int64)
 
 
 def rendered_bands(frame, projection) -> np.ndarray:
-    """The band each output pixel shows, read back out of the PNG."""
-    image = np.array(Image.open(io.BytesIO(render_frame(frame, projection))).convert("RGBA"))
-    flat = image.reshape(-1, 4)
-    bands = np.full(len(flat), -1, dtype=np.int64)
-    for index, (_, colour) in enumerate(COLOR_STOPS):
-        bands[(flat == np.array(colour, dtype=np.uint8)).all(axis=1)] = index
-    return bands
+    """The palette index each output pixel shows, read back out of the PNG."""
+    image = Image.open(io.BytesIO(render_frame(frame, projection)))
+    assert image.mode == "P", "a palette PNG, D-60"
+    return np.array(image).ravel().astype(np.int64)
 
 
 @pytest.mark.parametrize("width", [COARSE, WIDTH])
@@ -85,7 +88,7 @@ def test_no_source_cell_is_drawn_weaker_than_it_is(frame, width):
     pixel_of_cell = np.repeat(projection.scatter_pixels, runs)
 
     shown = rendered_bands(frame, projection)[pixel_of_cell]
-    drawable = source >= 0
+    drawable = source > 0
     assert drawable.any(), "the fixture has no drawable rain; the test would prove nothing"
     assert (shown[drawable] >= source[drawable]).all()
 
@@ -104,7 +107,7 @@ def test_a_coarse_pixel_shows_the_heaviest_cell_it_holds(frame, coarse_projectio
     source = band_of(values).ravel()[projection.scatter_source]
     group_max = np.maximum.reduceat(source, projection.scatter_starts)
     shown = rendered_bands(frame, projection)[projection.scatter_pixels]
-    drawable = group_max >= 0
+    drawable = group_max > 0
     assert (shown[drawable] == group_max[drawable]).all()
 
 
@@ -112,7 +115,7 @@ def test_the_heaviest_cell_in_the_frame_reaches_the_picture(frame, projection):
     """It did not, before: the peak fell between sample points and was simply absent."""
     values = np.where(frame.missing, np.nan, frame.values)
     heaviest = band_of(values).max()
-    assert heaviest >= 0
+    assert heaviest > 0
     assert heaviest in set(rendered_bands(frame, projection).tolist())
 
 
@@ -185,3 +188,49 @@ def test_every_band_starts_where_it_says_and_the_first_at_the_quantum():
         )
 
     assert colorize(np.array([0.0], dtype=np.float32))[0, 3] == 0, "dry must stay transparent"
+
+
+#: Every reading RV can express up to 10 mm/5 min, made the way the decoder makes them.
+READINGS = (np.arange(0, 1001, dtype=np.uint16) * 0.01).astype(np.float32)
+
+
+def test_more_rain_is_never_drawn_lighter():
+    """D-60: the shades are ordered - a heavier reading never gets an earlier palette entry."""
+    index = palette_index(READINGS)
+    assert (np.diff(index.astype(np.int64)) >= 0).all()
+    assert index[0] == 0, "dry stays transparent"
+
+
+def test_nieselregen_is_no_longer_one_colour():
+    """The point of D-60. Its fourteen readings (0.01-0.14) were all the same pale blue."""
+    drizzle = READINGS[(READINGS >= 0.0099) & (READINGS < 0.1499)]
+    assert len(drizzle) == 14
+    colours = {tuple(c) for c in colorize(drizzle)}
+    assert len(colours) == 14, f"only {len(colours)} shades for fourteen readings"
+
+
+def test_the_shades_fit_a_png_palette():
+    """More than 256 colours and the frame is a full-colour PNG again - four bytes a pixel."""
+    assert len(PALETTE) <= 256
+
+
+def test_every_shade_lies_between_its_band_colour_and_the_next():
+    """The legend still names what is drawn: a pixel's colour is on the way from its band's colour
+    to the next band's, never somewhere else."""
+    stops = np.array([c for _, c in COLOR_STOPS], dtype=np.float64)
+    for band in range(len(COLOR_STOPS)):
+        nxt = min(band + 1, len(COLOR_STOPS) - 1)
+        for shade in range(SHADES_PER_BAND):
+            colour = PALETTE[1 + band * SHADES_PER_BAND + shade].astype(np.float64)
+            low, high = np.minimum(stops[band], stops[nxt]), np.maximum(stops[band], stops[nxt])
+            assert ((colour >= low - 0.5) & (colour <= high + 0.5)).all(), (band, shade)
+
+
+def test_the_png_shows_exactly_the_colours_colorize_names(frame, projection):
+    """The PNG is a palette image with per-entry alpha; decoded, it must be colorize's RGBA."""
+    image = np.array(Image.open(io.BytesIO(render_frame(frame, projection))).convert("RGBA"))
+    used = np.unique(image.reshape(-1, 4), axis=0)
+    palette = {tuple(c) for c in PALETTE[1:]} | {(0, 0, 0, 0)}
+    for colour in used:
+        rgba = tuple(int(c) for c in colour)
+        assert rgba in palette or rgba[3] == 0, rgba

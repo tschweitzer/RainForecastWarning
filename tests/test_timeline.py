@@ -71,7 +71,9 @@ def test_render_produces_a_png_of_the_expected_shape(wet_cycle):
 
     image = Image.open(BytesIO(png))
     assert image.size == (projection.width, projection.height)
-    assert image.mode == "RGBA"
+    # A palette PNG with per-entry alpha (D-60): one byte a pixel, translucent where it says.
+    assert image.mode == "P" and "transparency" in image.info
+    assert image.convert("RGBA").getextrema()[3][0] == 0, "dry must still be see-through"
 
 
 def test_dry_and_missing_are_both_transparent(wet_cycle):
