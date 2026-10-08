@@ -12,7 +12,7 @@
     "{vector_tile_url}"
    ],
    "maxzoom": 14,
-   "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>"
+   "attribution": "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> · <a href=\"https://www.openstreetmap.org/fixthemap\">Karte verbessern</a>"
   }
  },
  "layers": [

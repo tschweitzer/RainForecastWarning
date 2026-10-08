@@ -195,6 +195,10 @@ class Settings(BaseSettings):
     #: SLA, may block heavy users without notice. Empty turns the vector map off: both pages then
     #: draw with Leaflet and `map_tile_url`.
     vector_tile_url: str = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt"
+    #: A contact address in every page's footer; empty shows none. The OSMF's vector tile policy
+    #: recommends one, so they can reach the site's operator rather than block it. Published to
+    #: everyone, so it should be an address meant for that.
+    contact_email: str = ""
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
     #: console | file | smtp | webpush | push | auto. SMTP reaches every provider worth using, so

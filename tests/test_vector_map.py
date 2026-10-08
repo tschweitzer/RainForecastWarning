@@ -198,3 +198,53 @@ def test_the_privacy_page_names_the_map_servers_it_uses(db, tmp_path):
 
     none = make_client(db, tmp_path, vector_tile_url="", map_tile_url="").get("/privacy").text
     assert "<h2>Die Karte</h2>" not in none, "no map servers, nothing to disclose"
+
+
+# --- the OSMF vector tile usage policy (read 2026-10-08, D-61) ---------------------------------
+
+
+@pytest.mark.parametrize("theme", ["gray", "gray-dark"])
+def test_the_attribution_credits_osm_and_offers_fixthemap(client, theme):
+    """Required: the licence attribution. Recommended: a link to report and fix map errors."""
+    (source,) = [s for s in client.get(f"/map-style/{theme}.json").json()["sources"].values()]
+    assert 'href="https://www.openstreetmap.org/copyright"' in source["attribution"]
+    assert 'href="https://www.openstreetmap.org/fixthemap"' in source["attribution"]
+
+
+def test_tile_requests_add_no_headers():
+    """The policy forbids no-cache headers and wants the tiles cached. Browsers do that by
+    themselves; the one hook this code has on a tile request must not add headers of its own."""
+    gl = (STATIC / "radar-gl.js").read_text(encoding="utf-8")
+    hook = gl[gl.index("transformRequest:") :]
+    hook = hook[: hook.index("\n  });")]
+    assert "headers" not in hook and "cache" not in hook.lower().replace("// ", "")
+
+
+def test_a_contact_address_is_shown_only_when_configured(db, tmp_path):
+    with_contact = make_client(db, tmp_path, contact_email="rain@example.org")
+    for path in ("/", "/manage", "/privacy"):
+        assert '<a href="mailto:rain@example.org">Kontakt</a>' in with_contact.get(path).text, path
+    assert "mailto:" not in make_client(db, tmp_path).get("/").text
+
+
+def test_the_privacy_page_links_the_osmf_privacy_policy(db, tmp_path):
+    osmf = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt"
+    page = make_client(db, tmp_path, vector_tile_url=osmf).get("/privacy").text
+    assert "https://wiki.osmfoundation.org/wiki/Privacy_Policy" in page
+    other = make_client(db, tmp_path).get("/privacy").text
+    assert "osmfoundation" not in other, "only when the OSMF's server is the one in use"
+
+
+def test_switching_tile_provider_is_configuration_not_a_rebuild():
+    """Recommended by the policy: no hard-coded tile URL, switching without a software update.
+    Terraform passes both settings through, with the same defaults as the code."""
+    from rainalert.config import Settings
+
+    infra = Path(__file__).resolve().parents[1] / "infra"
+    run_tf = (infra / "run.tf").read_text(encoding="utf-8")
+    variables_tf = (infra / "variables.tf").read_text(encoding="utf-8")
+    assert "VECTOR_TILE_URL         = var.vector_tile_url" in run_tf
+    assert "CONTACT_EMAIL           = var.contact_email" in run_tf
+    default = Settings.model_fields["vector_tile_url"].default
+    block = variables_tf[variables_tf.index('variable "vector_tile_url"') :]
+    assert f'default     = "{default}"' in block[: block.index("\n}\n")]

@@ -42,7 +42,9 @@ raster_tile_host %}, und nur wenn dein Browser diese Karte nicht darstellen kann
 welchen Kartenausschnitt du ansiehst – auf der Seite „Einstellungen“ ist das die Gegend um deinen
 Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber nicht von welcher
 Seite und nichts aus einem Link. Wir selbst geben ihm keine Daten weiter, und es werden dafür
-keine Cookies gesetzt.</p>
+keine Cookies gesetzt.{% if vector_tile_host == 'vector.openstreetmap.org' %} Für diesen Server gilt die
+<a href="https://wiki.osmfoundation.org/wiki/Privacy_Policy">Datenschutzerklärung der OpenStreetMap
+Foundation</a>.{% endif %}</p>
 <p>Die Regenbilder und alles andere auf dieser Seite kommen von uns.</p>
 {% endif %}
 

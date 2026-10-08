@@ -104,6 +104,28 @@ variable "map_tile_url" {
   }
 }
 
+variable "vector_tile_url" {
+  description = "Shortbread vector tiles for the maps (DESIGN.md D-58, D-59). A variable, so switching provider - or turning the vector map off with \"\" - is a tfvars change and an apply, not a new image: the OSMF's vector tile policy recommends exactly that, because it may block a user without notice. Empty draws both maps with Leaflet and map_tile_url."
+  type        = string
+  default     = "https://vector.openstreetmap.org/shortbread_v1/{z}/{x}/{y}.mvt"
+
+  validation {
+    condition     = var.vector_tile_url == "" || (startswith(var.vector_tile_url, "https://") && strcontains(var.vector_tile_url, "{z}") && strcontains(var.vector_tile_url, "{x}") && strcontains(var.vector_tile_url, "{y}"))
+    error_message = "vector_tile_url must be an https:// tile template with {z}, {x} and {y}, or empty to turn the vector map off."
+  }
+}
+
+variable "contact_email" {
+  description = "Shown in every page's footer when set. The OSMF's vector tile policy recommends a contact on the site - without one, their only option when something goes wrong is to block it. It is published to everyone who opens the site, so use an address meant for that. Empty shows none."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.contact_email == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.contact_email))
+    error_message = "contact_email must be an email address, or empty."
+  }
+}
+
 variable "map_tile_attribution" {
   description = "Required by every provider worth using, and by their licence. Shown in the map's corner. Change it whenever you change map_tile_url - an attribution that credits the wrong service is worse than none."
   type        = string

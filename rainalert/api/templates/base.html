@@ -149,6 +149,9 @@
      and colours the grid - see rainalert/attribution.py. #}
   {{ attribution_html | safe }} ·
   <a href="/privacy">Datenschutz</a>
+  {# The OSMF's vector tile policy recommends a contact on the site (D-61); without one, their
+     only remedy for a problem is to block it. Only when configured. #}
+  {% if settings.contact_email %}· <a href="mailto:{{ settings.contact_email }}">Kontakt</a>{% endif %}
 </footer>
 </main></body>
 </html>

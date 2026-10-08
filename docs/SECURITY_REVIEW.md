@@ -781,8 +781,10 @@ What changed for this finding:
 - **No new script origin:** MapLibre, its worker and the label fonts are vendored and hash-pinned;
   the styles are stripped of VersaTiles' glyph server and sprite. CSP: `connect-src` gains the tile
   server and the overlay bucket, `img-src` gains `blob:`, `worker-src` stays `'self'`.
-- **Open:** the OSMF vector tile usage policy was not readable from the development sandbox; that
-  it permits this use is unverified (RUNBOOK §3c).
+- **Usage policy:** read 2026-10-08 (DESIGN.md D-61). It permits this use; its own privacy section
+  asks that no personal data be sent to the service - the tile requests carry what any map view
+  carries (IP, map area, the site's origin), nothing from the page or the subscription. The privacy
+  page links the OSMF privacy policy.
 
 ---
 

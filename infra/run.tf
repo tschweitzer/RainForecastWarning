@@ -21,6 +21,8 @@ locals {
     VAPID_SUBJECT           = var.vapid_subject != "" ? var.vapid_subject : "mailto:${var.alert_email}"
     MAP_TILE_URL            = var.map_tile_url
     MAP_TILE_ATTRIBUTION    = var.map_tile_attribution
+    VECTOR_TILE_URL         = var.vector_tile_url
+    CONTACT_EMAIL           = var.contact_email
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"

@@ -73,8 +73,11 @@ for (const theme of ['gray', 'gray-dark']) {
     // Shortbread stops at zoom 14; without this MapLibre asks for z15+ tiles that do not exist and
     // the map goes blank when zoomed in, instead of overzooming the z14 tiles.
     source.maxzoom = 14;
-    // The licence's attribution, shown in the map's corner.
-    source.attribution = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+    // The licence's attribution, shown in the map's corner - bottom right, where the OSMF's vector
+    // tile policy expects it. And the "fix the map" link that policy recommends, so a reader who
+    // spots a wrong street can correct it at the source (DESIGN.md D-61).
+    source.attribution = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      + ' · <a href="https://www.openstreetmap.org/fixthemap">Karte verbessern</a>';
   }
   style.metadata = { ...style.metadata, 'rainalert:built-by': 'scripts/map-style/build.mjs' };
 

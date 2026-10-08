@@ -601,11 +601,19 @@ only the fallback.
   and `MAP_TILE_URL`, as before D-58. This is also the way back if the OSMF ever blocks the site.
 - **Where a page falls back to Leaflet by itself:** no WebGL, a browser without module scripts,
   or MapLibre failing to load. Both pages load Leaflet as well for exactly that.
-- **Open item: the OSMF vector tile usage policy.** It was not readable from the development
-  sandbox, so nobody has checked that it covers this use - read
-  <https://operations.osmfoundation.org/policies/vector/> and note the outcome here. The raster
-  servers' policy rules apps out (DESIGN.md, basemap); the vector service's is separate. If it does
-  not fit, point `VECTOR_TILE_URL` at another Shortbread provider or clear it.
+- **The OSMF's usage policy** (<https://operations.osmfoundation.org/policies/vector/>, read
+  2026-10-08, DESIGN.md D-61) permits this use and the service meets its requirements. What it
+  means operationally:
+  - **They may block the site without notice.** Then the map's land layer goes blank (the radar
+    still draws). Switch: set `vector_tile_url` in `terraform.tfvars` to another Shortbread provider,
+    or to `""` for Leaflet and basemap.de, and apply - no image build.
+  - **Set `contact_email`** in `terraform.tfvars`. The policy recommends a contact on the site;
+    without one their only option is to block. It appears in every page's footer.
+  - **A new Shortbread major version** comes with a new URL path (`shortbread_v2/...`). The old
+    tiles stay updated for one month and available for two more. Within that window: regenerate
+    the styles against the new schema (`scripts/map-style/`, check `@versatiles/style` supports
+    it), test, and change `vector_tile_url`.
+  - Never prefetch or bulk-download their tiles, and never put a caching proxy in front.
 - **Privacy:** the tile server sees each visitor's IP and map area - on the settings page, the area
   around their warning location. The privacy page names the configured hosts; change them and it
   follows by itself.
