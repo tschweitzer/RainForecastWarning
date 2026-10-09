@@ -1256,3 +1256,11 @@ def test_both_pages_check_the_vapid_key_before_reusing_a_subscription(client):
     """
     assert "function sameKey(" in page_source(client)
     assert "function usesOurKey(" in page_source(client, "/manage")
+
+
+@pytest.mark.parametrize("path", ["/manage/", "/privacy/", "/api/v1/subscriptions/me/"])
+def test_a_trailing_slash_is_not_redirected(client, path):
+    """Behind Firebase Hosting a redirect's `Location` named the internal run.app host over http."""
+    response = client.get(path, follow_redirects=False)
+    assert response.status_code == 404
+    assert "location" not in response.headers

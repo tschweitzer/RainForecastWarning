@@ -306,7 +306,12 @@ def create_app(
             settings.overlay_bucket, settings.overlay_public_base_url or ""
         )
 
-    app = FastAPI(title="RainAlert", docs_url=None, redoc_url=None)
+    # No trailing-slash redirects. Starlette's default answered `/manage/` with a 307 whose
+    # `Location` it builds from the request as it arrives - which behind Firebase Hosting is the
+    # Cloud Run host over plain http, so every such redirect advertised the internal
+    # `*.run.app` address and sent the browser off the site, downgraded. Nothing links to a
+    # trailing-slash path; a mistyped one is a 404 like any other unknown path.
+    app = FastAPI(title="RainAlert", docs_url=None, redoc_url=None, redirect_slashes=False)
     app.state.settings = settings
     app.state.notifier = notifier
 
