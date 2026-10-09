@@ -412,6 +412,31 @@ manage page will be telling them so.
 
 ---
 
+### "Transactional mail cap of N per day reached; mail not sent"
+
+Confirmation and settings-link mails share one daily budget (`transactional_mail_cap_per_day`,
+default 50, DESIGN.md D-63). Push messages and rain warnings do not count against it. When it is
+reached, new subscribers get no confirmation mail and settings links do not go out, until the
+rolling 24 hours free up room. The pages still answer as if the mail had been sent.
+
+Either someone is using the sign-up form to mail strangers (SECURITY_REVIEW.md F-5, status
+2026-10-09), or the cap is too low for a busy day:
+
+```sql
+-- mails counted in the last 24 h, by hour
+select date_trunc('hour', occurred_at) as hour, count(*)
+from rate_limit_hits where bucket = 'mail:transactional'
+  and occurred_at > now() - interval '24 hours'
+group by 1 order by 1;
+```
+
+A steady trickle that just reached the cap is real demand: raise
+`TRANSACTIONAL_MAIL_CAP_PER_DAY`, keeping it plus `global_alert_cap_per_day` within the mail
+provider's daily quota. A burst is abuse: leave the cap alone, because it is doing its job. The
+burst ends on its own, since nothing past the cap is sent.
+
+---
+
 ### After a deploy, a browser still behaves like the old version
 
 Scripts and styles are loaded by content-versioned URL (`/static/radar.js?v=<hash>`, DESIGN.md

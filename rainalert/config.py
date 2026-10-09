@@ -288,6 +288,16 @@ class Settings(BaseSettings):
     #: per IP. The token that button carries is durable and travels in every alert, so the cap
     #: is what stops a copy of one being used to buzz its owner's phone indefinitely.
     manage_request_limit_per_hour: int = 5
+    #: Ceiling on confirmation and settings-link *mails*, across all requests, per rolling 24 h.
+    #: The per-IP limits above are only as good as the client IP, and a request sent straight to
+    #: the service's run.app address can choose its own (SECURITY_REVIEW.md F-5, status
+    #: 2026-10-09). The per-address limits still cap what one mailbox receives, but not how many
+    #: *different* mailboxes a single attacker can have us write to - and those mails spend the
+    #: provider's daily quota and the domain's reputation that rain warnings depend on. This cap
+    #: counts nothing per IP, so no header can get around it. Warnings are not counted here
+    #: (`global_alert_cap_per_day` is theirs); push messages are free and are not counted either.
+    #: 50 is far above what a friends-and-family service signs up in a day. 0 disables it.
+    transactional_mail_cap_per_day: int = 50
     rate_limit_retention_days: int = 7
 
     # --- Self-service settings page (§11.2) ----------------------------------------------------

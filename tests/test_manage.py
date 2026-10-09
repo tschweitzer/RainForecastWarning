@@ -947,3 +947,55 @@ def test_the_colour_hint_is_plain_text(client):
     assert '<p class="hint">Die Farben sind dieselben wie auf der Radarkarte.</p>' in (
         client.get("/manage").text
     )
+
+
+# --- the global cap on transactional mail (SECURITY_REVIEW.md F-5, status 2026-10-09) ---------
+
+
+def test_confirmation_and_settings_mails_share_one_daily_cap(db, settings, notifier):
+    """Counted across all requests, so a forged client IP cannot get around it - and once the day's
+    budget is spent the request still answers as usual, so the caller learns nothing."""
+    capped = settings.model_copy(update={"transactional_mail_cap_per_day": 3})
+    client = TestClient(
+        create_app(capped, session_factory=db, notifier=notifier),
+        base_url=capped.public_base_url,
+    )
+    subscribed(client, notifier, email="a@example.com")  # mail 1: confirmation
+    assert (
+        client.post(
+            "/api/v1/manage/link", json={"channel": "email", "address": "a@example.com"}
+        ).status_code
+        == 202
+    )  # mail 2: settings link
+    before = len(notifier.sent)
+    response = client.post(
+        "/api/v1/subscriptions", json={"email": "b@example.com", "lat": MUNICH[0], "lon": MUNICH[1]}
+    )
+    assert response.status_code == 202 and len(notifier.sent) == before + 1  # mail 3
+    for email in ("c@example.com", "d@example.com"):
+        response = client.post(
+            "/api/v1/subscriptions", json={"email": email, "lat": MUNICH[0], "lon": MUNICH[1]}
+        )
+        assert response.status_code == 202, "the answer must not reveal the cap"
+    assert (
+        client.post(
+            "/api/v1/manage/link", json={"channel": "email", "address": "a@example.com"}
+        ).status_code
+        == 202
+    )
+    assert len(notifier.sent) == before + 1, "nothing past the cap"
+
+
+def test_unknown_addresses_do_not_use_up_the_mail_budget(db, settings, notifier):
+    capped = settings.model_copy(update={"transactional_mail_cap_per_day": 1})
+    client = TestClient(
+        create_app(capped, session_factory=db, notifier=notifier),
+        base_url=capped.public_base_url,
+    )
+    for _ in range(3):
+        client.post("/api/v1/manage/link", json={"channel": "email", "address": "who@example.com"})
+    assert notifier.sent == []
+    client.post(
+        "/api/v1/subscriptions", json={"email": "a@example.com", "lat": MUNICH[0], "lon": MUNICH[1]}
+    )
+    assert len(notifier.sent) == 1

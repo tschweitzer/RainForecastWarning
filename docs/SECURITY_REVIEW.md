@@ -335,6 +335,30 @@ one if deletion is unconditional.
 - Consider a global cap on confirmation mails per hour, so a distributed subscribe flood cannot
   consume the provider quota that the alert mails need.
 
+**Status (2026-10-09): the client IP is forgeable in production; a global mail cap now bounds what
+that buys.** The deployment runs with `trusted_proxy_hops = 2` (Firebase Hosting in front of Cloud
+Run), and `client_ip` (`api/ratelimit.py`) takes the second-to-last `X-Forwarded-For` entry. Through
+Hosting that is the real client. But Cloud Run's own `*.run.app` address answers directly (checked
+2026-10-09), and a request sent there puts whatever it likes in that position, so **every per-IP
+limit can be sidestepped**.
+
+What that buys an attacker, and what bounds it:
+- *Flooding one person* stays capped, because the per-address limits do not depend on the IP: 5/h
+  confirmations per address, 5/h settings links per address, 5/h notification-button requests per
+  subscriber. Push targets need an endpoint the attacker cannot know.
+- *Breadth* was the open part: confirmation mails to any number of *different* addresses, each
+  within its own per-address limit. That spends the mail provider's daily quota and the sending
+  domain's reputation, which rain warnings need. **Now capped:** `transactional_mail_cap_per_day`
+  (default 50, env `TRANSACTIONAL_MAIL_CAP_PER_DAY`) counts confirmation and settings-link mails
+  across all requests, in one rate-limit bucket (`mail:transactional`) that no header can split.
+  Past it, mails are not sent, the request answers as usual, and an error is logged (RUNBOOK
+  "Transactional mail cap reached"). Rain warnings have their own cap (`global_alert_cap_per_day`)
+  and are not counted. This is the global cap the fix list above asked for.
+- *Still open:* the per-IP limits on settings writes and location updates (authenticated anyway),
+  and rows in `rate_limit_hits` (purged after `rate_limit_retention_days`). The real fix - making
+  the run.app address unusable, or recognising Hosting's traffic by something a client cannot
+  forge - needs a check of what Firebase Hosting supports first and is not done.
+
 ---
 
 ### F-6 — Scale-to-zero turns unauthenticated traffic into money and into starved alerting

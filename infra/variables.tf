@@ -126,6 +126,17 @@ variable "contact_email" {
   }
 }
 
+variable "transactional_mail_cap_per_day" {
+  description = "Confirmation and settings-link mails per rolling 24 h, across all requests (DESIGN.md D-63). The only limit on them a forged client IP cannot get around. Keep it plus the warnings' own cap within the mail provider's daily quota. 0 disables it."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.transactional_mail_cap_per_day >= 0
+    error_message = "transactional_mail_cap_per_day must be 0 (off) or a positive number."
+  }
+}
+
 variable "map_tile_attribution" {
   description = "Required by every provider worth using, and by their licence. Shown in the map's corner. Change it whenever you change map_tile_url - an attribution that credits the wrong service is worse than none."
   type        = string

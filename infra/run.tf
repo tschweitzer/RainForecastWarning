@@ -23,6 +23,10 @@ locals {
     MAP_TILE_ATTRIBUTION    = var.map_tile_attribution
     VECTOR_TILE_URL         = var.vector_tile_url
     CONTACT_EMAIL           = var.contact_email
+
+    # Confirmation and settings-link mails per rolling day, across all requests (D-63).
+    TRANSACTIONAL_MAIL_CAP_PER_DAY = tostring(var.transactional_mail_cap_per_day)
+
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"

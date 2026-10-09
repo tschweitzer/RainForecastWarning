@@ -2,7 +2,7 @@
 
 Status: **proposal, revision 3 (2026-10-09), with security review 3 folded in (§12)** - not
 implemented. Scope: web push subscribers;
-email keeps its magic link and session. Would become DESIGN.md D-63 once agreed.
+email keeps its magic link and session. Would become DESIGN.md D-64 once agreed (D-63 is the mail cap).
 
 History: revision 1 replaced the push round trip with a key that opened the ordinary session
 (security review 1, §8). Revision 2 dropped the session for key holders and signed every request
@@ -399,7 +399,7 @@ the behaviour and needs no change.
    auf diesem Gerät beenden" for push and email alike; delete the local key after unsubscribing. Liveness
    counts warning taps and key use. API token not issued for push.
 8. Setting + Terraform variable; privacy sentence.
-9. Docs: DESIGN D-63; SECURITY_REVIEW entry; RUNBOOK (kill switch and purge; "settings open
+9. Docs: DESIGN D-64; SECURITY_REVIEW entry; RUNBOOK (kill switch and purge; "settings open
    without a link" is now expected).
 10. Tests:
     - **Unit:** the canonical message; good signature; wrong key; other origin, method, path or

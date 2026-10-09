@@ -361,6 +361,24 @@ def create_app(
             logger.error("delivery failed: %s", result.error)
         return result.ok
 
+    def within_mail_budget(session: Session, channel: str) -> bool:
+        """Whether one more confirmation or settings-link *mail* may go out today.
+
+        `transactional_mail_cap_per_day` (config.py) is the only limit on these mails that does
+        not depend on the client IP, which a request can forge (SECURITY_REVIEW.md F-5, status
+        2026-10-09). Checked only when a mail would actually be sent, so refused and unknown
+        addresses do not use up the day. Past the cap the request still answers as usual - the
+        caller learns nothing - and the refusal is logged at error level, because it means either
+        an attack or a cap set too low, and both want a human.
+        """
+        cap = settings.transactional_mail_cap_per_day
+        if channel != Channel.EMAIL.value or not cap:
+            return True
+        if hit_and_check(session, "mail:transactional", cap, timedelta(days=1)):
+            return True
+        logger.error("transactional mail cap of %d per day reached; mail not sent", cap)
+        return False
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         """Report validation failures without echoing the input back.
@@ -587,7 +605,7 @@ def create_app(
             logger.warning("subscribe refused: %s", exc)
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-        if result.confirm_token and result.address:
+        if result.confirm_token and result.address and within_mail_budget(session, payload.channel):
             subscriber = session.get(Subscriber, result.subscriber_id)
             deliver(
                 lambda: confirmation_message(
@@ -937,7 +955,11 @@ def create_app(
         subscriber = svc.find_subscriber(session, channel=channel, address=payload.address)
         # Unconfirmed subscribers are excluded: confirmation is what proves the channel reaches
         # the person, and a settings link is not the place to take that on trust.
-        if subscriber is not None and subscriber.confirmed_at is not None:
+        if (
+            subscriber is not None
+            and subscriber.confirmed_at is not None
+            and within_mail_budget(session, subscriber.channel.value)
+        ):
             token = svc.issue_manage_token(session, settings, subscriber)
             deliver(
                 lambda: manage_link_message(
@@ -1025,7 +1047,11 @@ def create_app(
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
 
         subscriber = session.get(Subscriber, claims.subscriber_id)
-        if subscriber is not None and subscriber.confirmed_at is not None:
+        if (
+            subscriber is not None
+            and subscriber.confirmed_at is not None
+            and within_mail_budget(session, subscriber.channel.value)
+        ):
             link = svc.issue_manage_token(session, settings, subscriber)
             deliver(
                 lambda: manage_link_message(
