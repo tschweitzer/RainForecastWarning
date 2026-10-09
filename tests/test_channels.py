@@ -339,12 +339,12 @@ def test_the_email_confirmation_still_waits_for_a_click(settings):
 # --- the way out ------------------------------------------------------------------------------
 
 
-def test_a_push_alert_carries_a_settings_button_and_no_unsubscribe_url():
-    """The exit on push is the settings page, one tap in, which carries "Abmelden und meine Daten
-    loeschen". Deliberately not a second action button: a destructive one on a notification that
-    arrives whenever it rains is one mis-tap from an account nobody meant to delete."""
+def test_a_push_alert_carries_no_buttons_and_no_unsubscribe_url():
+    """The exit on push is the settings page, which carries "Abmelden und meine Daten loeschen" and
+    is reached through the site. Notifications carry no buttons at all (D-64); tapping a warning
+    opens the map at the warned place."""
     message = alert_for(Channel.WEBPUSH, ENDPOINT)
-    assert [a.label for a in message.actions] == ["Einstellungen"]
+    assert "#l=" in message.click_url
     assert "Abmelden:" not in message.text
     assert "http" not in message.text
 
@@ -352,7 +352,6 @@ def test_a_push_alert_carries_a_settings_button_and_no_unsubscribe_url():
 def test_an_email_alert_still_carries_the_unsubscribe_line():
     message = alert_for(Channel.EMAIL, "a@b.example")
     assert "Abmelden: https://" in message.text
-    assert message.actions == ()
     assert "List-Unsubscribe" in message.headers
 
 

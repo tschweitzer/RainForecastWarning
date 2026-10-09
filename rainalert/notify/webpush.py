@@ -40,12 +40,6 @@ from py_vapid import Vapid02
 
 from rainalert.notify.base import DeliveryResult, OutboundMessage
 
-#: What the Notification API actually renders. `Notification.maxActions` is 2 on every shipping
-#: Chromium and Firefox build, and anything past that index is discarded silently at display time -
-#: a button that exists in the payload, is never drawn, and is therefore a feature that looks
-#: present and is not. ntfy allowed three; this is one fewer, and nothing here sends more than two.
-MAX_ACTIONS = 2
-
 #: The hosts a push endpoint may point at. Not a nicety: `send` POSTs to whatever endpoint it is
 #: given, so without this an attacker can subscribe with
 #: `http://169.254.169.254/computeMetadata/v1/...` and have this service fetch it for them.
@@ -206,15 +200,12 @@ VAPID_TOKEN_LIFETIME_SECONDS = 12 * 3600
 def payload_for(message: OutboundMessage) -> bytes:
     """The JSON the service worker receives and turns into a notification.
 
-    Shaped for `static/sw.js`: it reads `title`, `body`, `url` and `actions`, and keeps the whole
-    object in the notification's `data` so `notificationclick` can find the action it was given.
-    The action's id is its index, which is why order matters and why the array is truncated rather
-    than reordered.
+    Shaped for `static/sw.js`: it reads `title`, `body`, `url` and `tag`, and keeps the whole
+    object in the notification's `data` so `notificationclick` knows where to go.
+
+    No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `url`, and settings
+    and unsubscribing live on the settings page only.
     """
-    if len(message.actions) > MAX_ACTIONS:
-        raise ValueError(
-            f"a notification renders at most {MAX_ACTIONS} actions, got {len(message.actions)}"
-        )
     body = json.dumps(
         {
             "title": message.subject,
@@ -223,15 +214,6 @@ def payload_for(message: OutboundMessage) -> bytes:
             # Omitted when unset so the worker's own default applies, rather than sending null and
             # making sw.js decide what null means.
             **({"tag": message.push_tag} if message.push_tag else {}),
-            "actions": [
-                {
-                    "title": action.label,
-                    "url": action.url,
-                    "body": action.body,
-                    "contentType": action.content_type,
-                }
-                for action in message.actions
-            ],
         },
         ensure_ascii=False,
     ).encode()
@@ -297,7 +279,7 @@ class WebPushNotifier:
             return DeliveryResult(ok=False, error=str(exc))
 
         # Built *outside* the try below, and that placement is the whole point. `payload_for` raises
-        # for too many actions or an over-long body - our mistakes, not the subscriber's - and the
+        # for an over-long body - our mistakes, not the subscriber's - and the
         # handler below reports `gone`, which makes `deliver_queued` delete the subscriber row and
         # cascade away their coordinates and alert state. A bug in our own message building must not
         # silently delete the people it affects, least of all when D-47 means they cannot be
@@ -424,7 +406,6 @@ def new_auth_secret() -> str:
 
 __all__ = [
     "ALLOWED_PUSH_HOSTS",
-    "MAX_ACTIONS",
     "EndpointRefused",
     "WebPushNotifier",
     "check_endpoint",

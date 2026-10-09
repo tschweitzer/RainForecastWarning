@@ -12,8 +12,8 @@ met, nothing ever does.
 So: if a subscriber has heard nothing for `webpush_liveness_days`, send one short notification. Two
 things come of it, and the second is the point.
 
-1. They are reminded the subscription exists, by something they can act on - it carries the same
-   Einstellungen button as a warning, which is the route to changing or ending it.
+1. They are reminded the subscription exists, by something they can act on - tapping it opens the
+   settings page, which is the route to changing or ending it.
 2. If the subscription is dead, the push service says so and the row is deleted.
 
 Email is deliberately not included. A mailbox does not revoke itself, an unsolicited periodic mail
@@ -93,15 +93,13 @@ def due_for_liveness(
     return [(subscriber, subscription) for subscriber, subscription in rows]
 
 
-def liveness_message(settings: Settings, subscriber, token: str) -> OutboundMessage:
+def liveness_message(settings: Settings, subscriber) -> OutboundMessage:
     """Short, and honest about why it arrived.
 
     A notification nobody asked for has to say what it is in its first line, or it reads as the
     service malfunctioning. It names the gap rather than a date, because "since 2026-08-27" invites
     the reader to work out whether that is right.
     """
-    from rainalert.api.mail import settings_action
-
     days = settings.webpush_liveness_days
     return OutboundMessage(
         to=subscriber.address,
@@ -134,8 +132,9 @@ def liveness_message(settings: Settings, subscriber, token: str) -> OutboundMess
             # the notification contradicted itself inside three sentences.
             f"Sie kommt höchstens alle {days} Tage."
         ),
+        # The settings page, where changing or ending the subscription lives. No buttons on the
+        # notification itself (D-64).
         click_url=f"{settings.public_base_url.rstrip('/')}/manage",
-        actions=(settings_action(settings, token),),
         push_p256dh=subscriber.push_p256dh,
         push_auth=subscriber.push_auth,
         # The one message here that does not deserve to wake a sleeping phone, and the one that can
@@ -150,17 +149,19 @@ def liveness_message(settings: Settings, subscriber, token: str) -> OutboundMess
 
 
 def count_silent_subscribers(session: Session) -> int:
-    """Confirmed push subscribers we have successfully sent to, who have never asked for settings.
+    """Confirmed push subscribers we have successfully sent to, who have never been seen reading.
 
     The one failure this feature has no other instrument for: a payload encrypted to the wrong keys
     is still accepted by the push service with a 201, so we record `sent` and the reader sees
     nothing and has nothing to report. `due_for_liveness` cannot catch it either - it measures
     successful *sends*, which is exactly what a silent failure produces.
 
-    What makes a number possible at all is that every push message carries an Einstellungen button,
-    and `POST /api/v1/manage/request` is reached only when a human presses one. So a subscriber with
-    successful sends and no `MANAGE` token ever issued is one who has received messages and acted on
-    none of them.
+    What makes a number possible at all is `Subscriber.last_seen_at`: a tap on a warning reaches
+    `POST /api/v1/locate`, and opening the settings page records it too, both only when a human
+    does it. Settings links issued on the fallback path (`MANAGE` tokens) count as well. So a
+    subscriber with successful sends, no `last_seen_at` and no settings link ever issued is one who
+    has received messages and acted on none of them. It used to be "pressed the Einstellungen
+    button", until notifications stopped carrying buttons (DESIGN.md D-64).
 
     A smell, not an alarm, and it must not become one: plenty of people never need their settings.
     What matters is the trend. A count that climbs while sends keep succeeding is the signature of
@@ -182,6 +183,7 @@ def count_silent_subscribers(session: Session) -> int:
                 Subscriber.channel == Channel.WEBPUSH,
                 Subscriber.confirmed_at.is_not(None),
                 Subscription.id.in_(sent_ok),
+                Subscriber.last_seen_at.is_(None),
                 Subscriber.id.not_in(asked),
             )
         ).scalar_one()
@@ -193,8 +195,6 @@ def run_liveness(
     session: Session, settings: Settings, notifier, now: datetime | None = None
 ) -> tuple[int, int]:
     """Send the due notifications. Returns (sent, deleted)."""
-    from rainalert.tokens import manage_request_token
-
     now = now or datetime.now(UTC)
     due = due_for_liveness(session, settings, now)
     if not due:
@@ -212,9 +212,6 @@ def run_liveness(
             gone.append(subscriber)
             continue
 
-        token = manage_request_token(
-            subscriber.id, settings.secret_key, settings.manage_request_ttl_days
-        )
         # Recorded whatever happens, so the run leaves a trace of every subscriber it touched.
         # `event_id` is NULL: this is not about a rain event, which is why the column is nullable.
         #
@@ -235,7 +232,7 @@ def run_liveness(
         session.flush()
 
         try:
-            result = notifier.send(liveness_message(settings, subscriber, token))
+            result = notifier.send(liveness_message(settings, subscriber))
         except Exception as exc:  # one bad subscriber must not stop the whole run
             row.status = "expired"  # see below: never leave a liveness row queued
             row.error = f"{type(exc).__name__}: {exc}"
@@ -275,7 +272,7 @@ def run_liveness(
         session.delete(subscriber)
     session.commit()
     logger.info(
-        "liveness: %d confirmed push subscriber(s) have never opened their settings",
+        "liveness: %d confirmed push subscriber(s) have never opened a warning or their settings",
         count_silent_subscribers(session),
     )
     logger.info("liveness: %d notification(s) sent, %d subscriber(s) deleted", sent, len(gone))

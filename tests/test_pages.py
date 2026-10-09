@@ -9,7 +9,6 @@ each page having somewhere to put a message when the attempt fails.
 import json
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 
 import pytest
@@ -17,14 +16,7 @@ from fastapi.testclient import TestClient
 
 from rainalert.api.app import create_app
 from rainalert.config import Settings
-from rainalert.notify import ConsoleNotifier, MessageAction, OutboundMessage
-from rainalert.notify.webpush import MAX_ACTIONS
-from rainalert.tokens import (
-    manage_request_token,
-    session_token,
-    verify_manage_request_token,
-    verify_session_token,
-)
+from rainalert.notify import ConsoleNotifier, OutboundMessage
 from tests.helpers import page_source
 
 
@@ -186,9 +178,8 @@ def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
     #
     # Scoped to the functions that actually build one, which is what makes this precise. Matching
     # every `public_base_url` URL with a fragment in the file also catches `/unsubscribe#t=`, and
-    # that one is email-only: it goes in a mail body, never in a `click_url` or a notification
-    # action, so no notification can ever open it. (The one action that does exist, Einstellungen,
-    # posts to `/api/v1/manage/request` in the background and navigates nothing.)
+    # that one is email-only: it goes in a mail body, never in a `click_url`, so no notification can
+    # ever open it. (Notifications carry no buttons, D-64.)
     #
     # Matched across string concatenation, because the warning link is built as `f"...}}/"` on one
     # line and `f"#l={...}"` on the next; a pattern anchored to one line sees the path without its
@@ -727,76 +718,21 @@ def _push_settings(**kwargs):
     )
 
 
-def test_an_action_still_refuses_a_control_character():
-    """The comma, semicolon and leading-quote rules went with ntfy - they existed because ntfy
-    packed every action into one header whose separators those were, and forbidding a comma meant
-    no button could be labelled "Ja, abmelden". A newline is still refused: these values are ours,
-    so one here is a bug in our own message building."""
-    MessageAction(label="Ja, abmelden", url="https://rain.example.invalid/x")
-    for bad in ("a\nb", "a\rb", "a\x00b"):
-        with pytest.raises(ValueError, match="control character"):
-            MessageAction(label=bad, url="https://rain.example.invalid/x")
-
-
-def test_more_actions_than_a_notification_renders_is_refused_rather_than_silently_dropped():
-    """`Notification.maxActions` is 2 and anything past that index is discarded at display time."""
+def test_a_push_payload_carries_no_buttons():
+    """Notifications carry no buttons (DESIGN.md D-64): a tap opens the page the message points at,
+    and settings and unsubscribing live on the settings page only."""
     from rainalert.notify.webpush import payload_for
 
-    action = MessageAction(label="x", url="https://rain.example.invalid/x")
     message = OutboundMessage(
         to="https://fcm.googleapis.com/fcm/send/x",
         subject="s",
         text="t",
         channel="webpush",
+        click_url="https://rain.example.invalid/manage",
         push_p256dh="k" * 87,
         push_auth="a" * 22,
-        actions=(action,) * (MAX_ACTIONS + 1),
     )
-    with pytest.raises(ValueError, match="at most"):
-        payload_for(message)
-
-
-def test_a_request_token_round_trips_and_is_not_interchangeable_with_a_session():
-    """Purpose is inside the MAC, so the durable token cannot be spent as a session and the
-    session cookie cannot be replayed at the request endpoint."""
-    subscriber_id = uuid.uuid4()
-    request = manage_request_token(subscriber_id, "secret", 365)
-    assert verify_manage_request_token(request, "secret").subscriber_id == subscriber_id
-
-    assert verify_session_token(request, "secret") is None
-    session = session_token(subscriber_id, "secret", 30)
-    assert verify_manage_request_token(session, "secret") is None
-    assert verify_manage_request_token(request, "other-secret") is None
-
-
-def test_a_request_token_stops_working_once_it_is_old():
-    subscriber_id = uuid.uuid4()
-    minted = datetime.now(UTC)
-    token = manage_request_token(subscriber_id, "secret", 1, now=minted)
-    assert verify_manage_request_token(token, "secret", minted + timedelta(hours=23)) is not None
-    assert verify_manage_request_token(token, "secret", minted + timedelta(days=1)) is None
-
-
-def test_the_settings_button_posts_its_token_and_never_puts_it_in_a_url():
-    """What is left of the anchor message.
-
-    `settings_anchor_message` is gone (D-45): it existed because an ntfy topic was an unmemorable
-    string the reader had to keep, so the notification itself was the bookmark - and a web push
-    notification cannot be one, because it is gone the moment it is swiped. The button it carried
-    lives on, on every warning and on the monthly liveness notification, and the property that
-    mattered is still the one worth pinning: the token is POSTed, never placed in a URL.
-    """
-    settings = _push_settings()
-    token = manage_request_token(uuid.uuid4(), settings.secret_key, 365)
-    from rainalert.api.mail import settings_action
-
-    action = settings_action(settings, token)
-
-    assert action.url == "https://rain.example.invalid/api/v1/manage/request"
-    assert json.loads(action.body) == {"token": token}
-    # Not in a query string, where uvicorn and Cloud Run would both log it (D-26, F-4/F-8).
-    assert "?" not in action.url
-    assert token not in action.url
+    assert "actions" not in json.loads(payload_for(message))
 
 
 # --- the map is how a place is chosen ----------------------------------------------------

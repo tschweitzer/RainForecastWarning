@@ -34,7 +34,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
@@ -72,7 +72,6 @@ from rainalert.tokens import (
     session_token,
     verify_csrf_token,
     verify_locate_token,
-    verify_manage_request_token,
     verify_session_token,
     verify_unsubscribe_token,
 )
@@ -264,14 +263,6 @@ class LocateRequest(BaseModel):
     token: str = Field(default="", max_length=512)
 
 
-class ManageRequestByToken(BaseModel):
-    """The durable token from a notification button, handed back to ask for the real link."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    token: str = Field(default="", max_length=512)
-
-
 class ManageLinkRequest(BaseModel):
     """Who to send a settings link to, in the same shape the subscribe form uses."""
 
@@ -378,6 +369,26 @@ def create_app(
             return True
         logger.error("transactional mail cap of %d per day reached; mail not sent", cap)
         return False
+
+    def seen(session: Session, subscriber_id) -> None:
+        """Record that a person demonstrably read something from us - at most once a day.
+
+        `Subscriber.last_seen_at` is the liveness job's signal (`count_silent_subscribers`); a
+        conditional UPDATE keeps it to one write a day however often a warning is tapped.
+        """
+        now = datetime.now(UTC)
+        session.execute(
+            update(Subscriber)
+            .where(
+                Subscriber.id == subscriber_id,
+                or_(
+                    Subscriber.last_seen_at.is_(None),
+                    Subscriber.last_seen_at < now - timedelta(days=1),
+                ),
+            )
+            .values(last_seen_at=now)
+        )
+        session.commit()
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -1002,68 +1013,14 @@ def create_app(
         ).scalar_one_or_none()
         if subscription is None:
             return {"located": False}
+        # A person tapped a warning: the liveness job's sign that notifications are being read.
+        seen(session, claims.subscriber_id)
         return {
             "located": True,
             "lat": float(subscription.lat),
             "lon": float(subscription.lon),
             "radius_m": int(subscription.radius_m),
         }
-
-    @app.post("/api/v1/manage/request", status_code=status.HTTP_202_ACCEPTED)
-    def request_manage_link_by_token(
-        payload: ManageRequestByToken, request: Request, session: Session = Depends(get_session)
-    ) -> dict:
-        """The notification button: hand back the durable token, get the real link on the channel.
-
-        Since D-45 this is the route back into settings for a browser that has lost its cookie but
-        still holds its push subscription. It used to exist so that changing a setting did not
-        begin with copying a generated topic out of the ntfy app; the token identifies the
-        subscriber, it does not admit anyone, and the link it triggers goes to the subscriber's own
-        channel - so holding a copy buys nothing that receiving the notification did not already
-        buy (tokens.py).
-
-        What a copy *could* buy is noise on someone else's phone, so the cap is per subscriber
-        and not only per IP: the button is tapped from whatever network the phone is on, and an
-        IP counter alone would be counting the wrong thing.
-
-        Always 202, and deliberately not "that token is invalid": the answer must not tell a
-        holder whether the subscription behind an expired token still exists.
-        """
-        ip = client_ip(request, settings.trusted_proxy_hops)
-        if not hit_and_check(
-            session, f"manage:ip:{ip}", settings.manage_link_limit_per_hour, timedelta(hours=1)
-        ):
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
-
-        claims = verify_manage_request_token(payload.token, settings.secret_key)
-        if claims is None:
-            return {"status": "check your messages"}
-        if not hit_and_check(
-            session,
-            f"manage:req:{claims.subscriber_id}",
-            settings.manage_request_limit_per_hour,
-            timedelta(hours=1),
-        ):
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
-
-        subscriber = session.get(Subscriber, claims.subscriber_id)
-        if (
-            subscriber is not None
-            and subscriber.confirmed_at is not None
-            and within_mail_budget(session, subscriber.channel.value)
-        ):
-            link = svc.issue_manage_token(session, settings, subscriber)
-            deliver(
-                lambda: manage_link_message(
-                    settings,
-                    subscriber.address,
-                    link,
-                    subscriber.id,
-                    channel=subscriber.channel.value,
-                    subscriber=subscriber,
-                )
-            )
-        return {"status": "check your messages"}
 
     @app.post("/api/v1/manage/session")
     def open_manage_session(

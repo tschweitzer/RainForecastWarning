@@ -164,6 +164,13 @@ class Subscriber(Base):
     #: Which wording they agreed to, so the record still means something after the text changes.
     consent_text_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    #: When a person last demonstrably saw something from us: tapped a warning (its `#l=` link
+    #: reaches `POST /api/v1/locate`) or opened their settings. The liveness job's "acted on
+    #: nothing" signal (`count_silent_subscribers`), which used to be "pressed the Einstellungen
+    #: button" until notifications stopped carrying buttons (DESIGN.md D-64). Written at most once
+    #: a day per subscriber, so it costs no write per request.
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     subscriptions: Mapped[list[Subscription]] = relationship(
         back_populates="subscriber", cascade="all, delete-orphan"
     )
@@ -243,6 +250,34 @@ class AuthToken(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class DeviceKey(Base):
+    """The key a push subscriber's browser signs its settings requests with (DESIGN.md D-64).
+
+    Only the public half is here; the private half is a non-extractable WebCrypto key in that
+    browser's IndexedDB and never leaves it. Registered only together with a push-delivered
+    single-use token redeemed in the browser that holds the subscription, so the key is exactly as
+    strong as the push round trip it replaces (docs/PLAN_DEVICE_KEY.md §4.1).
+
+    One per subscriber - a push subscriber is one browser - so registering or rotating replaces
+    the row. Deleted with the subscriber by the database's cascade, like `auth_tokens`.
+    """
+
+    __tablename__ = "device_keys"
+
+    #: `base64url(SHA-256(SPKI))` without padding: 43 characters, computed by the browser and by
+    #: us alike, so the confirm page - a form POST with no script on the way back - needs no answer
+    #: to learn it.
+    id: Mapped[str] = mapped_column(String(43), primary_key=True)
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subscribers.id", ondelete="CASCADE"), unique=True
+    )
+    #: SubjectPublicKeyInfo DER of a P-256 key, 91 octets. Public; not a secret.
+    public_key: Mapped[bytes] = mapped_column(LargeBinary(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: At most one write a day (see `Subscriber.last_seen_at`).
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

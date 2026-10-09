@@ -7,37 +7,6 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
-class MessageAction:
-    """A tappable button on a push notification, which POSTs to us and stays in the app.
-
-    Only push has these; email ignores them. The point of the POST is that the reader never
-    leaves the notification shade to reach us - the alternative, a link, means a browser, and
-    a browser means the token lands in a URL bar and a history entry. Under web push that
-    guarantee is ours to keep rather than the transport's: the service worker runs `fetch()` in
-    the background, so nothing opens and nothing is navigated.
-
-    The comma, semicolon and leading-quote rules that used to be here went with ntfy. They existed
-    because ntfy packed every action into one `Actions:` header whose separators those were. A web
-    push payload is JSON, which needs no such care, and forbidding a comma meant no button could
-    ever be labelled "Ja, abmelden".
-    """
-
-    label: str
-    url: str
-    #: Already encoded for ``content_type`` - the renderer does not encode anything.
-    body: str = ""
-    content_type: str = "application/json"
-
-    def __post_init__(self) -> None:
-        # Still refused: control characters. `url` reaches the service worker's fetch() and these
-        # values are ours rather than a subscriber's, so anything here is a bug in our own message
-        # building - which should fail where it is written, not where it is displayed.
-        for value in (self.label, self.url, self.body, self.content_type):
-            if any(char in value for char in "\r\n\x00"):
-                raise ValueError("action fields must not contain control characters")
-
-
-@dataclass(frozen=True)
 class OutboundMessage:
     to: str
     subject: str
@@ -56,8 +25,6 @@ class OutboundMessage:
     #: ignores this; push notifications have nowhere to put a link *except* here, so a
     #: confirmation that works in mail and not on a phone is exactly what this prevents.
     click_url: str | None = None
-    #: Buttons rendered on a push notification. Email has nowhere to put these and drops them.
-    actions: tuple[MessageAction, ...] = ()
     #: How long a push service should hold this message for a device that is offline (RFC 8030 §5.2),
     #: and how hard it should try to wake it (§5.3). `None` means "use the notifier's default", which
     #: is tuned for a rain warning.
@@ -98,8 +65,8 @@ class OutboundMessage:
     #: The browser's P-256 public key and the shared auth secret, base64url, straight from the
     #: subscriber row. Required for `channel="webpush"` and meaningless otherwise: RFC 8291
     #: encrypts to them, so a message without them cannot be built rather than being sent in
-    #: clear. Channel-specific fields on a general message are not new here - `click_url` and
-    #: `actions` are already push-only - and the alternative, packing three values into `to`,
+    #: clear. Channel-specific fields on a general message are not new here - `click_url` is
+    #: already push-only - and the alternative, packing three values into `to`,
     #: would put parsing between us and the endpoint we have to reach exactly.
     push_p256dh: str | None = None
     push_auth: str | None = None

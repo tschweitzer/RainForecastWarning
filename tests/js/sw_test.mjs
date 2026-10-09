@@ -12,7 +12,13 @@ async function test(name, fn) {
 const WARNING = {
   title: 'Regen in etwa 12 Minuten',
   body: 'Leichter Regen zieht auf.',
-  url: '/#l=tok',
+  url: '/#l=tok'
+};
+
+/* What a notification shown before D-64 still carries in the tray: a button whose request token
+   points at a route that no longer exists. */
+const OLD_WARNING = {
+  ...WARNING,
   actions: [{ title: 'Einstellungen', url: '/api/v1/manage/request', body: '{}' }]
 };
 
@@ -24,35 +30,11 @@ await test('a push shows a notification carrying the payload', async () => {
   assert.equal(w.shown[0].options.body, 'Leichter Regen zieht auf.');
 });
 
-await test('the actions reach showNotification, not just the local variable', async () => {
+await test('no buttons are drawn, even for a payload that still names some', async () => {
+  // Notifications carry no buttons (D-64): settings and unsubscribing live on the settings page.
   const w = loadWorker({ maxActions: 2 });
-  await fire(w.listeners.push, { data: { json: () => WARNING } });
-  // The bug this catches: `actions` was computed and never passed, so no button was ever drawn and
-  // the whole action branch of notificationclick was dead code.
-  assert.deepEqual(w.shown[0].options.actions, [{ action: '0', title: 'Einstellungen' }]);
-});
-
-await test('a platform reporting zero actions is asked for none', async () => {
-  const w = loadWorker({ maxActions: 0 });
-  await fire(w.listeners.push, { data: { json: () => ({ ...WARNING, actions: [
-    { title: 'A' }, { title: 'B' }] }) } });
-  // `Notification.maxActions || 2` turned 0 into 2. Safari reports 0.
-  assert.deepEqual(w.shown[0].options.actions, []);
-});
-
-await test('more actions than the platform draws are dropped', async () => {
-  const w = loadWorker({ maxActions: 2 });
-  await fire(w.listeners.push, { data: { json: () => ({ ...WARNING, actions: [
-    { title: 'A' }, { title: 'B' }, { title: 'C' }] }) } });
-  assert.equal(w.shown[0].options.actions.length, 2);
-  assert.deepEqual(w.shown[0].options.actions.map((a) => a.action), ['0', '1']);
-});
-
-await test('a platform that does not report maxActions gets the documented default of two', async () => {
-  const w = loadWorker({});
-  await fire(w.listeners.push, { data: { json: () => ({ ...WARNING, actions: [
-    { title: 'A' }, { title: 'B' }, { title: 'C' }] }) } });
-  assert.equal(w.shown[0].options.actions.length, 2);
+  await fire(w.listeners.push, { data: { json: () => OLD_WARNING } });
+  assert.equal(w.shown[0].options.actions, undefined);
 });
 
 await test('an unparseable payload still shows something', async () => {
@@ -114,33 +96,16 @@ await test('a tab on another origin is ignored', async () => {
   assert.deepEqual(w.opened, ['/#l=tok']);
 });
 
-await test('an action POSTs without cookies and opens nothing', async () => {
-  const w = loadWorker({ maxActions: 2 });
+await test('a tap on a leftover button opens the page and posts nothing', async () => {
+  // A notification from before D-64, still in the tray. Its button's route is gone; the useful
+  // answer is the notification's own page, the same as a tap on its body.
+  const w = loadWorker({ maxActions: 2, windows: [] });
   await fire(w.listeners.notificationclick, {
-    action: '0', notification: { data: WARNING, close() {} }
+    action: '0', notification: { data: OLD_WARNING, close() {} }
   });
-  assert.equal(w.fetches.length, 1);
-  assert.equal(w.fetches[0].url, '/api/v1/manage/request');
-  assert.equal(w.fetches[0].init.method, 'POST');
-  // The token in the body must never reach a URL bar or a history entry.
-  assert.equal(w.fetches[0].init.credentials, 'omit');
-  assert.deepEqual(w.opened, []);
-  assert.deepEqual(w.navigated, []);
-});
-
-await test('the acknowledgment is not titled like a warning', async () => {
-  const w = loadWorker({ maxActions: 2 });
-  await fire(w.listeners.notificationclick, {
-    action: '0', notification: { data: WARNING, close() {} }
-  });
-  const ack = w.shown[w.shown.length - 1];
-  assert.notEqual(ack.title, 'Regenwarnung', 'an acknowledgment titled like a warning trains the reader to distrust real ones');
-  assert.equal(ack.title, 'Einstellungen');
-  // The settings family's own tag. It must replace itself and be replaced by the link that follows,
-  // and it must NOT share a tag with a rain warning: one tag for everything meant this
-  // acknowledgement evicted a live warning, with its map link, at the moment it was most wanted.
-  assert.equal(ack.options.tag, 'rainalert-manage');
-  assert.notEqual(ack.options.tag, 'rainalert');
+  assert.deepEqual(w.fetches, []);
+  assert.deepEqual(w.opened, ['/#l=tok']);
+  assert.equal(w.shown.length, 0, 'no acknowledgement notification any more');
 });
 
 await test('a payload can choose which notifications it replaces', () => {
@@ -159,39 +124,11 @@ await test('a payload with no tag falls back to the single old one', async () =>
   assert.equal(w.shown[0].options.tag, 'rainalert');
 });
 
-await test('a failed action POST says so rather than silently doing nothing', async () => {
-  const w = loadWorker({ maxActions: 2, fetchOk: false });
-  await fire(w.listeners.notificationclick, {
-    action: '0', notification: { data: WARNING, close() {} }
-  });
-  assert.equal(w.shown.length, 1);
-  assert.match(w.shown[0].options.body, /nicht geklappt/);
-});
-
-await test('no connection says so rather than silently doing nothing', async () => {
-  const w = loadWorker({ maxActions: 2, fetchFails: true });
-  await fire(w.listeners.notificationclick, {
-    action: '0', notification: { data: WARNING, close() {} }
-  });
-  assert.equal(w.shown.length, 1);
-  assert.match(w.shown[0].options.body, /Keine Verbindung/);
-});
-
-await test('an action id with no matching action does nothing at all', async () => {
-  const w = loadWorker({ maxActions: 2 });
-  await fire(w.listeners.notificationclick, {
-    action: '7', notification: { data: WARNING, close() {} }
-  });
-  assert.deepEqual(w.fetches, []);
-  assert.deepEqual(w.opened, []);
-});
-
 await test('what the push handler stores is what the click handler reads', async () => {
   /* The seam. Every other click case hand-feeds `notification.data`, so nothing asserted that the
      push handler ever stores it - drop `data: data` from showNotification, or rename a field in
      payload_for, and the whole suite stayed green while a body tap opened the signup form instead
-     of the map and an Einstellungen tap did nothing at all. Same bug class as the original
-     "actions computed and never passed", one field over.
+     of the map. Same bug class as the old "actions computed and never passed", one field over.
 
      So: fire a real push, take the data off the notification it produced, and click *that*. */
   const w = loadWorker({ maxActions: 2, windows: [] });
@@ -203,14 +140,6 @@ await test('what the push handler stores is what the click handler reads', async
     action: '', notification: { data: stored, close() {} }
   });
   assert.deepEqual(w.opened, ['/#l=tok'], 'a body tap must open where the payload pointed');
-
-  const w2 = loadWorker({ maxActions: 2, windows: [] });
-  await fire(w2.listeners.push, { data: { json: () => WARNING } });
-  await fire(w2.listeners.notificationclick, {
-    action: '0', notification: { data: w2.shown[0].options.data, close() {} }
-  });
-  assert.equal(w2.fetches.length, 1, 'an action tap must reach the URL the payload carried');
-  assert.equal(w2.fetches[0].url, '/api/v1/manage/request');
 });
 
 await test('an uncontrolled tab that refuses navigation still gets a window', async () => {

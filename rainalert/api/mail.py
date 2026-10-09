@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -11,8 +10,8 @@ from sqlalchemy.orm import Session
 from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
 from rainalert.db.models import Channel
-from rainalert.notify import MessageAction, OutboundMessage
-from rainalert.tokens import locate_token, manage_request_token, unsubscribe_token
+from rainalert.notify import OutboundMessage
+from rainalert.tokens import locate_token, unsubscribe_token
 
 #: Which notifications replace each other in the shade. Two families, because one tag for
 #: everything meant a settings link - or the service worker's acknowledgement of the tap that asked
@@ -140,31 +139,11 @@ def unsubscribe_line(settings: Settings, subscriber_id) -> str:
     **Email only since D-45.** ntfy's clients linkified a bare URL, so this was tappable there
     without being a button. A web push notification body is plain text that nothing linkifies, so
     printing it would show the reader an exit they cannot take. The exit on push is the settings
-    page, which carries "Abmelden und Daten loeschen" for exactly this reason, reached by the
-    Einstellungen button on every warning. Not a destructive action button: one of those, on a
-    notification that arrives often, is one mis-tap from an account nobody meant to delete.
+    page, which carries "Abmelden und Daten loeschen" for exactly this reason, reached through the
+    site's own "Einstellungen" link. Notifications carry no buttons at all (D-64): settings and
+    unsubscribing live on the settings page only.
     """
     return f"Abmelden: {unsubscribe_url(settings, subscriber_id)}"
-
-
-def settings_action(settings: Settings, token: str) -> MessageAction:
-    """The "Einstellungen" button that rides on every push we send.
-
-    Tapping it POSTs the durable request token back to us and we send the ordinary magic link to
-    the same browser. Two taps, neither of which opens anything: the service worker does the POST
-    in the background, so the token never reaches a URL bar or a history entry.
-
-    The button asks; it does not admit. That split is what lets the token be durable enough to
-    sit in a notification the reader keeps (tokens.py).
-    """
-    return MessageAction(
-        label="Einstellungen",
-        url=f"{settings.public_base_url.rstrip('/')}/api/v1/manage/request",
-        # Compact separators are no longer load-bearing - they were, while this had to survive
-        # ntfy's comma-separated header grammar - but a payload has 4096 octets guaranteed and
-        # nothing is gained by spending them on whitespace.
-        body=json.dumps({"token": token}, separators=(",", ":")),
-    )
 
 
 def manage_link_message(
@@ -241,9 +220,8 @@ def deletion_receipt(
     will ever post to - which was not possible on ntfy, where only the subscriber could stop their
     app listening.
 
-    There is no delete action on a notification, so there is no service-worker path to describe:
-    `maxActions` is 2 and a destructive button on a message that arrives whenever it rains is one
-    mis-tap from an account nobody meant to delete (see `alert_message`). A subscriber who deletes
+    There is no delete action on a notification - notifications carry no buttons at all (D-64) -
+    so there is no service-worker path to describe. A subscriber who deletes
     by blocking notifications or clearing site data never receives this receipt at all - the
     endpoint is already dead, which is how we find out.
     """
@@ -339,26 +317,6 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
     }
     if settings.mail_reply_to:
         headers["Reply-To"] = settings.mail_reply_to
-    # The one button on a warning, and since D-45 the only durable route to the settings page:
-    # a web push notification is gone the moment it is swiped, so the reader cannot go back and
-    # find an earlier one. An alert is the message that reliably arrives again, which is why the
-    # route lives here. Push only: the header is meaningless to a mail client, and email has the
-    # settings form already.
-    #
-    # Deliberately not a second "Abmelden" button. `maxActions` is 2 so there is room, but a
-    # destructive action on a notification that arrives whenever it rains is one mis-tap from an
-    # account nobody meant to delete. Abmelden lives one tap further in, on the settings page.
-    actions = ()
-    if is_push:
-        actions = (
-            settings_action(
-                settings,
-                manage_request_token(
-                    subscriber.id, settings.secret_key, settings.manage_request_ttl_days
-                ),
-            ),
-        )
-
     return OutboundMessage(
         to=subscriber.address,
         channel=str(subscriber.channel),
@@ -382,6 +340,5 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
             f"{settings.public_base_url.rstrip('/')}/"
             f"#l={locate_token(subscriber.id, settings.secret_key, settings.locate_link_ttl_minutes)}"
         ),
-        actions=actions,
         headers=headers,
     )

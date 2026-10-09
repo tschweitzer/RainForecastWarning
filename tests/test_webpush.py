@@ -33,10 +33,9 @@ from sqlalchemy import select
 from rainalert import subscriptions as svc
 from rainalert.config import Settings
 from rainalert.db.models import Channel, Notification, Subscriber
-from rainalert.notify.base import DeliveryResult, MessageAction, OutboundMessage
+from rainalert.notify.base import DeliveryResult, OutboundMessage
 from rainalert.notify.webpush import (
     ALLOWED_PUSH_HOSTS,
-    MAX_ACTIONS,
     EndpointRefused,
     WebPushNotifier,
     b64url,
@@ -123,12 +122,7 @@ def test_the_browser_can_decrypt_what_we_send(vapid, browser):
         captured["headers"] = dict(request.headers)
         return httpx.Response(201, headers={"location": "https://fcm.googleapis.com/m/1"})
 
-    result = notifier_for(vapid, handler).send(
-        message_for(
-            browser,
-            actions=(MessageAction(label="Einstellungen", url="https://rain.example.invalid/x"),),
-        )
-    )
+    result = notifier_for(vapid, handler).send(message_for(browser))
     assert result.ok
 
     # No `dh=`: aes128gcm carries the sender's public key in the payload's own header block, which
@@ -143,7 +137,7 @@ def test_the_browser_can_decrypt_what_we_send(vapid, browser):
     assert payload["title"] == "Regenwarnung"
     assert payload["body"].startswith("In etwa 25 Minuten")
     assert payload["url"] == "https://rain.example.invalid/#l=tok"
-    assert [a["title"] for a in payload["actions"]] == ["Einstellungen"]
+    assert "actions" not in payload, "notifications carry no buttons (D-64)"
 
 
 def test_each_message_uses_a_fresh_ephemeral_key(vapid, browser):
@@ -324,7 +318,7 @@ def test_every_builder_that_can_target_push_carries_the_keys(settings):
                 "timezone": "Europe/Berlin",
             },
         ),
-        "liveness": liveness_message(settings, subscriber, "t"),
+        "liveness": liveness_message(settings, subscriber),
     }
     for name, message in built.items():
         assert message.channel == "webpush", name
@@ -368,16 +362,6 @@ def test_an_error_body_is_truncated(vapid, browser):
 # --- the contract with sw.js ------------------------------------------------------------------
 
 
-def test_more_actions_than_the_notification_api_renders_is_refused(browser):
-    """`Notification.maxActions` is 2 and anything past that index is discarded silently at display
-    time - a button that exists in the payload, is never drawn, and is a feature that looks present
-    and is not."""
-    action = MessageAction(label="x", url="https://rain.example.invalid/x")
-    assert MAX_ACTIONS == 2
-    with pytest.raises(ValueError, match="at most"):
-        payload_for(message_for(browser, actions=(action,) * (MAX_ACTIONS + 1)))
-
-
 def test_the_service_worker_reads_the_fields_the_payload_writes(browser):
     """The seam between Python and JavaScript, which nothing else checks.
 
@@ -386,55 +370,24 @@ def test_the_service_worker_reads_the_fields_the_payload_writes(browser):
     notification. Read out of the worker's source rather than restated here, so this fails when
     either side moves.
     """
-    payload = json.loads(
-        payload_for(
-            message_for(
-                browser,
-                actions=(
-                    MessageAction(
-                        label="Einstellungen",
-                        url="https://rain.example.invalid/x",
-                        body='{"token":"t"}',
-                    ),
-                ),
-            )
-        )
-    )
+    payload = json.loads(payload_for(message_for(browser)))
     source = SW.read_text(encoding="utf-8")
-    for field in ("title", "body", "url", "actions"):
+    for field in ("title", "body", "url"):
         assert field in payload, f"payload_for stopped writing {field}"
         assert f"data.{field}" in source, f"sw.js does not read data.{field}"
-    for field in ("title", "url", "body", "contentType"):
-        assert field in payload["actions"][0], f"payload_for stopped writing actions[].{field}"
-        # Exactly `action.<field>`, with no alternatives. The first version of this allowed
-        # `a.<field>` as well and exempted `title` outright - and `a.url`/`a.body` are substrings of
-        # the `data.url`/`data.body` the push handler already contains, so renaming every action
-        # field in sw.js left the test passing. Verified by mutation this time.
-        assert f"action.{field}" in source, f"sw.js does not read action.{field}"
-    # The action id is the array index, which is why payload_for must not reorder the array.
-    assert "String(index)" in source
 
 
-def test_the_service_worker_actually_passes_the_actions_to_the_notification(browser):
-    """The buttons were computed and then not passed, so none was ever drawn.
-
-    That single missing line removed the only route a push subscriber has from a notification into
-    their settings - and `mail.py` had already dropped the unsubscribe URL from push bodies on the
-    grounds that the Einstellungen button existed. It did not. Worse, the contract test next to this
-    one passed throughout, because it greps for the field names and the unused mapping mentions all
-    of them.
-
-    This asserts the wiring rather than the vocabulary: `actions` must reach `showNotification`. The
-    *behaviour* - which actions arrive, in what order, and capped to what the platform will draw -
-    is asserted by running the worker in `tests/js/sw_test.mjs`, because the second half of this test
-    used to be `assert "maxActions" in source` and that is worth spelling out as a lesson: it passed
-    against `slice(0, 99)`, against slicing the wrong array, and against the real bug that shipped,
-    which was `Notification.maxActions || 2` turning a platform reporting 0 into a request for 2.
-    A grep for an identifier constrains nothing about what the code does with it.
-    """
+def test_the_service_worker_draws_no_buttons_and_opens_the_page_for_any_tap(browser):
+    """Notifications carry no buttons (D-64). Ones shown before that change can still be in the
+    tray, with a button pointing at a route that is gone - so the click handler must not branch on
+    `event.action`, and opens the notification's own page whatever was tapped. The behaviour is run
+    in `tests/js/sw_test.mjs`; this pins the source against a returning `actions:` option."""
     source = SW.read_text(encoding="utf-8")
     options = source.split("showNotification(")[1].split("})")[0]
-    assert "actions: actions" in options, "the actions never reach showNotification"
+    assert "actions:" not in options
+    click = source.split("addEventListener('notificationclick'")[1].split("\n});")[0]
+    code = re.sub(r"/\*.*?\*/", "", click, flags=re.DOTALL)
+    assert "event.action" not in code, "the click handler must not branch on the button tapped"
 
 
 def test_the_tab_reuse_fix_has_both_of_its_halves(browser):
@@ -683,7 +636,8 @@ def test_the_liveness_run_sends_once_and_records_it(db, settings):
         assert (sent, deleted) == (1, 0)
         assert len(sent_messages) == 1
         assert sent_messages[0].channel == "webpush"
-        assert [a.label for a in sent_messages[0].actions] == ["Einstellungen"]
+        # Tapping it opens the settings page; it carries no buttons (D-64).
+        assert sent_messages[0].click_url.endswith("/manage")
         # And now nobody is due, because the send was recorded.
         assert due_for_liveness(session, settings) == []
 
@@ -726,7 +680,7 @@ def test_the_liveness_notification_says_why_it_arrived(db, settings):
     subscriber = type(
         "S", (), {"address": ENDPOINT, "push_p256dh": "k" * 87, "push_auth": "a" * 22}
     )()
-    message = liveness_message(settings, subscriber, "tok")
+    message = liveness_message(settings, subscriber)
     assert str(settings.webpush_liveness_days) in message.text
     # Says what the message is *for*, not what it is not - and does not claim there was no rain,
     # which the job cannot know: it measures the last message sent, not rainfall. Someone with a
@@ -1114,22 +1068,13 @@ def test_a_non_ascii_token_signature_is_rejected_not_a_crash():
     unsubscribe link or settings token."""
     import uuid
 
-    from rainalert.tokens import (
-        manage_request_token,
-        unsubscribe_token,
-        verify_manage_request_token,
-        verify_unsubscribe_token,
-    )
+    from rainalert.tokens import unsubscribe_token, verify_unsubscribe_token
 
     subscriber_id = uuid.uuid4()
 
     good = unsubscribe_token(subscriber_id, "secret")
     assert verify_unsubscribe_token(good, "secret") == subscriber_id
     assert verify_unsubscribe_token(f"{good.partition('.')[0]}.{'ä' * 20}", "secret") is None
-
-    manage = manage_request_token(subscriber_id, "secret", 30)
-    assert verify_manage_request_token(manage, "secret") is not None
-    assert verify_manage_request_token(f"{manage.rsplit('.', 1)[0]}.{'ü' * 20}", "secret") is None
 
 
 def test_a_failed_liveness_row_never_stays_queued(db, settings):
@@ -1240,23 +1185,6 @@ def test_a_host_that_is_not_a_hostname_is_refused(endpoint):
         check_endpoint(endpoint)
 
 
-def test_the_worker_and_the_builders_agree_on_the_settings_tag():
-    """`sw.js` tags the acknowledgement it shows itself, and `mail.py` tags the settings link that
-    arrives a moment later. They have to be the same string or the link stops replacing the
-    acknowledgement and the reader is left holding both - which is the bug the shared tag was
-    introduced to fix, reappearing because two files spell a constant separately.
-
-    They are separate constants rather than one because nothing crosses from Python into a service
-    worker at build time; this test is the seam.
-    """
-    from rainalert.api.mail import ALERT_TAG, MANAGE_TAG
-
-    source = SW.read_text(encoding="utf-8")
-    assert f"var MANAGE_TAG = '{MANAGE_TAG}';" in source
-    # And a warning must not share it, which is the whole point of having two.
-    assert ALERT_TAG != MANAGE_TAG
-
-
 def test_a_rain_warning_and_a_settings_link_do_not_evict_each_other(settings):
     """A settings link replacing a live warning takes the map link away at the moment it is wanted.
 
@@ -1313,9 +1241,10 @@ def test_the_silent_subscriber_count_finds_someone_who_never_acts(db, settings):
     """The one signal for a push that is accepted and never displayed.
 
     A payload encrypted to the wrong keys still gets a 201, so `sent` is recorded, the reader sees
-    nothing, and nothing else in this service can tell. What makes it countable is that every push
-    carries an Einstellungen button, so a subscriber with successful sends and no MANAGE token ever
-    issued has received messages and acted on none of them.
+    nothing, and nothing else in this service can tell. What makes it countable is
+    `Subscriber.last_seen_at`, set when a person taps a warning or opens their settings; a settings
+    link issued on the fallback path (a MANAGE token) counts too. Notifications used to carry an
+    Einstellungen button and that was the signal, until they stopped carrying buttons (D-64).
     """
     from datetime import UTC, datetime
 
@@ -1343,7 +1272,15 @@ def test_the_silent_subscriber_count_finds_someone_who_never_acts(db, settings):
         session.commit()
         assert count_silent_subscribers(session) == 1, "sent to, never acted on"
 
-        # They press Einstellungen once: no longer silent.
+        # They tap a warning once: no longer silent.
+        subscriber.last_seen_at = datetime.now(UTC)
+        session.commit()
+        assert count_silent_subscribers(session) == 0
+        subscriber.last_seen_at = None
+        session.commit()
+        assert count_silent_subscribers(session) == 1
+
+        # Or a settings link was issued for them on the fallback path: not silent either.
         session.add(
             AuthToken(
                 subscriber_id=subscriber.id,

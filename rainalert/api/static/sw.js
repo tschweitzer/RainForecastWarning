@@ -17,8 +17,6 @@
 var FALLBACK_TITLE = 'Regenwarnung';
 /* Used when a payload names no tag. */
 var FALLBACK_TAG = 'rainalert';
-/* Must match the tag mail.py puts on the settings-link push. */
-var MANAGE_TAG = 'rainalert-manage';
 /* PNG, not the SVG the manifest uses: Chrome renders no SVG in a notification, on desktop or on
    Android, so an SVG here means the warning shows Chrome's own default icon instead of ours. The
    badge is separate because it is specified as a monochrome alpha mask at roughly 24px * DPR - a
@@ -47,29 +45,6 @@ self.addEventListener('push', function (event) {
     data = {};
   }
 
-  /* The id is the index, which is why payload_for must not reorder the array. `title` is what
-     Android draws - uppercased, no icon, at most two of them. Sliced to `maxActions` because
-     anything past it is discarded silently at display time, and a worker that asks for three
-     should not depend on the platform being forgiving.
-
-     `typeof`, not `|| 2`: a platform reporting 0 - it draws no action buttons at all, which is what
-     Safari does - is falsy, so `|| 2` asked it for two. Harmless in practice, since the extras are
-     ignored rather than thrown, but the point of this line is to send what the platform will draw
-     and it did not do that in the one case where the number is not the default. */
-  /* Both halves guarded. `typeof x.y` still throws if `x` itself is undefined, and this runs
-     synchronously in the push listener *before* event.waitUntil - so a worker global without
-     `Notification` would show nothing at all, on the one code path whose stated premise is
-     that every path ends in showNotification. Chromium defines it (verified), and the page's
-     own pushSupported() already declines to assume the global exists, which is reason enough
-     not to assume it here where there is no page to report the error on. */
-  var maxActions = (typeof Notification !== 'undefined'
-    && typeof Notification.maxActions === 'number') ? Notification.maxActions : 2;
-  var actions = (data.actions || []).slice(0, maxActions).map(
-    function (action, index) {
-      return { action: String(index), title: action.title };
-    }
-  );
-
   event.waitUntil(
     self.registration.showNotification(data.title || FALLBACK_TITLE, {
       body: data.body || '',
@@ -78,14 +53,8 @@ self.addEventListener('push', function (event) {
       lang: 'de',
       /* Everything the click handler needs, because it gets the notification and not the push. */
       data: data,
-      /* This line was missing, and its absence removed the only route a push subscriber has from a
-         notification back into their settings. `actions` was computed above and then not passed,
-         so no button was ever drawn - and because `NotificationEvent.action` is the empty string
-         when the body is clicked, the whole action branch of `notificationclick` was dead code.
-         Meanwhile `mail.py` had already dropped the unsubscribe URL from push bodies on the
-         grounds that "the exit on push is the settings page, reached by the Einstellungen button
-         on every warning". There was no button. */
-      actions: actions,
+      /* No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `data.url`;
+         settings and unsubscribing live on the settings page only. */
       /* One rain warning at a time: a second replaces the first rather than stacking. Without a
          tag, a shower that keeps re-triggering leaves a column of near-identical notifications
          and the reader stops reading any of them.
@@ -104,49 +73,12 @@ self.addEventListener('notificationclick', function (event) {
   var data = event.notification.data || {};
   event.notification.close();
 
-  /* No action id means the body was tapped: open where the message points. */
-  if (!event.action) {
-    var url = data.url || '/';
-    event.waitUntil(focusOrOpen(url));
-    return;
-  }
-
-  var action = (data.actions || [])[Number(event.action)];
-  if (!action || !action.url) {
-    return;
-  }
-
-  /* A button POSTs and stays here. Nothing is opened and nothing is navigated, so the token in
-     the body never reaches a URL bar or a history entry - which is the property notify/base.py
-     describes and the reason these are POSTs rather than links. */
-  event.waitUntil(
-    fetch(action.url, {
-      method: 'POST',
-      headers: { 'Content-Type': action.contentType || 'application/json' },
-      body: action.body || '',
-      /* No cookies. This request carries its own token and is made from a worker that may be
-         running with no page open; sending the settings session along would widen what a tap can
-         do beyond what the token authorises. */
-      credentials: 'omit'
-    })
-      .then(function (response) {
-        if (response.ok) {
-          return tell('Der Link zu den Einstellungen ist unterwegs.');
-        }
-        /* 429 gets its own line. "Bitte später noch einmal" is what the reader can act on; the old
-           message told them to try again now, against a route that will refuse them for an hour. */
-        if (response.status === 429) {
-          return tell('Zu viele Anfragen. Bitte in etwa einer Stunde noch einmal.');
-        }
-        /* "Tippe hier", not "öffne die Seite direkt": the reader is holding a phone and has no
-           address to type, and this notification's own `data.url` already points at /manage - so
-           tapping it does exactly the thing the old wording asked them to do by hand. */
-        return tell('Das hat nicht geklappt. Tippe hier, um die Einstellungen zu öffnen.');
-      })
-      .catch(function () {
-        return tell('Keine Verbindung. Tippe hier, sobald du wieder online bist.');
-      })
-  );
+  /* A tap opens where the message points - and so does a tap on a button. Notifications carry no
+     buttons any more (D-64), but ones shown before that change can still be in the tray, with an
+     "Einstellungen" button whose request token points at a route that no longer exists.
+     `event.action` is set for those; ignoring it opens the notification's own page instead
+     (a warning's map, the liveness message's settings page), which is the useful answer. */
+  event.waitUntil(focusOrOpen(data.url || '/'));
 });
 
 /* No `pushsubscriptionchange` handler, deliberately.
@@ -161,8 +93,8 @@ self.addEventListener('notificationclick', function (event) {
  * whose VAPID signature does not match the key the subscription was made with, so only we can push.
  * That makes an endpoint more like a username than a password, and an API that moves a subscription
  * on the strength of one is an API that redirects a stranger's warnings to an endpoint of your
- * choosing. Those warnings carry a locate reference and a settings token, so the endpoint handed
- * over a home address, which is the single thing this service is built not to leak.
+ * choosing. Those warnings carry a locate reference (and then carried a settings token), so the
+ * endpoint handed over a home address, which is the single thing this service is built not to leak.
  *
  * And it would have worked rarely. Firefox fires this event with neither `oldSubscription` nor
  * `newSubscription` populated, and Chrome only started populating them recently; without
@@ -223,28 +155,4 @@ function focusOrOpen(url) {
     .catch(function () {
       return self.clients.openWindow(url);
     });
-}
-
-function tell(message) {
-  /* A button that does something invisible feels broken, and the reader has no page to look at.
-     Short, and never an error the reader cannot act on.
-
-     Not titled FALLBACK_TITLE ('Regenwarnung'): this is an acknowledgement, not a warning, and a
-     notification saying "Regenwarnung" that is not one is exactly the kind of thing that teaches a
-     reader to stop trusting the real ones.
-
-     And tagged 'rainalert', not 'rainalert-ack', so the settings link that arrives a moment later
-     replaces it. Under its own tag the reader was left holding two notifications - this one and the
-     link - with no way to tell which was which; tapping this one opens /manage with no token, lands
-     on the gate, and they ask for another link, which produces a third. */
-  return self.registration.showNotification('Einstellungen', {
-    body: message,
-    icon: ICON,
-    badge: BADGE,
-    lang: 'de',
-    /* The settings family's tag, so the link that follows replaces this acknowledgement - and so
-       neither of them evicts a rain warning. */
-    tag: MANAGE_TAG,
-    data: { url: '/manage' }
-  });
 }

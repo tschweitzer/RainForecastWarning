@@ -284,10 +284,6 @@ class Settings(BaseSettings):
     #: Magic-link requests. Deliberately as tight as signing up: the endpoint takes an address
     #: and sends mail to it, so it is the same mail-bomb lever as POST /subscriptions.
     manage_link_limit_per_hour: int = 5
-    #: Taps on the "Einstellungen" button in a notification, counted per subscriber rather than
-    #: per IP. The token that button carries is durable and travels in every alert, so the cap
-    #: is what stops a copy of one being used to buzz its owner's phone indefinitely.
-    manage_request_limit_per_hour: int = 5
     #: Ceiling on confirmation and settings-link *mails*, across all requests, per rolling 24 h.
     #: The per-IP limits above are only as good as the client IP, and a request sent straight to
     #: the service's run.app address can choose its own (SECURITY_REVIEW.md F-5, status
@@ -311,10 +307,6 @@ class Settings(BaseSettings):
     #: Without it the renew button would quietly turn the line above into a formality - which is
     #: the whole protection: a session that ends at a predictable time whatever the holder does.
     manage_session_max_minutes: int = 120
-    #: How long the notification button keeps working. Long, because the message it rides in is
-    #: one the reader is asked to keep; harmless, because the button only asks for a link that
-    #: is itself short-lived and goes to the subscriber's own channel (tokens.py).
-    manage_request_ttl_days: int = 365
     #: How long a warning's link keeps showing the place the warning was about. A warning is
     #: about the next two hours at most, so an hour covers looking at it while it matters and
     #: little else; after that the map opens on the country like any other visit.
