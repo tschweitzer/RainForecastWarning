@@ -265,9 +265,13 @@ stays. "Sitzung auf diesem Gerät beenden" goes, **for every subscriber**:
 The page never mentions a key, a session or quick access. The key's life is the subscription's:
 it is created on confirmation, deleted server-side by the cascade on unsubscribe, and deleted in
 the browser by the page right after a successful unsubscribe (next to the existing
-`subscription.unsubscribe()`), or by clearing site data. So `/api/v1/manage/logout` and the
-countdown and extend UI remain for email only, or go entirely if email sessions are simplified
-later.
+`subscription.unsubscribe()`), or by clearing site data. `/api/v1/manage/logout` goes with the
+button. The countdown and extend UI remain for email sessions only.
+
+**Decided 2026-10-09: the same for push and email - no sign-out control for either.** Review 3
+pointed out what this costs email subscribers on a shared computer: the next person has the
+settings for whatever is left of the 30-minute session (sliding, 120 minutes at most). That cost
+is accepted.
 
 ### 4.6 Notifications carry no buttons
 
@@ -392,7 +396,7 @@ the behaviour and needs no change.
    failure means "no key".
 7. `manage.html`: key mode in `start()` (no countdown or extend); silent daily rotation;
    `unknown_key` reload-and-retry; the `client` version field; reload at most once; remove "Sitzung
-   auf diesem Gerät beenden" (for email: §13); delete the local key after unsubscribing. Liveness
+   auf diesem Gerät beenden" for push and email alike; delete the local key after unsubscribing. Liveness
    counts warning taps and key use. API token not issued for push.
 8. Setting + Terraform variable; privacy sentence.
 9. Docs: DESIGN D-63; SECURITY_REVIEW entry; RUNBOOK (kill switch and purge; "settings open
@@ -585,7 +589,7 @@ buttons, the request token and the sign-out control opens no security hole.
 |---|---|---|
 | Medium | `push_mismatch`/`stale_page` checked after the token is spent: a reload meets a spent token and an unconfirmed signup is purged. "No endpoint = old script" also matches a current script that cannot read its subscription, which would reload forever | §4.1: checks before spending, an explicit `client` version, reload at most once, null subscription → `push_mismatch` |
 | Low | An XSS-planted key lasts forever; binding to the push subscription does not help, rotation does | §4.5 silent daily rotation, `unknown_key` reload-and-retry; §7 |
-| Low | Email on a shared computer has no sign-out any more: the next person gets up to 30 min (sliding, 120 max) of access | **open decision, §13** |
+| Low | Email on a shared computer has no sign-out any more: the next person gets up to 30 min (sliding, 120 max) of access | accepted: no sign-out for push or email (§4.5) |
 | Low | Notifications still in the tray carry buttons pointing at the removed route | §4.6: action clicks open `data.url`; test |
 | Note | Code and docs still depending on what is removed | §6 step 1 |
 | Note | Warning taps (`POST /api/v1/locate`) are a better liveness signal than issued links | §4.7 |
@@ -606,12 +610,10 @@ Found sound:
 
 ## 13. Still open
 
-- **Decision - email sign-out.** The reviewer suggests keeping "Sitzung auf diesem Gerät beenden"
-  in cookie mode (email) only, where a session countdown is already shown. That contradicts
-  "subscribe and unsubscribe only" for email subscribers. It matters only if email is enabled in
-  production (`smtp_host` set).
 - **Separate fix - the run.app bypass of per-IP limits** (pre-existing, not part of this plan).
-  Options to evaluate:
+  **Confirmed live:** production runs with `trusted_proxy_hops = 2`, so every per-IP limit can be
+  sidestepped by calling the run.app address with a forged `X-Forwarded-For`. Options to
+  evaluate:
   - make the direct address unusable for the API, if Firebase Hosting can still reach the service
     then (ingress and Hosting compatibility to verify);
   - or check a header that only Hosting's egress sets and a client cannot forge;
