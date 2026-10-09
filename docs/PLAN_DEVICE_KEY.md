@@ -118,7 +118,7 @@ The replaced key simply stops working; the page holding it falls back (§4.4).
 
 ### 4.2 Login
 
-1. `/manage` loads with no fragment (or with `#r=`, see 4.4) and no session.
+1. `/manage` loads with no fragment and no session (also how the notification button arrives, 4.4).
 2. The page reads `{key_id, privateKey}` from IndexedDB (`rainalert` db, `device` store).
 3. `POST /api/v1/manage/challenge {key_id}` → `{challenge}`. The server creates an
    `AuthToken` with a new purpose `device_challenge`, bound to the key's subscriber, stored as a
