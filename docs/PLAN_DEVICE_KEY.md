@@ -1,6 +1,7 @@
 # Plan: a device key instead of push round trips and sessions
 
-Status: **proposal, revision 3 (2026-10-09)** - not implemented. Scope: web push subscribers;
+Status: **proposal, revision 3 (2026-10-09), with security review 3 folded in (§12)** - not
+implemented. Scope: web push subscribers;
 email keeps its magic link and session. Would become DESIGN.md D-63 once agreed.
 
 History: revision 1 replaced the push round trip with a key that opened the ordinary session
@@ -91,7 +92,8 @@ token being redeemed in the same request:
 
 **The redeeming browser must hold the push subscription the token belongs to.** The server
 redeems a webpush subscriber's token only if `hash_address('webpush', endpoint)` equals that
-subscriber's `address_hash`, **or** the `p256dh` equals the stored `push_p256dh`. Either match is
+subscriber's `address_hash`, **or** the `p256dh` equals the stored `push_p256dh` (compared as decoded bytes: the stored value is
+base64url text, while `getKey()` returns an ArrayBuffer). Either match is
 equally safe against the attack below, because a victim's browser presents the victim's values,
 which never match the attacker's subscriber. Accepting either keeps a browser that re-encodes or
 migrates its endpoint string from being locked out (review 2).
@@ -101,13 +103,21 @@ only be opened in the browser holding that subscription, so a legitimate redempt
 passes. An attacker's own link sent to a victim always fails. That closes review 1's High finding
 and also today's two-hour login CSRF.
 
-Errors:
+Errors - and **neither spends the token** (review 3). Both checks run inside the service
+*before* `used_at` is set or anything is committed (`confirm` and `redeem_manage_token`,
+`subscriptions.py`). A test asserts that the token still works after a refused attempt.
+Otherwise a reload or a retry would meet a spent token, and an unconfirmed signup would be
+purged.
 - **A mismatch** answers `{"error": "push_mismatch"}`. The page says, in subscription terms, that
   this link belongs to a subscription this browser no longer has, and offers to subscribe again.
-  Each mismatch is logged as a counted event, so a systematic lockout shows up.
-- **A request with no endpoint at all** answers `{"error": "stale_page"}`. That is a tab still
-  running the previous script after a deploy (the service worker reuses open tabs, D-49), and the
-  page reloads itself.
+  Each mismatch is logged as a counted event, so a systematic lockout shows up. A current script
+  that cannot read its own subscription (an exception, no registration, a VAPID-key mismatch)
+  sends what it has and gets this answer too.
+- **An old script** is recognised by an explicit `client` version field that the new script
+  always sends - **not** by a missing endpoint, which a current script can also produce. A request
+  without the field answers `{"error": "stale_page"}`. That is a tab still running the previous
+  script after a deploy (the service worker reuses open tabs, D-49), and the page reloads itself
+  **at most once**, using a `sessionStorage` flag, so it can never loop.
 
 Then:
 
@@ -218,15 +228,31 @@ to close a window this narrow. Review 2 agreed.
 
 - **200** → the panel. No session countdown and no "Verlängern" button, because there is nothing
   to expire.
-- **`unknown_key`** → delete the key **only if the stored `key_id` is still the one that was
-  refused** (compare-and-delete). Then fall back to the link step, **without a message**. Without
-  the compare, a tab still on the old key would delete the newer key another tab had just
-  enrolled.
+- **`unknown_key`** → first reload the key from IndexedDB and, if it changed, retry once:
+  another tab may just have rotated it (below). Otherwise delete the key **only if the stored
+  `key_id` is still the one that was refused** (compare-and-delete), then fall back to the link
+  step, **without a message**. Without the compare, a tab still on the old key would delete the
+  newer key another tab had just enrolled.
 - **No key, or another failure** → the link step as today ("wir schicken dir einen Link"), which
   enrols a key. This is now the rare path: subscribers from before the change, browsers that
   cannot keep a key, possibly iOS (§12).
 
 `#t=` links redeem and enrol as in §4.1, then continue as above.
+
+**Silent rotation** (review 3). On an ordinary visit, at most once a day, the page generates a
+fresh non-extractable key and replaces the current one with `POST /api/v1/device-key/rotate`,
+signed by the current key and carrying the new SPKI. The new key is written to IndexedDB with
+compare-and-set only after the server confirms. The user sees nothing.
+
+This is what bounds a key planted by injected script (§7), without an expiry and without asking
+the user for anything:
+- if the planted key sits in the reader's own IndexedDB, the reader's next visit swaps in a key
+  the attacker never saw, and the attacker's copy dies;
+- if the attacker rotates first, the reader gets `unknown_key`, falls back to the link step and
+  re-enrols, which evicts the attacker.
+
+It adds no reach: whoever holds the current key already has standing access. Its cost is one
+route and about 30 lines.
 
 A small `signedFetch()` wrapper in `static/devicekey.js` replaces `fetch` for the authenticated
 calls. In cookie mode (email) it is plain `fetch` with the CSRF header, as now.
@@ -263,6 +289,13 @@ Removed with the buttons:
 That is one long-lived token and a fair amount of code fewer. The comment in `mail.py` that
 argued against a second, destructive button is now moot: there are none.
 
+**Notifications already in the tray at deploy time** still carry the old button, with a
+request token valid for up to 365 days (`manage_request_ttl_days`) pointing at the removed route.
+The new `sw.js` treats a click on any action like a click on the notification itself: it opens
+`data.url`. One case in `tests/js/sw_test.mjs` covers it. An old service worker still running
+would POST, get a 404 and fall back to its "Tippe hier" message, which opens `/manage` -
+acceptable.
+
 This part does not depend on the device key and can ship first. Without a key, a subscriber
 reaches settings via the site link and the link step, about the same number of taps as the
 button today.
@@ -285,15 +318,22 @@ New table `device_keys`:
   by injected script (§7), but it would send every subscriber through an unexplained link step
   each quarter, which contradicts "subscribed or not". The CSP remains the defence.
 - **Liveness:** the job counts "a settings link was issued" as a sign of a living reader
-  (`count_silent_subscribers`). With buttons and request tokens gone, that becomes **a signed
-  request within the window, via `last_used_at`**, plus links still issued on the fallback path.
-  Without this, people who use their settings would be asked whether they are still there.
+  (`count_silent_subscribers`). With buttons and request tokens gone, the better signal is the
+  **tap on a warning**. Every tap reaches `POST /api/v1/locate` with a signed token that names the
+  subscriber, which proves the warning was displayed and opened (review 3). Recorded as a
+  per-subscriber `last_seen_at`, it is joined by key use (`last_used_at`) and by links still
+  issued on the fallback path. Without these, people who do read their warnings would be asked
+  whether they are still there.
 
 ### 4.8 Limits and kill switch
 
 Failed signature checks are counted per IP in a bucket of their own (about 60/h, via
 `hit_and_check`). Successful requests fall under the limits those routes already have. The
 link-request bucket (`manage:ip`, 5/h) is not shared (review 1, Low).
+
+Per-IP limits are **not** a defence on their own: §12 records a pre-existing way around them
+through the directly reachable `*.run.app` address. Nothing in this plan relies on them for
+safety - a failed signature is refused whatever the count - so they only reduce noise.
 
 `DEVICE_KEY_LOGIN_ENABLED` defaults to `true` and is a Terraform variable. With it off:
 - no enrolment happens;
@@ -325,9 +365,20 @@ the behaviour and needs no change.
 
 0. ~~Check that Firebase Hosting passes `Authorization` and the raw path to Cloud Run unchanged.~~
    Done, §11: it does; `Authorization` stays the header.
-1. **Notifications without buttons (§4.6)** - independent, can ship first: drop
-   `settings_action`, `manage_request_token`, `/api/v1/manage/request`, the `sw.js` action
-   handling and `#r=`; liveness signal adjusted.
+1. **Notifications without buttons (§4.6)** - independent, can ship first. Drop
+   `settings_action`, `manage_request_token` and `verify_manage_request_token`,
+   `/api/v1/manage/request` and its limit, the `sw.js` action handling and `tell()`, and `#r=`;
+   action clicks open `data.url`.
+   Known dependants (review 3):
+   - `liveness.py` 103, 138, 196-216;
+   - `mail.py` 15, 150-167, 354-360;
+   - `config.py` 290, 307;
+   - `tokens.py`;
+   - `tests/test_pages.py`, `tests/test_manage.py` (~15 references), `tests/test_webpush.py`,
+     `tests/js/sw_test.mjs`;
+   - `RUNBOOK.md` 782, `LOCAL.md` 402, three references in DESIGN.md.
+
+   The liveness signal moves to warning taps (§4.7).
 2. Migration: `device_keys`. Model + cascade.
 3. `rainalert/devicekeys.py`: parse/validate SPKI (P-256 only), build the canonical message, verify
    P1363 signatures, the time window.
@@ -339,9 +390,10 @@ the behaviour and needs no change.
 6. `static/devicekey.js` (shared by `confirm.html` and `manage.html`): generate, store (or keep in
    memory), load, `signedFetch`, server-time offset, delete. Every call is wrapped so that any
    failure means "no key".
-7. `manage.html`: key mode in `start()` (no countdown or extend); remove "Sitzung auf diesem
-   Gerät beenden"; delete the local key after unsubscribing. Liveness counts key use. API token
-   not issued for push.
+7. `manage.html`: key mode in `start()` (no countdown or extend); silent daily rotation;
+   `unknown_key` reload-and-retry; the `client` version field; reload at most once; remove "Sitzung
+   auf diesem Gerät beenden" (for email: §13); delete the local key after unsubscribing. Liveness
+   counts warning taps and key use. API token not issued for push.
 8. Setting + Terraform variable; privacy sentence.
 9. Docs: DESIGN D-63; SECURITY_REVIEW entry; RUNBOOK (kill switch and purge; "settings open
    without a link" is now expected).
@@ -350,6 +402,8 @@ the behaviour and needs no change.
       body; percent-encoded paths; a refused query; time window edges; non-digit `t`; P1363
       length; malformed or non-P-256 SPKI.
     - **API:**
+      - a refused redemption (`push_mismatch`, `stale_page`) leaves the token usable;
+      - rotation only with a valid signature from the current key;
       - enrolment only with a valid push token - **never with a token for another subscription**
         (endpoint or p256dh), never at subscribe, never for email;
       - `push_mismatch` and `stale_page`;
@@ -365,7 +419,9 @@ the behaviour and needs no change.
       - foreign confirm link → refused with the subscribe-again explanation;
       - unsubscribe → the local key is gone and the gate shows;
       - a clock 10 minutes off still works;
-      - two tabs, one re-enrolling → the newer key survives;
+      - two tabs, one re-enrolling or rotating → the newer key survives and neither tab falls
+        to the link step;
+      - an old-script tab reloads once, never twice;
       - no user-visible text mentions a key, a session or quick access.
 
 Estimated size: ~280 lines of new Python and ~150 of JavaScript, plus tests. Step 1 *removes*
@@ -379,16 +435,21 @@ more than it adds.
   key of *its own* making. The endpoint check does not stop this, because the script runs in the
   right browser and can read the endpoint. A key generated extractable can be sent away, and
   re-imported as non-extractable into the reader's own IndexedDB so the reader notices nothing.
-  That is standing access from anywhere, until the reader unsubscribes or is next sent through
-  the link step. With no expiry (§4.7) and no user-visible trace, **the nonce-only CSP is the
-  whole defence**, as it already is today against the same script reading the page. Cheap extra:
-  close the `rainalert-manage` notifications once a link is redeemed.
+  Binding the key to the push subscription would not help: the script can read and send away
+  the endpoint, `p256dh` and `auth` as well. What bounds it is **silent rotation** (§4.5). The
+  reader's next visit replaces a planted key with one the attacker never saw, or, if the attacker
+  rotated first, sends the reader through the link step, which evicts the attacker. So the
+  window is "until the reader next opens settings", not "until they unsubscribe". The nonce-only
+  CSP remains the first defence. Cheap extra: close the `rainalert-manage` notifications once a
+  link is redeemed.
 - **A replay window** of two minutes for an identical request (§4.4).
 - **Malware copying the whole browser profile** gets the key - as it gets the push keys today.
 - **Safari on macOS without "Add to Dock"** may delete IndexedDB after 7 days without a visit
   (ITP). The link step re-enrols. Installed PWAs (iOS web push requires one) are exempt.
-- **The `*.run.app` address answers directly** (§11). A signed request sent there fails, because
-  the signed origin is `public_base_url`, and the page falls back. Harmless.
+- **The `*.run.app` address answers directly** (§11). A signed request sent there is accepted:
+  the server builds the origin from `public_base_url`, so a signature verifies wherever it lands.
+  This is harmless - it is the same service, and a page served from run.app has no key of its
+  own. (Revision 3 said such a request fails; review 3 corrected it.)
 
 ## 8. Security review 1 (2026-10-09, on revision 1)
 
@@ -515,7 +576,45 @@ spelled out in §7: no expiry and no visible trace for an XSS-planted key.
 downgrades to `http`. A separate small fix: turn `redirect_slashes` off, or answer from
 `public_base_url`.
 
-## 12. Still open
+## 12. Security review 3 (2026-10-09, on revision 3)
 
+The same reviewer and the same brief. Verdict: **build it, with two small changes**. Removing the
+buttons, the request token and the sign-out control opens no security hole.
+
+| Severity | Finding | Where addressed |
+|---|---|---|
+| Medium | `push_mismatch`/`stale_page` checked after the token is spent: a reload meets a spent token and an unconfirmed signup is purged. "No endpoint = old script" also matches a current script that cannot read its subscription, which would reload forever | §4.1: checks before spending, an explicit `client` version, reload at most once, null subscription → `push_mismatch` |
+| Low | An XSS-planted key lasts forever; binding to the push subscription does not help, rotation does | §4.5 silent daily rotation, `unknown_key` reload-and-retry; §7 |
+| Low | Email on a shared computer has no sign-out any more: the next person gets up to 30 min (sliding, 120 max) of access | **open decision, §13** |
+| Low | Notifications still in the tray carry buttons pointing at the removed route | §4.6: action clicks open `data.url`; test |
+| Note | Code and docs still depending on what is removed | §6 step 1 |
+| Note | Warning taps (`POST /api/v1/locate`) are a better liveness signal than issued links | §4.7 |
+| Note | §7's claim that signed requests to run.app fail was wrong (harmless either way) | §7 corrected |
+| Note | Compare `p256dh` as bytes | §4.1 |
+| Note, **pre-existing** | With `trusted_proxy_hops = 2` (recommended behind Firebase Hosting), a request sent straight to the run.app address chooses its own client IP via a forged `X-Forwarded-For` (`api/ratelimit.py` `client_ip`), bypassing every per-IP limit in the service | §4.8 (nothing here relies on it); a separate fix, §13 |
+
+Found sound:
+- Removing the buttons and the 365-day request token removes the longest-lived push credential
+  after the API token. Settings stay reachable through the site link, and deletion no longer
+  depends on a push arriving.
+- The endpoint-or-p256dh match stays safe against login CSRF.
+- Local key deletion after unsubscribing, plus the cascade.
+- Step 0's results; `no-store`; the origin from configuration; the kill switch.
+- Dropping the "replaced" message, now that rotation carries the XSS case.
+- The only other place that builds a URL from the request host is the trailing-slash redirect
+  already found (§11); templates use only `request.url.path`.
+
+## 13. Still open
+
+- **Decision - email sign-out.** The reviewer suggests keeping "Sitzung auf diesem Gerät beenden"
+  in cookie mode (email) only, where a session countdown is already shown. That contradicts
+  "subscribe and unsubscribe only" for email subscribers. It matters only if email is enabled in
+  production (`smtp_host` set).
+- **Separate fix - the run.app bypass of per-IP limits** (pre-existing, not part of this plan).
+  Options to evaluate:
+  - make the direct address unusable for the API, if Firebase Hosting can still reach the service
+    then (ingress and Hosting compatibility to verify);
+  - or check a header that only Hosting's egress sets and a client cannot forge;
+  - or put a load balancer in front.
 - Whether an iOS home-screen web app stores a `CryptoKey` in IndexedDB reliably. This needs a real
   device. Any failure must count as "no key", which means the link step.
