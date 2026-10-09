@@ -10,6 +10,12 @@
       Browser. Wir kennen darüber keine Gerätekennung, keine Telefonnummer und keinen Namen.</li>
   <li>Dein Standort (Koordinaten) – nur der aktuelle, kein Verlauf.</li>
   <li>Deine Einstellungen und die Warnungen, die verschickt wurden.</li>
+  {# D-64. Stated because the browser stores something for us, which § 25 TDDDG asks to be named;
+     deliberately not a feature with a name - to the reader they are simply subscribed. #}
+  <li>Bei Push: der öffentliche Teil eines Schlüssels, den dein Browser beim Bestätigen erzeugt.
+      Den privaten Teil behält dein Browser; damit erkennen wir ihn als den angemeldeten Browser,
+      wenn du deine Einstellungen öffnest. Dafür ist er erforderlich (§ 25 Abs. 2 Nr. 2 TDDDG), und
+      er verschwindet, wenn du dich abmeldest oder die Websitedaten löschst.</li>
   <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
       der Einwilligung.</li>
 </ul>

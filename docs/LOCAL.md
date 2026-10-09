@@ -391,23 +391,17 @@ service can check, which is that a message sent to the channel arrived.
 There are three ways in, and only the last one involves typing anything.
 
 **Confirming.** Tapping the confirmation notification already proves the channel reaches you -
-the same proof a magic link gives, a few seconds earlier - so `POST /confirm` opens the session
-itself and the page that follows has a button straight into the settings. A new subscriber never
-needs a link at all.
+the same proof a magic link gives, a few seconds earlier. On push, `POST /confirm` registers a
+device key in this browser (D-64, docs/PLAN_DEVICE_KEY.md); on email it opens the session. The page
+that follows has a button straight into the settings. A new subscriber never needs a link at all.
 
-**The "Einstellungen" button on a notification** (push only). The message sent right after
-confirming carries it and says to keep that message; every rain alert carries it too, because
-alerts are the ones that reliably arrive again - and since D-45 they are the *only* thing that
-does, because a web push notification is gone the moment it is swiped and there is no earlier one to
-scroll back to. Tapping it POSTs a long-lived token to `/api/v1/manage/request` from the service
-worker, and we send the ordinary magic link to the same browser. Two taps, and nothing is navigated:
-the worker fetches in the background, so the token never reaches a URL bar or a history entry.
+**Coming back** (push). The browser that confirmed keeps a device key and signs every settings
+request with it, so `/manage` simply opens - no link, no notification, no session to expire. Reached
+through the "Einstellungen" link on every page; notifications carry no buttons (D-64).
 
-That token is durable on purpose, and it is safe to leave sitting in a notification because of what
-it cannot do: it **asks** for a link, it does not admit anyone, and the link it triggers goes to the
-subscriber's own channel. A forwarded screenshot of an alert is therefore not a key to somebody's
-home coordinates. Taps are capped per subscriber (`MANAGE_REQUEST_LIMIT_PER_HOUR`, default 5/h) so a
-copied token cannot be used to buzz its owner's phone either.
+Locally, the key is bound to `PUBLIC_BASE_URL`'s origin: open the site at exactly that address -
+`http://localhost:8000` and `http://127.0.0.1:8000` are different origins - or every signature fails
+and the page quietly falls back to the link.
 
 **The form on `/manage`**, for a new device or a cleared history: on email, give the address and
 the link is sent. On push there is nothing to give - the endpoint is 200-odd characters the reader
@@ -418,7 +412,7 @@ told plainly that it cannot be helped from there, because it cannot.
 #### If the browser's site data is gone
 
 There is no recovery, and the page says so before anyone signs up (D-47). The push subscription and
-the settings cookie live in the same site-data bucket, and Chrome clears them together: "Cookies und
+the settings cookie (or device key) live in the same site-data bucket, and Chrome clears them together: "Cookies und
 andere Websitedaten" unregisters the service worker, which deactivates the subscription. Nothing is
 left in that browser to identify anyone with.
 

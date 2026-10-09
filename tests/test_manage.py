@@ -257,12 +257,6 @@ def test_the_cookie_is_not_secure_when_the_site_is_served_over_http(db, notifier
     assert local.get("/api/v1/subscriptions/me").status_code == 200
 
 
-def test_logging_out_ends_the_session(client, notifier):
-    signed_in(client, notifier)
-    assert client.post("/api/v1/manage/logout").status_code == 204
-    assert client.get("/api/v1/subscriptions/me").status_code == 401
-
-
 def test_the_csrf_endpoint_needs_the_cookie(client, notifier):
     signed_in(client, notifier)
     assert client.get("/api/v1/manage/csrf").status_code == 200
@@ -694,7 +688,7 @@ def test_every_exit_from_the_settings_dispatch_names_a_state(client):
     body = client.get("/manage").text
     dispatch = js_function(body, "start")
 
-    deciders = ("show(STATES", "gateWithNote(", "requestLink(", "redeem(")
+    deciders = ("show(STATES", "gateWithNote(", "openPanel(", "redeem(")
     for chunk in dispatch.split("return;")[:-1]:
         tail = chunk[-400:]
         assert any(d in tail for d in deciders), tail
@@ -714,11 +708,13 @@ def test_a_spent_link_falls_through_to_a_session_this_browser_already_has(client
     assert "gateWithNote(" not in redeem, "redeem must report, not decide: " + redeem
 
     start = js_function(body, "start")
-    spent_at = start.index("spent = !await redeem(token)")
+    spent_at = start.index("outcome = await redeem(token)")
+    key_at = start.index("RainKey.signedFetch('GET'")
     session_at = start.index("/api/v1/manage/csrf")
     complaint_at = start.index("gilt nicht mehr")
-    # The session is consulted between the failed redemption and the complaint about it.
-    assert spent_at < session_at < complaint_at, start
+    # The device key, then the session, are consulted between the failed redemption and the
+    # complaint about it (D-64).
+    assert spent_at < key_at < session_at < complaint_at, start
     # ...and the complaint is reached only when that session lookup fails.
     assert "if (!again.ok)" in start[session_at:complaint_at], start[session_at:complaint_at]
 
@@ -737,10 +733,9 @@ def test_a_spent_link_that_still_opens_says_so(client):
 def test_a_failed_link_request_does_not_blame_the_reader_for_our_fault(client):
     """429 and 500 used to give the same answer, which sent somebody away for an hour over a
     fault on our side."""
-    body = client.get("/manage").text
-    request_fn = body[body.index("async function requestLink") : body.index("async function start")]
-    assert "response.status === 429" in request_fn
-    assert "schiefgegangen" in request_fn
+    send_link = js_function(client.get("/manage").text, "sendLink")
+    assert "response.status === 429" in send_link
+    assert "schiefgegangen" in send_link
 
 
 def test_the_settings_page_says_why_nothing_happens_without_script(client):

@@ -307,6 +307,16 @@ class Settings(BaseSettings):
     #: Without it the renew button would quietly turn the line above into a formality - which is
     #: the whole protection: a session that ends at a predictable time whatever the holder does.
     manage_session_max_minutes: int = 120
+    #: Device keys (DESIGN.md D-64, docs/PLAN_DEVICE_KEY.md): a push subscriber's browser signs
+    #: its settings requests with a key registered alongside a push-delivered link, so the settings
+    #: page opens without a session or a push round trip. The kill switch: off, no key is
+    #: registered or accepted, every page falls back to the link and the cookie session, and
+    #: nothing is lost. Turned off because of a verification bug, delete `device_keys` before
+    #: turning it back on (RUNBOOK).
+    device_key_login_enabled: bool = True
+    #: Failed device-key signatures per IP per hour before the answer becomes 429. Only failures
+    #: are counted; a signed request that verifies costs nothing here.
+    device_key_failure_limit_per_hour: int = 60
     #: How long a warning's link keeps showing the place the warning was about. A warning is
     #: about the next two hours at most, so an hour covers looking at it while it matters and
     #: little else; after that the map opens on the country like any other visit.

@@ -8,8 +8,8 @@
 
    Every state starts hidden and `show()` reveals one. The page used to render the gate as its
    default and let each path hide it afterwards, which made the gate the thing you saw while any
-   other path was still working - most visibly on `#r=`, where the "we sent you a link" answer
-   appeared *underneath* a form asking for the topic it had just used. Worse, several paths only
+   other path was still working - most visibly on the old `#r=` path, where the "we sent you a
+   link" answer appeared *underneath* a form asking for the topic it had just used. Worse, several paths only
    `return`ed on failure and relied on that default still being there, so "show the gate" was
    never written down anywhere and could not be reasoned about. #}
 <p class="working" id="busy"><span class="spinner" aria-hidden="true"></span>
@@ -146,24 +146,22 @@
   </form>
   <p id="panel-result" role="status"></p>
 
-  {# Deliberately below the form and worded so it cannot be read as "discard my changes". It
-     also must not be read as unsubscribing: it ends the session, nothing else. #}
-  <p class="session-end">
+  {# The session countdown, for a cookie session only (email, or a browser that cannot keep a
+     device key). With a device key there is no session and nothing to count down (D-64), and the
+     script hides this. No "Sitzung beenden" either way: the only account controls on this page are
+     subscribing and unsubscribing (PLAN_DEVICE_KEY.md §11). #}
+  <p class="session-end" id="session-end">
     <span id="session-left" role="status"></span>
     <button type="button" class="linklike" id="extend" hidden>Verlängern</button>
-  </p>
-  <p class="session-end-note">
-    Fertig?
-    <button type="button" class="linklike" id="logout">Sitzung auf diesem Gerät beenden</button>
-    – die Warnungen laufen weiter.
   </p>
 
   {# The way out, and since D-45 the only one on the push channel: a notification body is plain
      text nothing linkifies, so the "Abmelden:" URL that email still carries cannot be tapped
-     there. Every warning has an Einstellungen button, and this is what it leads to.
+     there, and notifications carry no buttons (D-64). This page is reached through the site's
+     own "Einstellungen" link.
 
-     Two steps, not one. It deletes the location and the history, and a single mis-tap next to
-     "Sitzung beenden" would be a bad way to discover that. #}
+     Two steps, not one. It deletes the location and the history, and a single mis-tap would be a
+     bad way to discover that. #}
   <div class="danger">
     <p><button type="button" class="linklike danger-link" id="delete">Abmelden und meine Daten
     löschen</button></p>
@@ -214,7 +212,6 @@
   /* The live value belongs with the thing it labels, not in a second column. */
   output { font-weight:400; color:var(--muted); }
   input[type=range] { width:100%; accent-color:var(--accent); }
-  .session-end-note { margin:.45rem 0 0; font-size:.85rem; color:var(--muted); }
   /* With no tile provider the container shows Leaflet's default light grey, which is a bright
      slab on a dark page. The page's own surface keeps it part of the design in both themes.
      By id rather than `.leaflet-container`, so it does not depend on which stylesheet the
@@ -245,6 +242,7 @@
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('vendor/leaflet/leaflet.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('geolocate.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}"></script>
 {% include '_map_engine.html' %}
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
@@ -259,6 +257,11 @@
      inline during parsing, so the listener is always in place before the event. */
   var parsed = false;
   document.addEventListener('DOMContentLoaded', function () { parsed = true; });
+  /* With a device key (D-64) every request is signed and there is no session at all: no cookie,
+     no CSRF value, no countdown. Without one - email, or a browser that cannot keep a key - the
+     cookie session as before. */
+  var keyMode = false;
+  if (window.RainKey) { RainKey.syncFromPage({{ server_time() }}); }
   var csrf = null;               // set when a session opens; required on every write
   var expiresAt = null;          // epoch ms; the page counts down to it
   var deadlineAt = null;         // the wall this session may not be renewed past
@@ -477,22 +480,51 @@
     adoptSession(await response.json());
   });
 
+  /* Spends the link. Beside the token it sends proof that this browser holds the push
+     subscription the link was sent to, and a fresh device key (devicekey.js, D-64). Answers
+     'key' (a key was registered: no session), 'session' (the cookie session), 'mismatch' (this
+     browser is not the one the link belongs to - and the link was not spent) or 'spent'.
+
+     Reports, does not decide. A spent link is only the end of the road if this browser has no
+     key and no session either - opening the same link in a second tab spends it there, and
+     answering "dieser Link gilt nicht mehr" to somebody who is still signed in is both wrong and
+     baffling, because reloading then works. */
   async function redeem(token) {
     var body = new URLSearchParams();
     body.set('token', token);
-    var response = await fetch('/api/v1/manage/session', {method: 'POST', body: body});
-    // Reports, does not decide. A spent link is only the end of the road if this browser has no
-    // session either - opening the same link in a second tab spends it there, and answering
-    // "dieser Link gilt nicht mehr" to somebody who is still signed in is both wrong and
-    // baffling, because reloading then works.
-    if (!response.ok) { return false; }
-    adoptSession(await response.json());
-    return true;
+    if (window.RainKey) {
+      var fields = await RainKey.prepareRedemption();
+      Object.keys(fields).forEach(function (name) { body.set(name, fields[name]); });
+    }
+    var response;
+    try {
+      response = await fetch('/api/v1/manage/session', {method: 'POST', body: body});
+    } catch (error) {
+      return 'spent';
+    }
+    if (response.status === 403) {
+      var refused = await response.json().catch(function () { return {}; });
+      if (refused.detail && refused.detail.error === 'push_mismatch') { return 'mismatch'; }
+    }
+    if (!response.ok) {
+      if (window.RainKey) { RainKey.dropPending(); }
+      return 'spent';
+    }
+    var answer = await response.json();
+    if (answer.enrolled && window.RainKey) {
+      await RainKey.activate(answer.enrolled);
+      return 'key';
+    }
+    if (window.RainKey) { RainKey.dropPending(); }
+    adoptSession(answer);
+    return 'session';
   }
 
   async function load() {
-    var response = await fetch('/api/v1/subscriptions/me');
-    if (!response.ok) { return false; }
+    var response = keyMode
+      ? await RainKey.signedFetch('GET', '/api/v1/subscriptions/me')
+      : await fetch('/api/v1/subscriptions/me');
+    if (!response || !response.ok) { return false; }
     current = await response.json();
     return true;
   }
@@ -715,6 +747,11 @@
 
   // ---- saving ------------------------------------------------------------------------------
   async function send(method, url, body) {
+    if (keyMode) {
+      var signed = await RainKey.signedFetch(method, url, body);
+      // No key any more (another tab, or it was replaced): reported like any refusal.
+      return signed || new Response(null, {status: 401});
+    }
     return fetch(url, {
       method: method,
       headers: {'Content-Type': 'application/json', 'X-Rain-CSRF': csrf},
@@ -724,7 +761,9 @@
 
   function explain(response) {
     if (response.status === 401 || response.status === 403) {
-      return 'Die Sitzung ist abgelaufen. Bitte fordere einen neuen Link an.';
+      return keyMode
+        ? 'Das hat nicht geklappt. Lade die Seite bitte neu.'
+        : 'Die Sitzung ist abgelaufen. Bitte fordere einen neuen Link an.';
     }
     if (response.status === 429) {
       return 'Zu viele Änderungen in kurzer Zeit. Bitte etwas später noch einmal.';
@@ -777,12 +816,6 @@
       : '<span class="ok">Gespeichert.</span>';
   });
 
-  document.getElementById('logout').addEventListener('click', async function () {
-    await fetch('/api/v1/manage/logout', {method: 'POST'});
-    window.location.hash = '';
-    window.location.reload();
-  });
-
   // ---- what to show ------------------------------------------------------------------------
   // One of four, never two. Naming the state at every exit is the point: the old code showed
   // the gate by default and returned on failure, so what you ended up looking at depended on
@@ -829,10 +862,13 @@
   });
   document.getElementById('delete-yes').addEventListener('click', async function () {
     panelResult.textContent = 'Wird gelöscht …';
-    var response = await fetch('/api/v1/subscriptions/me', {
-      method: 'DELETE',
-      headers: {'X-Rain-CSRF': csrf}
-    });
+    var response = keyMode
+      ? (await RainKey.signedFetch('DELETE', '/api/v1/subscriptions/me')
+        || new Response(null, {status: 401}))
+      : await fetch('/api/v1/subscriptions/me', {
+        method: 'DELETE',
+        headers: {'X-Rain-CSRF': csrf}
+      });
     if (!response.ok) {
       panelResult.textContent = 'Das hat nicht geklappt. Bitte später noch einmal probieren.';
       return;
@@ -845,6 +881,9 @@
       var subscription = await ownSubscription();
       if (subscription) { await subscription.unsubscribe(); }
     } catch (error) { /* nothing the reader can do */ }
+    /* And the device key: the server's half went with the subscriber, this browser's half goes
+       here, so nothing is left behind that recognises a subscription that no longer exists. */
+    if (window.RainKey) { await RainKey.forgetAll(); }
     panel.hidden = true;
     document.getElementById('sent').hidden = true;
     gate.hidden = true;
@@ -855,55 +894,58 @@
     document.querySelector('main').appendChild(done);
   });
 
-  // The fallback behind the notification button, for a client that renders no buttons. Same
-  // durable token, same endpoint - it just arrives via a tap on a link instead of on a button.
-  // In the fragment for the same reason the magic link is: a fragment never reaches a server
-  // log, a proxy or a Referer header.
-  async function requestLink(token) {
-    var response = await fetch('/api/v1/manage/request', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({token: token})
-    });
-    if (response.ok) {
-      document.getElementById('sent-text').textContent =
-        'Der Link ist unterwegs – schau in deine Nachrichten. Er gilt '
-        + '{{ settings.manage_link_ttl_minutes }} Minuten und kann nur einmal benutzt werden.';
-      show(STATES.sent);
-      return;
+  function openPanel(spent) {
+    show(STATES.panel);
+    fill();
+    // Nothing to count down with a device key: there is no session.
+    document.getElementById('session-end').hidden = keyMode;
+    if (spent) {
+      // Set after fill(), which owns #panel-banner - and in an element of its own, so neither
+      // can silently overwrite the other.
+      var note = document.getElementById('panel-note');
+      note.textContent = 'Dieser Link war schon benutzt – in diesem Browser bist du aber noch '
+        + 'angemeldet.';
+      note.hidden = false;
     }
-    // 429 and 500 used to give the same answer, which sent somebody away for an hour over a
-    // fault on our side.
-    // "in der letzten Stunde" rather than naming the connection: this route limits per IP and per
-    // subscriber, and the second bucket is not this connection's.
-    gateWithNote(response.status === 429
-      ? 'Gerade zu viele Anfragen in der letzten Stunde. Bitte in etwa einer Stunde noch '
-        + 'einmal – am Link liegt es nicht.'
-      : 'Bei uns ist gerade etwas schiefgegangen. Du kannst den Link auch von Hand anfordern.');
+    buildMap();
   }
 
   async function start() {
     var hash = window.location.hash || '';
-    // Re-entered from `hashchange` the page is showing whatever it settled on last time - the
-    // gate, or a panel from a session that has since lapsed. A link is about to be redeemed, so
-    // say so rather than leaving the old state up while the request is in flight.
-    if (hash.indexOf('#t=') === 0 || hash.indexOf('#r=') === 0) { show(STATES.busy); }
-    var request = hash.indexOf('#r=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
-    if (request) {
-      history.replaceState(null, '', window.location.pathname);
-      await requestLink(request);
-      return;
-    }
     var token = hash.indexOf('#t=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
-    var spent = false;
+    var outcome = null;
     if (token) {
+      // Re-entered from `hashchange` the page is showing whatever it settled on last time - the
+      // gate, or a panel from earlier. A link is about to be redeemed, so say so rather than
+      // leaving the old state up while the request is in flight.
+      show(STATES.busy);
       // Erased before anything else can read it, and replaceState so Back does not return to a
       // URL still carrying a spent token.
       history.replaceState(null, '', window.location.pathname);
-      // Not an exit. The session below may still let this through, and it usually does: opening
-      // the link a second time is what spent it, and the tab that spent it is signed in.
-      spent = !await redeem(token);
+      outcome = await redeem(token);
     }
+    if (outcome === 'mismatch') {
+      // Not spent: the browser that does hold the subscription can still use the link.
+      gateWithNote('Dieser Link gehört zu einer Anmeldung in einem anderen Browser. Öffne ihn '
+        + 'dort – oder melde dich hier neu an.');
+      return;
+    }
+    var spent = outcome === 'spent';
+
+    // The device key first: no session to find, the request proves itself (D-64). A browser
+    // without one, or whose key the server no longer knows, falls through to the cookie session
+    // and then the link - silently, because a missing key is normal.
+    if (!csrf && window.RainKey) {
+      var me = await RainKey.signedFetch('GET', '/api/v1/subscriptions/me');
+      if (me && me.ok) {
+        keyMode = true;
+        current = await me.json();
+        openPanel(spent);
+        RainKey.rotateIfDue();
+        return;
+      }
+    }
+    keyMode = false;
     if (!csrf) {
       // No fragment, or one that was already used - but there may still be a live session from
       // a moment ago, and a reload should not cost a new link. The CSRF value is deliberately
@@ -926,24 +968,15 @@
         + 'einen neuen Link an.');
       return;
     }
-    show(STATES.panel);
-    fill();
-    if (spent) {
-      // Set after fill(), which owns #panel-banner - and in an element of its own, so neither
-      // can silently overwrite the other.
-      var note = document.getElementById('panel-note');
-      note.textContent = 'Dieser Link war schon benutzt – in diesem Browser bist du aber noch '
-        + 'angemeldet.';
-      note.hidden = false;
-    }
-    buildMap();
+    openPanel(spent);
   }
 
   /* And again whenever the fragment changes, which is how this page is usually reached.
 
      `start()` erases the fragment as soon as it has read it, so a tab already on `/manage` sits at
-     the bare path. The service worker prefers to reuse an open tab, so tapping "Einstellungen" in
-     a notification navigates that tab to `/manage#t=<token>` - a change of fragment only, which is
+     the bare path. The service worker prefers to reuse an open tab, so tapping the notification
+     that carries a settings link navigates that tab to `/manage#t=<token>` - a change of fragment
+     only, which is
      a same-document navigation: no script re-runs, the token is never read, and the reader taps
      the notification and watches nothing happen. Reported from the field, and reproducible: press
      the button, stay on the page, tap the notification. Navigating away first and then tapping

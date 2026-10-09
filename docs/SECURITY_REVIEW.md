@@ -344,8 +344,8 @@ limit can be sidestepped**.
 
 What that buys an attacker, and what bounds it:
 - *Flooding one person* stays capped, because the per-address limits do not depend on the IP: 5/h
-  confirmations per address, 5/h settings links per address, 5/h notification-button requests per
-  subscriber. Push targets need an endpoint the attacker cannot know.
+  confirmations per address, 5/h settings links per address (the notification button and its
+  per-subscriber limit went with D-64). Push targets need an endpoint the attacker cannot know.
 - *Breadth* was the open part: confirmation mails to any number of *different* addresses, each
   within its own per-address limit. That spends the mail provider's daily quota and the sending
   domain's reputation, which rain warnings need. **Now capped:** `transactional_mail_cap_per_day`
@@ -809,6 +809,38 @@ What changed for this finding:
   asks that no personal data be sent to the service - the tile requests carry what any map view
   carries (IP, map area, the site's origin), nothing from the page or the subscription. The privacy
   page links the OSMF privacy policy.
+
+**Status (2026-10-09): device keys replace the session for push subscribers** (DESIGN.md D-64;
+design and three reviews in docs/PLAN_DEVICE_KEY.md). What changed for this finding:
+
+- **Credential.** A push subscriber's browser holds a non-extractable WebCrypto P-256 key and signs
+  every settings request (`Authorization: RainKey key=, t=, sig=` over the configured origin, method,
+  raw path, server-synchronised time and body hash; ±120 s). The server keeps the public half.
+  There is no cookie and no CSRF value for these requests. They need none: nothing cross-site can
+  set `Authorization` (the API sends no CORS headers), and nothing can sign without the key. A failed
+  signature never falls back to a cookie on the same request.
+- **Registration** happens only together with a push-delivered single-use token (confirmation or
+  settings link), never at subscribe time and never from an authenticated request. The redeeming
+  browser must present the subscription the token was sent to (endpoint or `p256dh`), checked
+  *before* the token is spent. Redemptions refuse any POST whose `Sec-Fetch-Site` is not
+  `same-origin` - `Origin` is not usable here, because `Referrer-Policy: no-referrer` makes browsers
+  send `Origin: null` on our own POSTs. Together these close the login-CSRF shape this finding
+  describes, which the cookie flow had left at "two hours in the other person's account".
+- **Leaks.** Nothing long-lived travels or sits in a cookie jar: a captured request replays only
+  itself, unchanged, for two minutes. The key cannot be read out by script, a HAR file or a cookie
+  exporter; it can be *used* by script running in our origin, which the nonce-only CSP is the
+  defence against. A key planted by such script is bounded by a silent daily rotation
+  (`POST /api/v1/device-key/rotate`, key-signed only).
+- **Gone with it:** the notification "Einstellungen" button and the 365-day request token it
+  carried (`/manage/request`), the sign-out route, and the API token for push subscribers - the
+  longest-lived credentials push subscribers had.
+- **Responses:** every `/api/` answer that does not set its own caching is
+  `Cache-Control: private, no-store`, because Firebase Hosting's CDN keys on the `__session` cookie
+  that key-mode requests do not carry.
+- **Accepted:** someone holding the unlocked phone opens the settings (as before); script in our
+  origin can act as the reader (as before); a two-minute replay window for identical requests.
+- **Kill switch:** `DEVICE_KEY_LOGIN_ENABLED=false` returns everyone to the push link and cookie
+  session; empty `device_keys` before re-enabling after a verification bug (RUNBOOK).
 
 ---
 

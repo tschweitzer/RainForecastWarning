@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
+from rainalert import devicekeys
 from rainalert import subscriptions as svc
 from rainalert.api.assets import VersionedStaticFiles, static_url
 from rainalert.api.mail import (
@@ -54,6 +56,7 @@ from rainalert.db.models import (
     PUSH_AUTH_MAX_LENGTH,
     PUSH_P256DH_MAX_LENGTH,
     Channel,
+    DeviceKey,
     Subscriber,
     Subscription,
     TokenPurpose,
@@ -90,6 +93,9 @@ TEMPLATES.env.globals["attribution_html"] = ATTRIBUTION_HTML
 # Scripts and styles by content-versioned URL, so a deploy cannot be hidden by a cached copy
 # (assets.py, D-57).
 TEMPLATES.env.globals["static_url"] = static_url
+# The server's clock as the page is rendered. Device-key signatures are made with server time
+# rather than the phone's own clock (PLAN_DEVICE_KEY.md §4.3), and this seeds it.
+TEMPLATES.env.globals["server_time"] = lambda: int(time.time())
 
 #: The basemap styles the vector map can ask for: one for each colour scheme (D-58).
 MAP_THEMES = ("gray", "gray-dark")
@@ -263,6 +269,14 @@ class LocateRequest(BaseModel):
     token: str = Field(default="", max_length=512)
 
 
+class RotateKeyRequest(BaseModel):
+    """A fresh public key from the browser whose current key signed this request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_key: str = Field(min_length=1, max_length=256)
+
+
 class ManageLinkRequest(BaseModel):
     """Who to send a settings link to, in the same shape the subscribe form uses."""
 
@@ -390,6 +404,50 @@ def create_app(
         )
         session.commit()
 
+    #: What a browser's `location.origin` is on this site, and what device-key signatures name.
+    #: From configuration, never from a request: behind Firebase Hosting the app sees the Cloud Run
+    #: host over plain http (PLAN_DEVICE_KEY.md §11).
+    site = devicekeys.site_origin(settings.public_base_url)
+
+    def refuse_cross_site(request: Request) -> None:
+        """Token redemptions are POSTed by our own pages only.
+
+        Refusing anything else closes login CSRF - another site making a visitor's browser redeem
+        the *other site's owner's* token - on the redemption routes, including the path a page
+        from before the device-key release still takes (`svc.Redemption`).
+
+        `Sec-Fetch-Site` first. A browser sets it and a page cannot, and it is the one signal that
+        works here: our pages send `Referrer-Policy: no-referrer`, which makes a browser send
+        `Origin: null` even on a same-origin POST (found in Chromium while testing this). Only
+        where it is missing - browsers from before 2021-2023 - is `Origin` consulted, and there
+        `null` has to be let through with it; such a request still needs a token that arrived by
+        push or mail.
+        """
+        fetch_site = request.headers.get("sec-fetch-site")
+        if fetch_site is not None:
+            if fetch_site != "same-origin":
+                raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-site request refused")
+            return
+        origin = request.headers.get("origin")
+        if origin not in (None, "null", site):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "cross-site request refused")
+
+    def redemption(client: str, device_key: str, endpoint: str, p256dh: str) -> svc.Redemption:
+        """What a redeeming page sent beside the token (PLAN_DEVICE_KEY.md §4.1).
+
+        A page without the current `client` value predates the device key and is redeemed as
+        before. A key that does not parse costs the reader the shortcut, not the link.
+        """
+        if client != devicekeys.CLIENT_VERSION:
+            return svc.Redemption()
+        key = None
+        if device_key and settings.device_key_login_enabled:
+            try:
+                key = devicekeys.parse_public_key(device_key)
+            except ValueError:
+                logger.warning("a redemption carried a device key that does not parse")
+        return svc.Redemption(current=True, proof=svc.PushProof(endpoint, p256dh), device_key=key)
+
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         """Report validation failures without echoing the input back.
@@ -477,6 +535,13 @@ def create_app(
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
+        # Every API answer that did not choose its own caching is private and never stored.
+        # Firebase Hosting's CDN sits in front of the API and keys its cache on the `__session`
+        # cookie, which a device-key request does not carry: a cacheable authenticated answer would
+        # be one shared entry for every key holder - someone else's home coordinates
+        # (PLAN_DEVICE_KEY.md §4.2). Routes that are public and cacheable set their own header.
+        if request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "private, no-store")
         return response
 
     # The `applicationServerKey` the browser needs on subscribe. Derived here rather than stored
@@ -706,10 +771,33 @@ def create_app(
 
     @app.post("/confirm", response_class=HTMLResponse, include_in_schema=False)
     def confirm_submit(
-        request: Request, token: str = Form(""), session: Session = Depends(get_session)
+        request: Request,
+        token: str = Form(""),
+        client: str = Form("", max_length=16),
+        device_key: str = Form("", max_length=256),
+        endpoint: str = Form("", max_length=MAX_ADDRESS_LENGTH),
+        p256dh: str = Form("", max_length=PUSH_P256DH_MAX_LENGTH),
+        session: Session = Depends(get_session),
     ) -> HTMLResponse:
+        refuse_cross_site(request)
         try:
-            result = svc.confirm(session, settings, token=token)
+            result = svc.confirm(
+                session,
+                settings,
+                token=token,
+                how=redemption(client, device_key, endpoint, p256dh),
+            )
+        except svc.PushMismatch:
+            # Not spent: the browser that does hold the subscription can still use this link.
+            return page(
+                request,
+                "error.html",
+                {
+                    "message": "Dieser Bestätigungslink gehört zu einer Anmeldung in einem anderen "
+                    "Browser. Öffne ihn dort – oder melde dich hier neu an.",
+                },
+                status_code=403,
+            )
         except svc.ValidationError:
             # The service's own messages are English, which is right for the API and wrong on a
             # German page. Saying the same thing for expired and already-used is deliberate:
@@ -729,8 +817,8 @@ def create_app(
         # unmemorable string the reader had to keep somewhere, so the message itself was the
         # bookmark - and a web push notification cannot be a bookmark, because it is gone the
         # moment it is swiped and Android keeps no history by default. What replaces it: this
-        # browser holds the session cookie set below, and every warning carries an Einstellungen
-        # button. Confirming is also the last step that needs the channel to prove anything.
+        # browser now holds a device key (D-64) - or, without one, the session cookie set below -
+        # and the settings page is linked from every page of the site.
 
         response = page(
             request,
@@ -739,18 +827,86 @@ def create_app(
                 "api_token": result.api_token,
                 "unsubscribe_token": result.unsubscribe_token,
                 "channel": subscriber.channel.value if subscriber else Channel.EMAIL.value,
+                "key_id": result.key_id,
             },
         )
         # Confirming *is* the proof the settings page asks for. Reaching this line means a token
         # we sent to the channel came back, which is exactly what redeeming a magic link proves -
-        # so making them go and fetch a second one would be ceremony, not security. The session
-        # is the ordinary one: same length, same wall, same cookie.
-        set_session_cookie(response, result.subscriber_id)
+        # so making them go and fetch a second one would be ceremony, not security. With a device
+        # key registered there is no session to open; without one, the ordinary session: same
+        # length, same wall, same cookie.
+        if result.key_id is None:
+            set_session_cookie(response, result.subscriber_id)
         return response
 
     # ---- authenticated API ----------------------------------------------------------------
+    async def signed_body(request: Request) -> bytes | None:
+        """The raw body, read only for a device-key request: its hash is part of what is signed.
+
+        A dependency of its own because reading the body is async and `current_subscriber` is not.
+        Starlette caches the bytes, so the route's own body parsing reads the same ones.
+        """
+        if request.headers.get("authorization", "").startswith("RainKey "):
+            return await request.body()
+        return None
+
+    def key_subscriber(request: Request, session: Session, header: str, body: bytes) -> Subscriber:
+        """A device-key request (D-64): authenticated by its own signature, nothing else.
+
+        No cookie on the same request is consulted and no CSRF value is needed - D-27's rule for a
+        header credential, which nothing cross-site can attach. A failed check is a 401 with a
+        reason the page acts on (`unknown_key`: delete the key; `clock`: resync and retry; anything
+        else: keep the key, use the link) and never falls back to a cookie.
+        """
+
+        def refuse(reason: str | None = None):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, {"error": reason} if reason else "not authorised"
+            )
+
+        if not settings.device_key_login_enabled:
+            refuse()
+        signed = devicekeys.parse_header(header)
+        # No settings call carries a query string, so one here is refused rather than
+        # canonicalised (review 2).
+        if signed is None or request.url.query:
+            refuse()
+        key = session.get(DeviceKey, signed.key_id)
+        if key is None:
+            refuse("unknown_key")
+        now = datetime.now(UTC)
+        if not devicekeys.within_window(signed.t, now.timestamp()):
+            refuse("clock")
+        # The path exactly as received, still percent-encoded; the decoded `url.path` could differ
+        # from what the browser signed.
+        raw_path = (request.scope.get("raw_path") or request.url.path.encode()).decode("latin-1")
+        signed_message = devicekeys.message(site, request.method, raw_path, signed.t, body)
+        if not devicekeys.verify(key.public_key, signed_message, signed.signature):
+            # Only failures are counted. The bucket reduces noise; it is not what keeps anyone
+            # out - a signature that does not verify is refused whatever the count (§4.8).
+            ip = client_ip(request, settings.trusted_proxy_hops)
+            if not hit_and_check(
+                session,
+                f"devicekey:fail:{ip}",
+                settings.device_key_failure_limit_per_hour,
+                timedelta(hours=1),
+            ):
+                raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
+            refuse()
+        subscriber = session.get(Subscriber, key.subscriber_id)
+        if subscriber is None:
+            refuse("unknown_key")
+        # Which key authenticated this request, for the one route that only a key may use.
+        request.state.device_key = key
+        if key.last_used_at is None or key.last_used_at < now - timedelta(days=1):
+            key.last_used_at = now
+        seen(session, subscriber.id)  # commits
+        return subscriber
+
     def current_subscriber(
-        request: Request, session: Session = Depends(get_session)
+        request: Request,
+        session: Session = Depends(get_session),
+        body: bytes | None = Depends(signed_body),
     ) -> tuple[Subscriber, Session]:
         """Two credentials, one identity.
 
@@ -763,6 +919,8 @@ def create_app(
         CSRF value from the page (F-16).
         """
         header = request.headers.get("authorization", "")
+        if header.startswith("RainKey "):
+            return key_subscriber(request, session, header, body or b""), session
         if header.startswith("Bearer "):
             try:
                 subscriber = svc.resolve_token(session, token=header[7:], purpose=TokenPurpose.API)
@@ -1024,14 +1182,57 @@ def create_app(
 
     @app.post("/api/v1/manage/session")
     def open_manage_session(
-        response: Response, token: str = Form(""), session: Session = Depends(get_session)
+        request: Request,
+        response: Response,
+        token: str = Form(""),
+        client: str = Form("", max_length=16),
+        device_key: str = Form("", max_length=256),
+        endpoint: str = Form("", max_length=MAX_ADDRESS_LENGTH),
+        p256dh: str = Form("", max_length=PUSH_P256DH_MAX_LENGTH),
+        session: Session = Depends(get_session),
     ) -> dict:
-        """Spend the magic link, set the session cookie, hand back the CSRF value."""
+        """Spend the magic link: register the page's device key, or open the cookie session.
+
+        With a key registered the answer is `{"enrolled": <key_id>}` and no cookie is set - the
+        page signs its requests from here on (D-64). Without one, as before: the session cookie
+        and the CSRF value.
+        """
+        refuse_cross_site(request)
         try:
-            subscriber = svc.redeem_manage_token(session, token=token)
+            done = svc.redeem_manage_token(
+                session,
+                token=token,
+                settings=settings,
+                how=redemption(client, device_key, endpoint, p256dh),
+            )
+        except svc.PushMismatch as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, {"error": "push_mismatch"}) from exc
         except svc.ValidationError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-        return set_session_cookie(response, subscriber.id)
+        seen(session, done.subscriber.id)
+        if done.key_id:
+            return {"enrolled": done.key_id}
+        return set_session_cookie(response, done.subscriber.id)
+
+    @app.post("/api/v1/device-key/rotate")
+    def rotate_device_key(
+        payload: RotateKeyRequest, request: Request, current=Depends(current_subscriber)
+    ) -> dict:
+        """Swap the key that signed this request for a fresh one (PLAN_DEVICE_KEY.md §4.5).
+
+        Only a device key may do this - never a cookie session or the API token - because a key is
+        registered only alongside a push-delivered token, and letting another credential mint one
+        would turn its temporary access into standing access.
+        """
+        key = getattr(request.state, "device_key", None)
+        if key is None:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "only a device key can rotate itself")
+        try:
+            spki = devicekeys.parse_public_key(payload.device_key)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        _, session = current
+        return {"rotated": svc.rotate_device_key(session, key, spki)}
 
     @app.get("/api/v1/manage/csrf")
     def manage_csrf(request: Request) -> dict:
@@ -1068,13 +1269,6 @@ def create_app(
                 status.HTTP_409_CONFLICT, "this session has reached its limit; ask for a new link"
             )
         return set_session_cookie(response, claims.subscriber_id, claims.deadline)
-
-    @app.post("/api/v1/manage/logout", status_code=status.HTTP_204_NO_CONTENT)
-    def close_manage_session() -> Response:
-        """Ends the session on this device. No credential needed - it only ever removes one."""
-        response = Response(status_code=status.HTTP_204_NO_CONTENT)
-        response.delete_cookie(MANAGE_COOKIE, path="/")
-        return response
 
     # ---- unsubscribe ----------------------------------------------------------------------
     @app.get("/unsubscribe", response_class=HTMLResponse, include_in_schema=False)

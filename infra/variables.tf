@@ -126,6 +126,12 @@ variable "contact_email" {
   }
 }
 
+variable "device_key_login_enabled" {
+  description = "Push subscribers' browsers sign their settings requests with a device key, so the settings open without a push round trip (DESIGN.md D-64). The kill switch: false falls back to the push link and the cookie session for everyone, and nothing is lost. If it was turned off because of a verification bug, empty device_keys before turning it back on (RUNBOOK)."
+  type        = bool
+  default     = true
+}
+
 variable "transactional_mail_cap_per_day" {
   description = "Confirmation and settings-link mails per rolling 24 h, across all requests (DESIGN.md D-63). The only limit on them a forged client IP cannot get around. Keep it plus the warnings' own cap within the mail provider's daily quota. 0 disables it."
   type        = number

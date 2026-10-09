@@ -512,15 +512,14 @@ def test_the_privacy_page_covers_both_channels(client):
     assert "Push-Dienst" in page
 
 
-def test_the_session_control_is_outside_the_settings_form(client):
-    """Next to Save, anything button-shaped reads as Cancel."""
+def test_the_settings_page_has_no_sign_out_control(client):
+    """Subscribed or not: the only account controls are subscribing and unsubscribing
+    (PLAN_DEVICE_KEY.md §11). With a device key a sign-out would do nothing - the next visit signs
+    in again - and email sessions end on their own."""
     page = page_source(client, "/manage")
-    form = page.split('id="settings-form"')[1].split("</form>")[0]
-    assert 'id="logout"' not in form
-    assert "Sitzung auf diesem Gerät beenden" in page
-    # It ends the session and nothing else, so it must not say "Abmelden", which in German is
-    # also what you call cancelling a subscription.
-    assert "Abmelden (nur dieses Gerät)" not in page
+    assert 'id="logout"' not in page
+    assert "Sitzung auf diesem Gerät beenden" not in page
+    assert "/api/v1/manage/logout" not in page
 
 
 def test_the_subscribe_page_links_to_the_settings_page(client):

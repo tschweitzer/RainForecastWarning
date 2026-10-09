@@ -680,6 +680,41 @@ The migration handles this correctly in both directions — it deletes the `webp
 down, because the older schema has nowhere to put their keys. It is the ordering that has to be
 right, and it is the opposite of the usual "deploy, then migrate".
 
+### Device keys: the settings page without a link
+
+Since D-64 a push subscriber's browser signs its settings requests with a device key it registered
+when it confirmed (docs/PLAN_DEVICE_KEY.md). Expected, and not a bug:
+
+- **Settings open without any link or notification.** That is the point. The "Link an diesen
+  Browser schicken" step appears only for a browser without a key: subscribers from before the
+  release (once - the link registers a key), and browsers that cannot keep one.
+- **No session cookie, no countdown** for push subscribers. Email works as before.
+- **No sign-out button** for anyone. Only subscribing and unsubscribing exist.
+
+What to look at when it misbehaves:
+
+- **Every settings request from browsers answers 401**: `PUBLIC_BASE_URL` must be exactly the origin
+  people use (`https://rainalerts.web.app`), because signatures name it. A custom domain changes it
+  (section 3b) - and every existing key then fails once and is replaced through the link step.
+- **Redemptions answer 403 "cross-site request refused"**: the request's `Sec-Fetch-Site` was not
+  `same-origin`. From our own pages it always is; a proxy in front that rewrites the host or strips
+  the header would explain it.
+- **A suspected verification bug**: turn it off, then empty the table before turning it back on, so
+  no key registered under the bug survives:
+
+```sh
+# terraform.tfvars: device_key_login_enabled = false, then terraform apply
+```
+
+```sql
+delete from device_keys;
+```
+
+Off, every browser falls back to the push link and the cookie session; nothing is lost and nobody
+is locked out. Keys are cheap to replace: the next link a browser redeems registers a fresh one.
+
+---
+
 ### Rolling back
 
 Deploy the previous digest. Roll the schema back only if the new one is genuinely incompatible —
@@ -803,10 +838,11 @@ look before the next run.
      `confirmed_at` unless a notification was encrypted, delivered, rendered and tapped. So day-one
      breakage is impossible; what is left is *regression* — a VAPID rotation, a payload-shape change
      — after a subscriber is already confirmed.
-  2. **The liveness ping already carries a tap.** It ships an Einstellungen button, and
-     `POST /api/v1/manage/request` is reached only when a human presses it.
-  `run_liveness` now logs `silent=<n>`: confirmed push subscribers with successful sends who have
-  never had a `MANAGE` token issued. It is a smell, not an alarm — someone can simply never need
+  2. **A tap on a warning reaches the server.** Its `#l=` link is resolved by `POST /api/v1/locate`,
+     which records `subscribers.last_seen_at` (at most daily); opening the settings page with a
+     device key does too. Notifications carry no buttons any more (DESIGN.md D-64).
+  `run_liveness` now logs `silent=<n>`: confirmed push subscribers with successful sends, no
+  `last_seen_at` and no settings link ever issued. It is a smell, not an alarm — someone can simply never need
   their settings — but a number that climbs while sends succeed is the signature of this failure,
   and there was previously nothing at all to watch.
 - **Nothing deletes a push signup whose confirmation token has expired.** `purge_unconfirmed` runs

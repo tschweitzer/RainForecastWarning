@@ -10,6 +10,13 @@
    has been parsed, and by then the button may already have been painted. #}
 <form method="post" action="/confirm" id="form" hidden>
   <input type="hidden" name="token" id="token" value="">
+  {# Filled by the script (devicekey.js): which page this is, proof that this browser holds the
+     push subscription the link was sent to, and the public half of a fresh device key (D-64).
+     Left empty when the script cannot run, which the server answers as before. #}
+  <input type="hidden" name="client" id="client" value="">
+  <input type="hidden" name="endpoint" id="endpoint" value="">
+  <input type="hidden" name="p256dh" id="p256dh" value="">
+  <input type="hidden" name="device_key" id="device_key" value="">
   <button type="submit">Jetzt bestätigen</button>
 </form>
 
@@ -27,6 +34,7 @@ noch einmal direkt aus der Nachricht.</p>
   er absichtlich nie geschickt.</p>
 </noscript>
 
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
   // The token rides in the fragment (D-26). A fragment is never sent to the server, so unlike
@@ -73,13 +81,16 @@ noch einmal direkt aus der Nachricht.</p>
     }
 
     if (!auto) {
+      // A mailed link: no push subscription to prove and no key to register, but the server is
+      // told this page is current.
+      if (window.RainKey) { document.getElementById('client').value = RainKey.CLIENT; }
       form.hidden = false;
       return;
     }
 
     lede.hidden = true;
     busy.hidden = false;
-    form.submit();
+    submitWithProof();
 
     // The button is still the working way through if that submit never lands - a dropped
     // connection leaves this page sitting on a spinner forever otherwise. It is offered late and
@@ -90,6 +101,22 @@ noch einmal direkt aus der Nachricht.</p>
       lede.hidden = false;
       form.hidden = false;
     }, 8000);
+  }
+
+  /* A push confirmation: before submitting, show that this browser holds the subscription the link
+     was sent to, and register a device key with it (D-64). `persistentOnly`, because the submit
+     navigates away: a key that could only live in this tab's memory would be gone before it was
+     used, so then none is sent and the server opens the ordinary session instead. */
+  function submitWithProof() {
+    var ready = window.RainKey
+      ? RainKey.prepareRedemption({ persistentOnly: true })
+      : Promise.resolve(null);
+    ready.then(function (fields) {
+      ['client', 'endpoint', 'p256dh', 'device_key'].forEach(function (name) {
+        document.getElementById(name).value = (fields && fields[name]) || '';
+      });
+      form.submit();
+    });
   }
 
   /* And again whenever the fragment changes.

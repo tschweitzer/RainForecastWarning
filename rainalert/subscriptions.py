@@ -15,10 +15,12 @@ from zoneinfo import available_timezones
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from rainalert import devicekeys
 from rainalert.config import Settings
 from rainalert.db.models import (
     AuthToken,
     Channel,
+    DeviceKey,
     Subscriber,
     Subscription,
     SubscriptionStatus,
@@ -46,6 +48,123 @@ _TIMEZONES = available_timezones()
 
 class ValidationError(ValueError):
     """The request cannot be stored. Safe to show to the user."""
+
+
+class PushMismatch(ValidationError):
+    """The browser redeeming a push-delivered token does not hold the subscription it was sent to.
+
+    Raised *before* the token is spent, so the real owner can still use it (PLAN_DEVICE_KEY.md
+    §4.1, review 3).
+    """
+
+
+@dataclass(frozen=True)
+class PushProof:
+    """What a redeeming page knows about this browser's own push subscription.
+
+    A push-delivered token can only be opened in the browser holding that subscription, so a
+    legitimate redemption always presents matching values - and a victim tricked into opening an
+    attacker's link presents the *victim's*, which never match the attacker's subscriber. That is
+    what stops a stranger's confirmation or settings link from binding this browser to the
+    stranger's account (review 1, High). Either value is enough: a browser that re-encodes its
+    endpoint string keeps its `p256dh`, so matching on both would lock it out (review 2).
+    """
+
+    endpoint: str = ""
+    p256dh: str = ""
+
+
+@dataclass(frozen=True)
+class Redemption:
+    """How a token is being redeemed, beyond the token itself.
+
+    `current` is False for a page that was open before the device-key release and sends none of
+    this. Such a redemption is handled exactly as before - no proof asked, no key, the cookie
+    session - so a tab left open across a deploy keeps working. The HTTP layer refuses cross-site
+    POSTs on both redemption routes, so this older path cannot be driven from another site.
+    """
+
+    current: bool = False
+    proof: PushProof | None = None
+    #: A parsed SPKI (`devicekeys.parse_public_key`), or None.
+    device_key: bytes | None = None
+
+
+def holds_subscription(subscriber: Subscriber, proof: PushProof | None) -> bool:
+    if proof is None:
+        return False
+    if proof.endpoint:
+        try:
+            endpoint = check_endpoint(proof.endpoint.strip())
+        except EndpointRefused:
+            endpoint = ""
+        if endpoint and same_secret(
+            hash_address(Channel.WEBPUSH.value, endpoint).hex(), subscriber.address_hash.hex()
+        ):
+            return True
+    if proof.p256dh and subscriber.push_p256dh:
+        try:
+            offered = devicekeys.unb64url(proof.p256dh.rstrip("="))
+            stored = devicekeys.unb64url(subscriber.push_p256dh.rstrip("="))
+        except ValueError:
+            return False
+        return same_secret(offered.hex(), stored.hex())
+    return False
+
+
+def _check_push_redemption(subscriber: Subscriber, how: Redemption) -> None:
+    """Refuse a current page's redemption of a push token in a browser that is not the owner."""
+    if (
+        subscriber.channel == Channel.WEBPUSH
+        and how.current
+        and not holds_subscription(subscriber, how.proof)
+    ):
+        raise PushMismatch("this link belongs to a subscription this browser does not hold")
+
+
+def enrol_device_key(
+    session: Session, settings: Settings, subscriber: Subscriber, how: Redemption, now: datetime
+) -> str | None:
+    """Store the key a current page sent with a push redemption, replacing any previous one.
+
+    Only for web push, only when the feature is on, and only ever called from inside a token
+    redemption - never from an authenticated request - so a key is exactly as strong as the push
+    round trip it replaces (PLAN_DEVICE_KEY.md §4.1). Not committed here; the caller commits it
+    with the redemption.
+    """
+    if not (
+        settings.device_key_login_enabled
+        and subscriber.channel == Channel.WEBPUSH
+        and how.current
+        and how.device_key
+    ):
+        return None
+    return _replace_device_key(session, subscriber.id, how.device_key, now)
+
+
+def _replace_device_key(session: Session, subscriber_id, spki: bytes, now: datetime) -> str:
+    key_id = devicekeys.key_id_for(spki)
+    session.execute(
+        delete(DeviceKey).where(
+            (DeviceKey.subscriber_id == subscriber_id) | (DeviceKey.id == key_id)
+        )
+    )
+    session.add(DeviceKey(id=key_id, subscriber_id=subscriber_id, public_key=spki, created_at=now))
+    return key_id
+
+
+def rotate_device_key(
+    session: Session, current: DeviceKey, new_spki: bytes, now: datetime | None = None
+) -> str:
+    """Replace the key a request was just signed with by a fresh one from the same browser.
+
+    The silent daily rotation (PLAN_DEVICE_KEY.md §4.5): a key planted by injected script dies the
+    next time the reader opens their settings. Adds no reach - whoever holds the current key
+    already has standing access.
+    """
+    key_id = _replace_device_key(session, current.subscriber_id, new_spki, now or datetime.now(UTC))
+    session.commit()
+    return key_id
 
 
 @dataclass
@@ -270,13 +389,22 @@ def subscribe(
 
 @dataclass
 class ConfirmResult:
-    api_token: str
+    #: None for web push: the long-lived API token is no longer issued to push subscribers, whose
+    #: settings page has a device key (PLAN_DEVICE_KEY.md §4.9).
+    api_token: str | None
     unsubscribe_token: str
     subscriber_id: uuid.UUID
+    #: The id of the device key stored with this confirmation, if one was.
+    key_id: str | None = None
 
 
 def confirm(
-    session: Session, settings: Settings, *, token: str, now: datetime | None = None
+    session: Session,
+    settings: Settings,
+    *,
+    token: str,
+    now: datetime | None = None,
+    how: Redemption | None = None,
 ) -> ConfirmResult:
     """Consume a confirmation token and activate the subscription.
 
@@ -296,10 +424,13 @@ def confirm(
     if row.expires_at and row.expires_at < now:
         raise ValidationError("this confirmation link has expired")
 
-    row.used_at = now
     subscriber = session.get(Subscriber, row.subscriber_id)
     if subscriber is None:
         raise ValidationError("this confirmation link is not valid")
+    how = how or Redemption()
+    _check_push_redemption(subscriber, how)  # before anything is spent
+
+    row.used_at = now
     subscriber.confirmed_at = subscriber.confirmed_at or now
 
     subscription = session.execute(
@@ -308,20 +439,23 @@ def confirm(
     subscription.status = SubscriptionStatus.ACTIVE
     subscription.updated_at = now
 
-    api_token = new_token()
-    session.add(
-        AuthToken(
-            subscriber_id=subscriber.id,
-            purpose=TokenPurpose.API,
-            token_hash=hash_token(api_token),
-            expires_at=None,
-            created_at=now,
+    api_token = None
+    if subscriber.channel == Channel.EMAIL:
+        api_token = new_token()
+        session.add(
+            AuthToken(
+                subscriber_id=subscriber.id,
+                purpose=TokenPurpose.API,
+                token_hash=hash_token(api_token),
+                expires_at=None,
+                created_at=now,
+            )
         )
-    )
+    key_id = enrol_device_key(session, settings, subscriber, how, now)
     session.commit()
     # Signed rather than stored, so every future alert mail can carry a working link (tokens.py).
     return ConfirmResult(
-        api_token, unsubscribe_token(subscriber.id, settings.secret_key), subscriber.id
+        api_token, unsubscribe_token(subscriber.id, settings.secret_key), subscriber.id, key_id
     )
 
 
@@ -367,9 +501,29 @@ def find_subscriber(session: Session, *, channel: Channel, address: str) -> Subs
     ).scalar_one_or_none()
 
 
-def redeem_manage_token(session: Session, *, token: str, now: datetime | None = None) -> Subscriber:
-    """Spend the magic link. Single use: the second attempt fails like a wrong token."""
+@dataclass
+class ManageRedemption:
+    subscriber: Subscriber
+    #: Set when a device key was stored with this redemption; the caller then opens no session.
+    key_id: str | None = None
+
+
+def redeem_manage_token(
+    session: Session,
+    *,
+    token: str,
+    now: datetime | None = None,
+    settings: Settings | None = None,
+    how: Redemption | None = None,
+) -> ManageRedemption:
+    """Spend the magic link. Single use: the second attempt fails like a wrong token.
+
+    A current page redeeming a push subscriber's link must be the browser holding that
+    subscription (`PushMismatch`, checked before the token is spent), and may register a device
+    key with it.
+    """
     now = now or datetime.now(UTC)
+    how = how or Redemption()
     row = session.execute(
         select(AuthToken).where(
             AuthToken.token_hash == hash_token(token),
@@ -378,12 +532,14 @@ def redeem_manage_token(session: Session, *, token: str, now: datetime | None = 
     ).scalar_one_or_none()
     if row is None or row.used_at is not None or (row.expires_at and row.expires_at < now):
         raise ValidationError("this link is no longer valid")
-    row.used_at = now
     subscriber = session.get(Subscriber, row.subscriber_id)
     if subscriber is None:
         raise ValidationError("this link is no longer valid")
+    _check_push_redemption(subscriber, how)  # before anything is spent
+    row.used_at = now
+    key_id = enrol_device_key(session, settings, subscriber, how, now) if settings else None
     session.commit()
-    return subscriber
+    return ManageRedemption(subscriber, key_id)
 
 
 def resolve_token(

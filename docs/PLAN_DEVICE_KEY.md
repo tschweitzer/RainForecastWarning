@@ -1,7 +1,7 @@
 # Plan: a device key instead of push round trips and sessions
 
-Status: **proposal, revision 3 (2026-10-09), with security review 3 folded in (§12)** - not
-implemented. Scope: web push subscribers;
+Status: **implemented 2026-10-09** (revision 3, with security review 3 folded in, §12). Where the
+code differs from the text below, §14 says how and why. Scope: web push subscribers;
 email keeps its magic link and session. Would become DESIGN.md D-64 once agreed (D-63 is the mail cap).
 
 History: revision 1 replaced the push round trip with a key that opened the ordinary session
@@ -620,3 +620,36 @@ Found sound:
   - or put a load balancer in front.
 - Whether an iOS home-screen web app stores a `CryptoKey` in IndexedDB reliably. This needs a real
   device. Any failure must count as "no key", which means the link step.
+
+## 14. Implementation notes (2026-10-09)
+
+Built as described, with these differences, each found while building or testing:
+
+- **Pages from before the release are redeemed as before, not reloaded** (§4.1's `stale_page`).
+  An old script cannot be told to reload itself - it does not know the new answer - and `/confirm`
+  is a form POST with no script on the way back. So a redemption without the `client` field is
+  handled exactly as it was before this change: no proof asked, no key, the cookie session. That
+  path cannot be driven from another site (next point), and it never registers a key, so review 1's
+  High finding stays closed. There is nothing to loop on.
+- **Cross-site POSTs are refused by `Sec-Fetch-Site`, not `Origin`.** Found in Chromium: our pages
+  send `Referrer-Policy: no-referrer`, which makes the browser send `Origin: null` on its own
+  same-origin POSTs, so an `Origin` check refused every real confirmation. `Sec-Fetch-Site` is set by
+  the browser and cannot be set by a page. Browsers that do not send it (older than 2021-2023) fall
+  back to `Origin`, letting `null` through.
+- **Refusal reasons arrive as `{"detail": {"error": ...}}`**, FastAPI's shape, rather than the
+  bare `{"error": ...}` the text shows.
+- **The liveness signal is `subscribers.last_seen_at`** (a tapped warning, a key-signed settings
+  request, a redeemed settings link, at most one write a day), rather than `device_keys.last_used_at`
+  alone. `device_keys.last_used_at` is still kept.
+
+Verified in Chromium against the running app, with the push subscription stubbed (no push service
+is reachable from the sandbox):
+- confirming registers a non-extractable key and sets no cookie;
+- the settings page opens and saves with signed requests only, also with the phone's clock ten
+  minutes off;
+- rotation replaces the key and the new one works;
+- another subscriber's confirmation link is refused, leaves the key untouched, and still works in
+  its own browser;
+- unsubscribing removes the key from IndexedDB;
+- a browser without a key goes through the push link once and then opens directly.
+

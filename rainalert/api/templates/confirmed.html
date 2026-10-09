@@ -25,9 +25,9 @@
   {# "sie", not "wieder hierher": the reader is on the "Angemeldet" page and "Einstellungen" goes to
      /manage, so "hierher" promised a return to this page - the same class of error as the
      "Weg zurück hierher" sentence this paragraph replaced. #}
-  Später öffnest du sie über „Einstellungen“ unten auf jeder Seite – wir schicken dir dann eine
-  Benachrichtigung mit dem Zugang. Der Knopf „Einstellungen“ auf jeder Warnung führt an dieselbe
-  Stelle.
+  {# Notifications carry no buttons any more and the settings open directly in this browser
+     (D-64), so there is no "we send you a notification first" to explain. #}
+  Später öffnest du sie über „Einstellungen“ auf jeder Seite.
   {% endif %}
 </p>
 
@@ -43,6 +43,8 @@
 </p>
 {% endif %}
 
+{# Email only since D-64: push subscribers are no longer issued the long-lived API token. #}
+{% if api_token %}
 <details class="note">
   <summary><strong>Zugangsschlüssel</strong> – brauchst du nur für die Schnittstelle</summary>
   <p>Er wird nur jetzt angezeigt und nirgends noch einmal. Zum Ändern deiner Einstellungen
@@ -52,6 +54,7 @@
   <p>Er ist <strong>kein</strong> Ersatz-Zugang: verlierst du diesen Browser, hilft er dir nicht.</p>
   <code>{{ api_token }}</code>
 </details>
+{% endif %}
 
 <p class="hint">
   <a href="{{ settings.public_base_url.rstrip('/') }}/unsubscribe#t={{ unsubscribe_token }}">Abmelden
@@ -62,4 +65,15 @@
   geht auch jederzeit später über den Link in jeder Mail.
   {% endif %}
 </p>
+{# Tells this browser that the key it sent with the confirmation was registered, so it becomes the
+   one the settings page signs with (devicekey.js). Without one, any key left pending is dropped. #}
+<div id="device-key" hidden{% if key_id %} data-key-enrolled="{{ key_id }}"{% endif %}></div>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  if (!window.RainKey) { return; }
+  var enrolled = document.getElementById('device-key').dataset.keyEnrolled;
+  if (enrolled) { RainKey.activate(enrolled); } else { RainKey.dropPending(); }
+})();
+</script>
 {% endblock %}

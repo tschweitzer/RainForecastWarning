@@ -27,6 +27,10 @@ locals {
     # Confirmation and settings-link mails per rolling day, across all requests (D-63).
     TRANSACTIONAL_MAIL_CAP_PER_DAY = tostring(var.transactional_mail_cap_per_day)
 
+    # Device keys for the settings page (D-64). The kill switch: false falls back to the push link
+    # and the cookie session for everyone, losing nothing - see RUNBOOK before turning it back on.
+    DEVICE_KEY_LOGIN_ENABLED = tostring(var.device_key_login_enabled)
+
     OVERLAY_BUCKET          = google_storage_bucket.overlays.name
     OVERLAY_PUBLIC_BASE_URL = "https://storage.googleapis.com/${google_storage_bucket.overlays.name}"
     LOG_LEVEL               = "INFO"
