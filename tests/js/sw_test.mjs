@@ -196,6 +196,26 @@ await test('a refused focus still gets the page open', async () => {
   assert.deepEqual(w.opened, ['/#l=tok']);
 });
 
+await test('a confirmation is handed to open pages as well as shown', async () => {
+  // D-65: a click on the notification can reach nothing on desktop Chrome on a Mac, so the open
+  // page gets the link directly and confirms by itself.
+  const url = 'https://rain.example.invalid/confirm#a=tok';
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'] });
+  await fire(w.listeners.push, { data: { json: () => ({ title: 'Regenwarnung bestätigen', url }) } });
+  assert.equal(w.shown.length, 1, 'the notification is still shown');
+  assert.deepEqual(w.posted, [{ url: 'https://rain.example.invalid/', data: { type: 'rainalert-confirm', url } }]);
+});
+
+await test('nothing but a confirmation on our own origin is handed over', async () => {
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'] });
+  for (const url of ['https://rain.example.invalid/#l=tok', 'https://evil.example/confirm#a=tok',
+    'https://rain.example.invalid/manage#t=tok']) {
+    await fire(w.listeners.push, { data: { json: () => ({ title: 't', url }) } });
+  }
+  assert.deepEqual(w.posted, []);
+  assert.equal(w.shown.length, 3);
+});
+
 await test('a client that cannot be focused is skipped, not crashed on', async () => {
   // `matchAll` can return a client with no focus(); calling it would throw inside waitUntil and the
   // tap would do nothing at all.

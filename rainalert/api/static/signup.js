@@ -736,6 +736,21 @@ function sameKey(subscription, expected) {
 announceCapability();
 decideSignupState();
 
+/* A confirmation that arrived for this browser goes through without its notification being clicked
+   (D-65): the service worker keeps the link and posts it here. Taken once, then this page goes to
+   /confirm, which confirms exactly as a tap on the notification would. Checked on load too, for a
+   reader who closed the page before the push arrived - or whose click never reached anything,
+   which on desktop Chrome on a Mac is what made signing up impossible. */
+function confirmIfHandedOver() {
+  window.RainPending.take().then(function (url) {
+    if (url) { window.location.assign(url); }
+  });
+}
+if (window.RainPending) {
+  window.RainPending.listen(confirmIfHandedOver);
+  confirmIfHandedOver();
+}
+
 document.getElementById('signup').addEventListener('submit', async function (event) {
   event.preventDefault();
   var out = document.getElementById('result');
@@ -891,13 +906,12 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   out.innerHTML = '';
   var waiting = el('p', 'waiting');
   waiting.appendChild(el('span', 'spinner'));
-  waiting.appendChild(el('span', null, 'Wir schicken dir gerade eine Benachrichtigung zum Best\u00e4tigen \u2013 tippe sie an, dann bist du angemeldet.'));
+  waiting.appendChild(el('span', null, 'Wir schicken dir gerade eine Benachrichtigung zum Best\u00e4tigen \u2013 sobald sie ankommt, geht es hier von selbst weiter. Du kannst sie auch antippen.'));
   out.appendChild(waiting);
-  // No auto-refresh and no polling. Confirming happens on the device, in the notification, and
-  // this page has no way to learn that it happened - the confirm link opens /confirm, which is
-  // where the reader ends up. A "waiting..." that never resolves is honest; a spinner that spins
-  // forever after a successful confirmation elsewhere would not be, so it says what to do rather
-  // than promising to update itself.
+  // No polling. When the confirmation reaches this browser the service worker posts it to this
+  // page, which then confirms by itself (D-65, `confirmIfHandedOver` at the bottom). A tap on the
+  // notification does the same. If neither happens the push never arrived, and the line below
+  // says what to do about that.
   // Ends at the browser settings, not at "melde dich noch einmal an": `settled()` hides the form
   // on the next line, so that instruction named a control no longer on the page - and the reader
   // whose notification did not arrive is exactly the one who scrolls looking for it. The restart

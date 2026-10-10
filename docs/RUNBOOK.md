@@ -412,8 +412,11 @@ focus a window only for a short moment after the click, and `navigate()` resolve
 has loaded - so a slow load lost the race: the tab loaded in the background, `focus()` was refused,
 and nothing visible happened. `focusOrOpen` in `sw.js` now focuses first and navigates second;
 `tests/js/sw_test.mjs` pins the order. Separate, and not fixable by us: an entry left in macOS's
-Notification Center after Chrome has replaced or dropped that notification (a newer one with the
-same tag, a browser restart) can be clicked and does nothing. The newest notification works.
+Notification Center after Chrome has dropped that notification can be clicked and does nothing -
+seen for a *fresh* confirmation too: `registration.getNotifications()` in the worker's DevTools
+came back empty while macOS still showed it. That is why a confirmation no longer needs the click
+(DESIGN.md D-65): the worker hands the link to the start page, which confirms by itself, on arrival
+or the next time the site is opened. For warnings a dead click only costs the map view.
 
 ### A subscriber says they got nothing
 

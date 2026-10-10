@@ -45,7 +45,8 @@ self.addEventListener('push', function (event) {
     data = {};
   }
 
-  event.waitUntil(
+  event.waitUntil(Promise.all([
+    handOver(data.url),
     self.registration.showNotification(data.title || FALLBACK_TITLE, {
       body: data.body || '',
       icon: ICON,
@@ -66,8 +67,57 @@ self.addEventListener('push', function (event) {
       renotify: true,
       requireInteraction: false
     })
-  );
+  ]));
 });
+
+/* A confirmation does not wait for its notification to be clicked (D-65).
+
+   Desktop Chrome on a Mac showed why: macOS kept the confirmation in Notification Center while
+   Chrome had already dropped it - `getNotifications()` came back empty - so clicking it reached
+   nothing, and the reader could not finish signing up at all. Nothing here can make that click
+   arrive. What this worker does have is the confirmation link itself, the moment the push lands.
+
+   So it hands it on: kept for this origin in IndexedDB (`rainalert-sw` / `pending`), and posted to
+   every open page of the site. The start page, open or opened later, takes it and goes to
+   /confirm, which confirms as a tap on the notification would - same link, same proof, same
+   browser. The link is single-use and expires with its token; it never leaves this browser. Only a
+   confirmation link (`/confirm#a=`) on this worker's own origin is handed over, nothing else, and
+   a failure here never costs the notification: this promise always resolves. */
+var CONFIRM_PATH = '/confirm#a=';
+
+function handOver(url) {
+  if (typeof url !== 'string' || url.indexOf(self.registration.scope.replace(/\/$/, '') + CONFIRM_PATH) !== 0) {
+    return Promise.resolve();
+  }
+  return keepPending(url)
+    .catch(function () { /* the message below still reaches an open page */ })
+    .then(function () {
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    })
+    .then(function (windows) {
+      windows.forEach(function (client) {
+        if (typeof client.postMessage === 'function') {
+          client.postMessage({ type: 'rainalert-confirm', url: url });
+        }
+      });
+    })
+    .catch(function () { /* never at the notification's expense */ });
+}
+
+function keepPending(url) {
+  if (typeof indexedDB === 'undefined') { return Promise.resolve(); }
+  return new Promise(function (resolve, reject) {
+    var open = indexedDB.open('rainalert-sw', 1);
+    open.onupgradeneeded = function () { open.result.createObjectStore('pending'); };
+    open.onerror = function () { reject(open.error); };
+    open.onsuccess = function () {
+      var tx = open.result.transaction('pending', 'readwrite');
+      tx.objectStore('pending').put({ url: url, at: Date.now() }, 'confirm');
+      tx.oncomplete = function () { open.result.close(); resolve(); };
+      tx.onerror = function () { reject(tx.error); };
+    };
+  });
+}
 
 self.addEventListener('notificationclick', function (event) {
   var data = event.notification.data || {};

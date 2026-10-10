@@ -10,6 +10,7 @@ import json
 import re
 import uuid
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1199,3 +1200,19 @@ def test_a_trailing_slash_is_not_redirected(client, path):
     response = client.get(path, follow_redirects=False)
     assert response.status_code == 404
     assert "location" not in response.headers
+
+
+def test_a_confirmation_does_not_depend_on_its_notification_being_clicked(client):
+    """D-65: on desktop Chrome on a Mac the click can reach nothing - Chrome had already dropped the
+    notification macOS still showed. The worker hands the link to the start page, which confirms by
+    itself; the confirmed page forgets the link and closes the notification. The behaviour is run in
+    Chromium (a real worker, a real push via DevTools) and in tests/js/sw_test.mjs; this pins the
+    wiring."""
+    start = client.get("/").text
+    assert start.index("pendingconfirm.js") < start.index("signup.js")
+    confirmed_src = Path(__file__).resolve().parents[1] / "rainalert" / "api" / "templates"
+    assert "RainPending.clear()" in (confirmed_src / "confirmed.html").read_text(encoding="utf-8")
+    signup = (
+        Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "signup.js"
+    ).read_text(encoding="utf-8")
+    assert "window.RainPending.listen(confirmIfHandedOver)" in signup

@@ -69,8 +69,12 @@
    one the settings page signs with (devicekey.js). Without one, any key left pending is dropped. #}
 <div id="device-key" hidden{% if key_id %} data-key-enrolled="{{ key_id }}"{% endif %}></div>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}"></script>
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('pendingconfirm.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
+  /* Confirmed: the link the service worker kept is spent now, and so is the notification that
+     carries it - closed, so a later click does not open "dieser Link gilt nicht mehr" (D-65). */
+  if (window.RainPending) { RainPending.clear(); }
   if (!window.RainKey) { return; }
   var enrolled = document.getElementById('device-key').dataset.keyEnrolled;
   if (enrolled) { RainKey.activate(enrolled); } else { RainKey.dropPending(); }

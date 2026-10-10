@@ -19,6 +19,8 @@ export function loadWorker(options = {}) {
   const focused = [];
   /* Every navigate() and focus() in the order they were called (focusOrOpen must focus first). */
   const calls = [];
+  /* Messages the worker posted to open pages, as { url: page, data }. */
+  const posted = [];
   const fetches = [];
   const matchAllOptions = [];
 
@@ -42,7 +44,8 @@ export function loadWorker(options = {}) {
       }
       this.url = new URL(to, scope).href;
       return Promise.resolve(this);
-    }
+    },
+    postMessage(data) { posted.push({ url: this.url, data }); }
     };
     if (focusable) {
       client.focus = function () {
@@ -85,7 +88,7 @@ export function loadWorker(options = {}) {
   const run = new Function('self', 'Notification', 'fetch', 'URL', `'use strict';\n${source}`);
   run(self, Notification, fetchImpl, URL);
 
-  return { listeners, shown, opened, navigated, focused, calls, fetches, matchAllOptions, windows, self };
+  return { listeners, shown, opened, navigated, focused, calls, posted, fetches, matchAllOptions, windows, self };
 }
 
 /** Fire an event and wait for whatever the handler passed to waitUntil. */
