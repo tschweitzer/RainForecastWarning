@@ -188,6 +188,17 @@ Two more things about that build:
 - **A migration is not deployed by the apply.** Changing the image makes the new migration
   *available*; running it is still `gcloud run jobs execute rainalert-migrate --region
   europe-west3 --wait`, by hand, after the apply.
+- **When the new code needs its migration** - the release that adds device keys (D-64, migration
+  `b6e2f0a4c813`) is one: the new code reads `subscribers.last_seen_at` and fails on every
+  subscriber query until it exists - migrate *between* updating the job and updating the service:
+
+```sh
+cd infra && terraform apply -target=google_cloud_run_v2_job.migrate   # the job gets the new image
+gcloud run jobs execute rainalert-migrate --region europe-west3 --wait
+terraform apply                                                       # now the service and the rest
+```
+
+  The previous code runs fine against the migrated schema, so the gap in between costs nothing.
 
 ---
 

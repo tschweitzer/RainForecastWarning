@@ -30,6 +30,7 @@
   var useMemory = false;
   var dbPromise = null;
   var offset = null;        // server seconds minus performance.now() seconds
+  var rotation = null;      // a rotation in flight; this tab's other requests wait for it
 
   function supported() {
     return !!(window.crypto && window.crypto.subtle && window.TextEncoder);
@@ -46,6 +47,10 @@
     if (useMemory || !window.indexedDB) { return Promise.resolve(null); }
     if (!dbPromise) {
       dbPromise = new Promise(function (resolve) {
+        /* Bounded: in some private modes and stuck profiles `open` never fires any event, and a
+           page waiting on it - the confirm page holds its submit until the proof is ready - would
+           wait forever (code review). After three seconds this tab carries on in memory. */
+        window.setTimeout(function () { resolve(null); }, 3000);
         var request;
         try {
           request = window.indexedDB.open(DB_NAME, 1);
@@ -199,43 +204,53 @@
     }).catch(function () { return null; });
   }
 
-  /* A request to the settings API, signed. Resolves to the Response, or to null when this browser
-     holds no key. A `clock` refusal resyncs and retries once; an `unknown_key` refusal first checks
-     whether another tab has just replaced the key, and only then forgets it (compare-and-delete). */
-  function signedFetch(method, path, body) {
-    var bodyText = body === undefined ? '' : JSON.stringify(body);
-    return load().then(function (record) {
-      if (!record) { return null; }
-      var attempts = 0;
-      function attempt() {
-        attempts++;
-        return authorization(record, method, path, bodyText).then(function (header) {
-          var headers = { Authorization: header };
-          if (bodyText) { headers['Content-Type'] = 'application/json'; }
-          return fetch(path, {
-            method: method,
-            headers: headers,
-            body: bodyText || undefined,
-            /* Nothing ambient rides along: the signature is the whole credential. */
-            credentials: 'omit'
-          });
-        }).then(function (response) {
-          syncFromResponse(response);
-          if (response.status !== 401 || attempts >= 3) { return response; }
-          return refusal(response).then(function (reason) {
-            if (reason === 'clock') { return attempt(); }
-            if (reason !== 'unknown_key') { return response; }
-            return load().then(function (again) {
-              if (again && again.keyId !== record.keyId) {
-                record = again;
-                return attempt();
-              }
-              return forget(record.keyId).then(function () { return response; });
-            });
+  /* One signed request with `record`'s key, retried once on a `clock` refusal (resynced from that
+     answer's Date header). With `recover`, an `unknown_key` refusal first checks whether another tab
+     has just replaced the key and retries with the new one, and otherwise forgets this key
+     (compare-and-delete). Without it - for the rotation, which must be signed by exactly the key it
+     replaces - the refusal is simply returned (code review: a rotation that recovered could leave
+     the server and this browser holding different keys). */
+  function send(record, method, path, bodyText, recover) {
+    var attempts = 0;
+    function attempt() {
+      attempts++;
+      return authorization(record, method, path, bodyText).then(function (header) {
+        var headers = { Authorization: header };
+        if (bodyText) { headers['Content-Type'] = 'application/json'; }
+        return fetch(path, {
+          method: method,
+          headers: headers,
+          body: bodyText || undefined,
+          /* Nothing ambient rides along: the signature is the whole credential. */
+          credentials: 'omit'
+        });
+      }).then(function (response) {
+        syncFromResponse(response);
+        if (response.status !== 401 || attempts >= 3) { return response; }
+        return refusal(response).then(function (reason) {
+          if (reason === 'clock' && attempts === 1) { return attempt(); }
+          if (reason !== 'unknown_key' || !recover) { return response; }
+          return load().then(function (again) {
+            if (again && again.keyId !== record.keyId) {
+              record = again;
+              return attempt();
+            }
+            return forget(record.keyId).then(function () { return response; });
           });
         });
-      }
-      return attempt();
+      });
+    }
+    return attempt();
+  }
+
+  /* A request to the settings API, signed. Resolves to the Response, or to null when this browser
+     holds no key. Waits for a rotation this tab has in flight, so it never signs with a key the
+     server has just replaced. */
+  function signedFetch(method, path, body) {
+    var bodyText = body === undefined ? '' : JSON.stringify(body);
+    return (rotation || Promise.resolve()).then(load).then(function (record) {
+      if (!record) { return null; }
+      return send(record, method, path, bodyText, true);
     }).catch(function () { return null; });
   }
 
@@ -255,7 +270,13 @@
      could only live in memory would be gone before it was ever used - it sends none instead. */
   function prepareRedemption(options) {
     var fields = { client: CLIENT, endpoint: '', p256dh: '', device_key: '' };
-    return pushSubscription().then(function (subscription) {
+    /* Bounded: a page waiting on this must not wait forever on a service worker that never
+       answers. Without an answer the fields stay empty and the server says so. */
+    var subscription = Promise.race([
+      pushSubscription(),
+      new Promise(function (resolve) { window.setTimeout(function () { resolve(null); }, 5000); })
+    ]);
+    return subscription.then(function (subscription) {
       if (subscription) {
         fields.endpoint = subscription.endpoint || '';
         var key = subscription.getKey && subscription.getKey('p256dh');
@@ -275,17 +296,34 @@
     }).catch(function () { return fields; });
   }
 
-  /* The server registered `keyId`: promote the pending key, if it is still that one. */
+  /* The server registered `keyId`: promote the pending key, if it is still that one - in one
+     transaction, so leaving the page halfway cannot lose it (code review). */
   function activate(keyId) {
-    var promoted = null;
-    return transact('pending', function (pending) {
-      if (!pending || pending.keyId !== keyId) { return undefined; }
-      promoted = pending;
-      return null;
-    }).then(function () {
-      if (!promoted) { return false; }
-      return transact('active', function () {
-        return { keyId: promoted.keyId, privateKey: promoted.privateKey, rotatedAt: Date.now() };
+    function promoted(pending) {
+      return { keyId: pending.keyId, privateKey: pending.privateKey, rotatedAt: Date.now() };
+    }
+    return database().then(function (db) {
+      if (!db) {
+        if (!memory.pending || memory.pending.keyId !== keyId) { return false; }
+        memory.active = promoted(memory.pending);
+        delete memory.pending;
+        return true;
+      }
+      return new Promise(function (resolve, reject) {
+        var done = false;
+        var tx = db.transaction(STORE, 'readwrite');
+        var store = tx.objectStore(STORE);
+        var read = store.get('pending');
+        read.onsuccess = function () {
+          var pending = read.result;
+          if (!pending || pending.keyId !== keyId) { return; }
+          store.put(promoted(pending), 'active');
+          store.delete('pending');
+          done = true;
+        };
+        tx.oncomplete = function () { resolve(done); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error); };
       });
     }).catch(function () { return false; });
   }
@@ -296,24 +334,34 @@
 
   /* At most once a day, replace the key with a fresh one, signed by the current key (§4.5). A key
      planted by injected script dies the next time the reader opens their settings. Not for a key
-     that lives only in this tab's memory: it dies with the tab anyway. */
+     that lives only in this tab's memory: it dies with the tab anyway.
+
+     Signed with exactly the key being replaced, no recovery (see `send`), and this tab's other
+     requests wait for it. Once the server has the fresh key it is stored unless another tab has
+     meanwhile put a different one in place; if another tab *deleted* the old one - its request
+     raced this rotation and met `unknown_key` - the fresh key is stored all the same, because it
+     is the one the server holds (code review). */
   function rotateIfDue() {
-    var record;
-    return load().then(function (current) {
-      record = current;
+    if (rotation) { return rotation; }
+    rotation = load().then(function (record) {
       if (!record || useMemory) { return null; }
       if (record.rotatedAt && Date.now() - record.rotatedAt < DAY_MS) { return null; }
       return generate().then(function (fresh) {
-        return signedFetch('POST', '/api/v1/device-key/rotate', { device_key: fresh.spki })
+        var body = JSON.stringify({ device_key: fresh.spki });
+        return send(record, 'POST', '/api/v1/device-key/rotate', body, false)
           .then(function (response) {
             if (!response || !response.ok) { return null; }
             return transact('active', function (active) {
-              if (!active || active.keyId !== record.keyId) { return undefined; }
+              if (active && active.keyId !== record.keyId) { return undefined; }
               return { keyId: fresh.keyId, privateKey: fresh.privateKey, rotatedAt: Date.now() };
             });
           });
       });
-    }).catch(function () { return null; });
+    }).catch(function () { return null; }).then(function (result) {
+      rotation = null;
+      return result;
+    });
+    return rotation;
   }
 
   window.RainKey = {

@@ -50,6 +50,15 @@ class ValidationError(ValueError):
     """The request cannot be stored. Safe to show to the user."""
 
 
+class KeyInUse(ValidationError):
+    """The public key offered is already registered to another subscriber.
+
+    Never moved: the browser holding that key would otherwise start authenticating as the
+    subscriber who offered it - review 1's binding attack, done with a value that is public (code
+    review, 2026-10-09).
+    """
+
+
 class PushMismatch(ValidationError):
     """The browser redeeming a push-delivered token does not hold the subscription it was sent to.
 
@@ -139,16 +148,20 @@ def enrol_device_key(
         and how.device_key
     ):
         return None
-    return _replace_device_key(session, subscriber.id, how.device_key, now)
+    try:
+        return _replace_device_key(session, subscriber.id, how.device_key, now)
+    except KeyInUse:
+        # The redemption itself is fine; the page simply gets the cookie session instead.
+        return None
 
 
 def _replace_device_key(session: Session, subscriber_id, spki: bytes, now: datetime) -> str:
     key_id = devicekeys.key_id_for(spki)
-    session.execute(
-        delete(DeviceKey).where(
-            (DeviceKey.subscriber_id == subscriber_id) | (DeviceKey.id == key_id)
-        )
-    )
+    holder = session.get(DeviceKey, key_id)
+    if holder is not None and holder.subscriber_id != subscriber_id:
+        raise KeyInUse("this key is registered to someone else")
+    # Only this subscriber's own row: one key per subscriber, and nobody else's is ever touched.
+    session.execute(delete(DeviceKey).where(DeviceKey.subscriber_id == subscriber_id))
     session.add(DeviceKey(id=key_id, subscriber_id=subscriber_id, public_key=spki, created_at=now))
     return key_id
 

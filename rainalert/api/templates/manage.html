@@ -492,6 +492,8 @@
   async function redeem(token) {
     var body = new URLSearchParams();
     body.set('token', token);
+    // Rendered by the server, not left to devicekey.js: see confirm.html.
+    body.set('client', {{ device_key_client | tojson }});
     if (window.RainKey) {
       var fields = await RainKey.prepareRedemption();
       Object.keys(fields).forEach(function (name) { body.set(name, fields[name]); });

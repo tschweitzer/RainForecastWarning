@@ -96,6 +96,10 @@ TEMPLATES.env.globals["static_url"] = static_url
 # The server's clock as the page is rendered. Device-key signatures are made with server time
 # rather than the phone's own clock (PLAN_DEVICE_KEY.md §4.3), and this seeds it.
 TEMPLATES.env.globals["server_time"] = lambda: int(time.time())
+# The `client` value a current page sends with a redemption, rendered into the markup rather than
+# left to devicekey.js: a page whose script failed to load must not look like a page from before
+# the device-key release, which is redeemed without the push-subscription check (code review).
+TEMPLATES.env.globals["device_key_client"] = devicekeys.CLIENT_VERSION
 
 #: The basemap styles the vector map can ask for: one for each colour scheme (D-58).
 MAP_THEMES = ("gray", "gray-dark")
@@ -789,6 +793,9 @@ def create_app(
             )
         except svc.PushMismatch:
             # Not spent: the browser that does hold the subscription can still use this link.
+            # Logged so that a systematic lockout - a browser changing how it reports its
+            # subscription, say - shows up as a count rather than as silence (PLAN §4.1).
+            logger.warning("push redemption refused: browser does not hold the subscription")
             return page(
                 request,
                 "error.html",
@@ -1206,6 +1213,7 @@ def create_app(
                 how=redemption(client, device_key, endpoint, p256dh),
             )
         except svc.PushMismatch as exc:
+            logger.warning("push redemption refused: browser does not hold the subscription")
             raise HTTPException(status.HTTP_403_FORBIDDEN, {"error": "push_mismatch"}) from exc
         except svc.ValidationError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
@@ -1232,7 +1240,10 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
         _, session = current
-        return {"rotated": svc.rotate_device_key(session, key, spki)}
+        try:
+            return {"rotated": svc.rotate_device_key(session, key, spki)}
+        except svc.KeyInUse as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
     @app.get("/api/v1/manage/csrf")
     def manage_csrf(request: Request) -> dict:

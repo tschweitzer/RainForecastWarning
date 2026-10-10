@@ -553,3 +553,145 @@ def test_the_kill_switch_is_configuration():
     assert 'variable "device_key_login_enabled"' in (infra / "variables.tf").read_text(
         encoding="utf-8"
     )
+
+
+# --- found by code review, 2026-10-09 ---------------------------------------------------------
+
+
+def test_another_subscribers_key_cannot_be_taken_over(client, notifier, db):
+    """Rotating (or enrolling) onto someone else's public key would make *their* browser
+    authenticate as the attacker - the binding attack again, with a public value."""
+    victim = enrolled(client, notifier)
+    attacker_browser = Browser()
+    token = subscribe_push(client, notifier, endpoint=ENDPOINT + "-attacker")
+    assert (
+        confirm(client, token, attacker_browser, endpoint=ENDPOINT + "-attacker").status_code == 200
+    )
+    client.cookies.clear()
+
+    body = json.dumps({"device_key": victim.public}).encode()
+    response = attacker_browser.request(client, "POST", "/api/v1/device-key/rotate", body)
+    assert response.status_code == 422
+    me = victim.request(client, "GET", "/api/v1/subscriptions/me")
+    assert me.status_code == 200
+    with db() as session:
+        victim_row = session.get(DeviceKey, victim.key_id)
+        owner = session.get(Subscriber, victim_row.subscriber_id)
+        assert owner.address == ENDPOINT, "the victim's key still belongs to the victim"
+
+
+def test_redemption_with_someone_elses_key_falls_back_to_the_session(client, notifier, db):
+    victim = enrolled(client, notifier)
+    token = subscribe_push(client, notifier, endpoint=ENDPOINT + "-other")
+    response = client.post(
+        "/confirm",
+        data={
+            "token": token,
+            "client": "dk1",
+            "endpoint": ENDPOINT + "-other",
+            "p256dh": P256DH,
+            "device_key": victim.public,
+        },
+    )
+    assert response.status_code == 200 and MANAGE_COOKIE in response.cookies
+    assert "data-key-enrolled" not in response.text
+    assert victim.request(client, "GET", "/api/v1/subscriptions/me").json()["address"] == ENDPOINT
+
+
+def test_pages_render_the_client_version_themselves(client):
+    """A current page whose devicekey.js failed must not pass for a page from before the release."""
+    from pathlib import Path
+
+    assert (
+        f'name="client" id="client" value="{devicekeys.CLIENT_VERSION}"'
+        in client.get("/confirm").text
+    )
+    assert f"body.set('client', \"{devicekeys.CLIENT_VERSION}\")" in client.get("/manage").text
+    script = (
+        Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "devicekey.js"
+    ).read_text(encoding="utf-8")
+    assert f"var CLIENT = '{devicekeys.CLIENT_VERSION}';" in script
+
+
+@pytest.fixture()
+def logging_restored():
+    """Alembic's env.py runs `fileConfig`, which disables every logger that already exists and
+    replaces the root handlers - and every test after this one that asserts on a log line then
+    fails. test_packaging.py gets away with it only by sorting last."""
+    import logging
+
+    root = logging.getLogger()
+    saved_root = (root.level, root.handlers[:])
+    saved = {
+        name: (logger.disabled, logger.level)
+        for name, logger in logging.root.manager.loggerDict.items()
+        if isinstance(logger, logging.Logger)
+    }
+    yield
+    root.setLevel(saved_root[0])
+    root.handlers[:] = saved_root[1]
+    for name, logger in logging.root.manager.loggerDict.items():
+        if isinstance(logger, logging.Logger):
+            disabled, level = saved.get(name, (False, logging.NOTSET))
+            logger.disabled = disabled
+            logger.setLevel(level)
+
+
+def test_the_migration_removes_api_tokens_of_push_subscribers_only(
+    postgres_url, monkeypatch, logging_restored
+):
+    from pathlib import Path
+
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    from rainalert.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    get_settings.cache_clear()
+    engine = create_engine(postgres_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    try:
+        command.upgrade(config, "a9e4d2c71f05")
+        with engine.begin() as conn:
+            for name, channel in (("push", "WEBPUSH"), ("mail", "EMAIL")):
+                conn.execute(
+                    text(
+                        "INSERT INTO subscribers (id, channel, address, address_hash, locale, "
+                        "created_at) VALUES (gen_random_uuid(), :c, :a, :h, 'de', now())"
+                    ),
+                    {"c": channel, "a": name, "h": name.encode().ljust(32, b"x")},
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO auth_tokens (id, subscriber_id, purpose, token_hash, "
+                        "created_at) SELECT gen_random_uuid(), id, 'api', :h, now() "
+                        "FROM subscribers WHERE address = :a"
+                    ),
+                    {"a": name, "h": (name + "t").encode().ljust(32, b"y")},
+                )
+        command.upgrade(config, "b6e2f0a4c813")
+        with engine.begin() as conn:
+            left = (
+                conn.execute(
+                    text(
+                        "SELECT s.address FROM auth_tokens t JOIN subscribers s "
+                        "ON s.id = t.subscriber_id"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert left == ["mail"]
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        engine.dispose()
+        get_settings.cache_clear()

@@ -10,10 +10,12 @@
    has been parsed, and by then the button may already have been painted. #}
 <form method="post" action="/confirm" id="form" hidden>
   <input type="hidden" name="token" id="token" value="">
-  {# Filled by the script (devicekey.js): which page this is, proof that this browser holds the
-     push subscription the link was sent to, and the public half of a fresh device key (D-64).
-     Left empty when the script cannot run, which the server answers as before. #}
-  <input type="hidden" name="client" id="client" value="">
+  {# Which page this is, rendered here rather than set by script: a page whose devicekey.js failed
+     to load must not pass for a page from before the device-key release, which is redeemed without
+     the push-subscription check (code review). The rest is filled by devicekey.js: proof that this
+     browser holds the push subscription the link was sent to, and the public half of a fresh
+     device key (D-64). #}
+  <input type="hidden" name="client" id="client" value="{{ device_key_client }}">
   <input type="hidden" name="endpoint" id="endpoint" value="">
   <input type="hidden" name="p256dh" id="p256dh" value="">
   <input type="hidden" name="device_key" id="device_key" value="">
@@ -81,9 +83,7 @@ noch einmal direkt aus der Nachricht.</p>
     }
 
     if (!auto) {
-      // A mailed link: no push subscription to prove and no key to register, but the server is
-      // told this page is current.
-      if (window.RainKey) { document.getElementById('client').value = RainKey.CLIENT; }
+      // A mailed link: no push subscription to prove and no key to register.
       form.hidden = false;
       return;
     }
@@ -107,17 +107,26 @@ noch einmal direkt aus der Nachricht.</p>
      was sent to, and register a device key with it (D-64). `persistentOnly`, because the submit
      navigates away: a key that could only live in this tab's memory would be gone before it was
      used, so then none is sent and the server opens the ordinary session instead. */
+  var proofReady = true;
   function submitWithProof() {
+    proofReady = false;
     var ready = window.RainKey
       ? RainKey.prepareRedemption({ persistentOnly: true })
       : Promise.resolve(null);
     ready.then(function (fields) {
-      ['client', 'endpoint', 'p256dh', 'device_key'].forEach(function (name) {
+      ['endpoint', 'p256dh', 'device_key'].forEach(function (name) {
         document.getElementById(name).value = (fields && fields[name]) || '';
       });
+      proofReady = true;
       form.submit();
     });
   }
+  /* The "noch einmal versuchen" button that appears after 8 s must not post the form before the
+     proof is in it - that would be refused as another browser's link. The automatic submit above
+     follows as soon as it is ready. */
+  form.addEventListener('submit', function (event) {
+    if (!proofReady) { event.preventDefault(); }
+  });
 
   /* And again whenever the fragment changes.
 

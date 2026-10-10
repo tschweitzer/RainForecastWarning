@@ -642,6 +642,37 @@ Built as described, with these differences, each found while building or testing
   request, a redeemed settings link, at most one write a day), rather than `device_keys.last_used_at`
   alone. `device_keys.last_used_at` is still kept.
 
+**Code review (2026-10-09), before the first push.** No blockers. Fixed:
+- *Deploy order (Major).* The new code maps `subscribers.last_seen_at` and fails on every subscriber
+  query until the migration has run, so it must run *before* the service gets the new image. RUNBOOK
+  §1b has the sequence: a targeted apply of the migrate job, the migration, then the full apply.
+- *Key takeover.* Rotating or enrolling onto a public key already registered to another subscriber
+  moved that key, so the other browser would have authenticated as the caller. Refused now (422 on
+  rotation; a redemption falls back to the cookie session), and only the subscriber's own row is
+  ever replaced.
+- *Rotation races.* A rotation is signed with exactly the key it replaces and never "recovers";
+  this tab's other requests wait for it; and a rotation whose old key another tab deleted in the
+  meantime still stores the fresh key the server now holds.
+- *Mismatches* are logged, as §4.1 promised.
+- *The `client` field* is rendered by the server, so a current page whose devicekey.js failed to
+  load is not mistaken for a page from before the release. The confirm page's 8-second fallback
+  button waits for the proof instead of posting without it.
+- *API tokens already issued to push subscribers* are deleted by the migration (§4.9).
+- *Promoting the pending key* happens in one IndexedDB transaction.
+
+The reviewer re-checked the fixes and found them correct, with one new issue, also fixed. The confirm
+page holds its submit until the proof is ready, and in some private modes `indexedDB.open` never
+answers. Opening the database now gives up after three seconds and carries on in memory, which on
+the confirm page means no key is sent and the ordinary session opens. Accepted residual: closing
+the tab between the server's rotation commit and the IndexedDB write loses the key; the push link
+replaces it.
+
+Accepted, not fixed: a subscriber who signed up on another address of this service - Firebase's
+`*.firebaseapp.com` twin or the Cloud Run URL - holds the push subscription in that origin. A link
+pointing at `public_base_url` opens where there is no subscription, and a push confirmation is then
+refused as another browser's. Rare (nothing links to those addresses), and fixed properly by
+redirecting them to the canonical host, which is a separate change.
+
 Verified in Chromium against the running app, with the push subscription stubbed (no push service
 is reachable from the sandbox):
 - confirming registers a non-extractable key and sets no cookie;
