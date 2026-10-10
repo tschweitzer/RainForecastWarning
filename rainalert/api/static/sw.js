@@ -145,9 +145,16 @@ function focusOrOpen(url) {
            afternoon shower left three copies of the map open. Verified in node: two navigations to
            the same path with different hashes opened two windows.
         
-           One fix, on the page side, where the token is actually read. */
-        return client.navigate(url).then(function (navigated) {
-          return (navigated || client).focus();
+           One fix, on the page side, where the token is actually read.
+
+           Focus first, then navigate. Chrome lets a service worker focus a window only for a short
+           moment after the click, and navigate() resolves only once the new page has loaded. It
+           used to be navigate-then-focus, so whenever the page took longer than that moment the
+           tab loaded in the background, focus() was refused, and the click looked like it did
+           nothing - "sometimes works" on desktop Chrome on a Mac, reported from the field while
+           confirming a signup. */
+        return client.focus().then(function (focused) {
+          return (focused || client).navigate(url);
         });
       }
       return self.clients.openWindow(url);

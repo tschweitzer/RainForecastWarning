@@ -175,6 +175,27 @@ await test('a tapped notification is dismissed', async () => {
   assert.equal(closed, true, 'notificationclick must close the notification it handled');
 });
 
+await test('the tab is focused before it is navigated', async () => {
+  // Chrome allows focus() only briefly after the click; navigate() resolves only once the page
+  // has loaded. Navigate-then-focus lost the race whenever loading was slow, and the click
+  // appeared to do nothing.
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/manage'] });
+  await fire(w.listeners.notificationclick, {
+    action: '', notification: { data: WARNING, close() {} }
+  });
+  assert.deepEqual(w.calls, ['focus', 'navigate']);
+  assert.deepEqual(w.opened, []);
+});
+
+await test('a refused focus still gets the page open', async () => {
+  const w = loadWorker({ maxActions: 2, focusFails: true,
+    windows: ['https://rain.example.invalid/manage'] });
+  await fire(w.listeners.notificationclick, {
+    action: '', notification: { data: WARNING, close() {} }
+  });
+  assert.deepEqual(w.opened, ['/#l=tok']);
+});
+
 await test('a client that cannot be focused is skipped, not crashed on', async () => {
   // `matchAll` can return a client with no focus(); calling it would throw inside waitUntil and the
   // tap would do nothing at all.

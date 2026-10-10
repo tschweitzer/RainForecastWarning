@@ -406,6 +406,15 @@ insufficient, both learned the hard way:
   flight drops a fragment that arrives during a slow redeem — the same "nothing happened", rarer and
   harder to report. `restart()` schedules exactly one more pass.
 
+**A second cause, on desktop Chrome (seen on a Mac, 2026-10-10): the click "sometimes works".** The
+service worker used to navigate the open tab first and focus it afterwards. Chrome lets a worker
+focus a window only for a short moment after the click, and `navigate()` resolves only once the page
+has loaded - so a slow load lost the race: the tab loaded in the background, `focus()` was refused,
+and nothing visible happened. `focusOrOpen` in `sw.js` now focuses first and navigates second;
+`tests/js/sw_test.mjs` pins the order. Separate, and not fixable by us: an entry left in macOS's
+Notification Center after Chrome has replaced or dropped that notification (a newer one with the
+same tag, a browser restart) can be clicked and does nothing. The newest notification works.
+
 ### A subscriber says they got nothing
 
 ```sql

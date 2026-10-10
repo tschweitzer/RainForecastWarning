@@ -17,6 +17,8 @@ export function loadWorker(options = {}) {
   const opened = [];
   const navigated = [];
   const focused = [];
+  /* Every navigate() and focus() in the order they were called (focusOrOpen must focus first). */
+  const calls = [];
   const fetches = [];
   const matchAllOptions = [];
 
@@ -29,6 +31,7 @@ export function loadWorker(options = {}) {
     url,
     navigate(to) {
       navigated.push({ from: this.url, to });
+      calls.push('navigate');
       /* A real WindowClient.navigate() rejects with a TypeError when the client is not controlled
          by this worker - which `includeUncontrolled: true` invites into the list - so the
          `.catch(... openWindow)` fallback in focusOrOpen is a live path, not a theoretical one.
@@ -42,7 +45,12 @@ export function loadWorker(options = {}) {
     }
     };
     if (focusable) {
-      client.focus = function () { focused.push(this.url); return Promise.resolve(this); };
+      client.focus = function () {
+        focused.push(this.url);
+        calls.push('focus');
+        if (options.focusFails) { return Promise.reject(new Error('Not allowed to focus a window')); }
+        return Promise.resolve(this);
+      };
     }
     return client;
   });
@@ -77,7 +85,7 @@ export function loadWorker(options = {}) {
   const run = new Function('self', 'Notification', 'fetch', 'URL', `'use strict';\n${source}`);
   run(self, Notification, fetchImpl, URL);
 
-  return { listeners, shown, opened, navigated, focused, fetches, matchAllOptions, windows, self };
+  return { listeners, shown, opened, navigated, focused, calls, fetches, matchAllOptions, windows, self };
 }
 
 /** Fire an event and wait for whatever the handler passed to waitUntil. */
