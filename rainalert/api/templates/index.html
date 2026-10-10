@@ -45,6 +45,10 @@
   .controls { display:flex; gap:.75rem; align-items:center; margin-top:.6rem; }
   .controls button { margin:0; width:3rem; }
   .controls input[type=range] { flex:1; }
+  /* Every slider on the page in the site's colour: the time slider and the settings' two. Scoped to
+     the settings once (D-67), which left the time slider in the browser's default blue right
+     above sliders in ours. */
+  input[type=range] { accent-color:var(--accent); }
   .stamp { margin:.5rem 0 0; font-variant-numeric:tabular-nums; font-size:.85rem; }
   .stamp .kind, .stamp .day { color:var(--muted); }
   .stamp .future { color:var(--accent); font-weight:600; }
@@ -104,7 +108,7 @@
             flex:0 0 auto; background:transparent; }
   /* The live value belongs with the thing it labels, not in a second column. */
   output { font-weight:400; color:var(--muted); }
-  #einstellungen input[type=range] { width:100%; accent-color:var(--accent); }
+  #einstellungen input[type=range] { width:100%; }
   /* A generated address has no spaces in it, so it broke mid-token and left "· aktiv" stranded
      on the next line. */
   #who { overflow-wrap:anywhere; }

@@ -1239,3 +1239,17 @@ def test_a_confirmation_does_not_depend_on_its_notification_being_clicked(client
     assert "confirmIfHandedOver();" in signup
     # D-66: usually the worker has confirmed by itself and only says so; the page says it too.
     assert "type === 'rainalert-confirmed') { showConfirmedHere(); }" in signup
+
+
+def test_every_slider_on_the_page_has_the_same_colour(client):
+    """The time slider and the settings' sliders sit on one page since D-67, and a rule scoped to
+    the settings left the time slider in the browser's default colour above them."""
+    import re
+
+    body = re.sub(r"/\*.*?\*/", "", client.get("/").text, flags=re.DOTALL)
+    rules = re.findall(r"([^{}]*)\{([^}]*accent-color[^}]*)\}", body)
+    selectors = [selector.strip() for selector, _ in rules]
+    assert "input[type=range]" in selectors, selectors
+    assert all(
+        "var(--accent)" in declarations for selector, declarations in rules if "range" in selector
+    )
