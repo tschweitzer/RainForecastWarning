@@ -82,10 +82,10 @@ def link_token(notifier) -> str:
     `#` (F-4/F-8), never in a query string a log or a Referer header would keep.
     """
     message = notifier.sent[-1]
-    carrier = message.text if "/manage#t=" in message.text else (message.click_url or "")
-    assert "/manage#t=" in carrier, "the token must ride in the fragment (F-4/F-8)"
+    carrier = message.text if "/#t=" in message.text else (message.click_url or "")
+    assert "/#t=" in carrier, "the token must ride in the fragment (F-4/F-8)"
     assert "?t=" not in carrier and "?token=" not in carrier
-    return carrier.split("/manage#t=")[1].split()[0]
+    return carrier.split("/#t=")[1].split()[0]
 
 
 def signed_in(client, notifier, **kwargs) -> str:
@@ -231,6 +231,18 @@ def test_a_session_for_a_deleted_subscriber_is_refused(client, notifier, db):
         session.delete(session.query(Subscriber).one())
         session.commit()
     assert client.get("/api/v1/subscriptions/me").status_code == 401
+
+
+def test_deleting_ends_the_session_cookie_too(client, notifier):
+    """The cookie is checked without a database lookup, so one left behind after deleting went on
+    opening a "session" for a row that no longer exists. The start page asks for one on every visit
+    since D-67, and answered a fresh deletion with "Einstellungen konnten nicht geladen werden"."""
+    csrf = signed_in(client, notifier)
+    response = client.delete("/api/v1/subscriptions/me", headers={CSRF_HEADER: csrf})
+    assert response.status_code == 204
+    header = response.headers.get("set-cookie", "").lower()
+    assert header.startswith(MANAGE_COOKIE.lower() + "=") and "max-age=0" in header, header
+    assert client.get("/api/v1/manage/csrf").status_code == 401
 
 
 def test_the_session_cookie_is_httponly_and_secure_on_https(client, notifier):
@@ -382,7 +394,7 @@ def test_a_location_outside_germany_is_refused(client, notifier):
 
 def test_the_page_renders_for_anyone_and_leaks_nothing(client, notifier):
     subscribed(client, notifier)
-    page = client.get("/manage")
+    page = client.get("/")
     assert page.status_code == 200
     # Identical for everyone: the token is in the fragment, so the server cannot know who this is.
     assert "friend@example.com" not in page.text
@@ -390,7 +402,7 @@ def test_the_page_renders_for_anyone_and_leaks_nothing(client, notifier):
 
 
 def test_the_page_renders_the_bounds_it_enforces(client, settings):
-    page = client.get("/manage").text
+    page = client.get("/").text
     assert f'max="{settings.max_lead_minutes}"' in page
     assert f'max="{settings.max_radius_m}"' in page
     # The threshold is no longer a free number with a min attribute - it is a dropdown of the
@@ -614,23 +626,30 @@ def test_the_notification_button_route_is_gone(client, notifier):
     assert client.post("/api/v1/manage/request", json={"token": "x"}).status_code in (404, 405)
 
 
-def test_the_settings_page_starts_on_none_of_its_states(client):
-    """Four states, and the served markup commits to none of them.
+def test_the_start_page_starts_on_none_of_its_states(client):
+    """Signup, state B and the settings (D-67), and the served markup commits to none of them.
 
-    The page used to render the gate as its default. That made the form the thing you looked at
-    while any other path was still working - most visibly arriving from a notification, where
-    "we sent you a link" appeared *underneath* a form asking for the topic it had just used.
+    The settings page used to render its gate as the default, which made the form the thing you
+    looked at while any other path was still working. The merged page decides in the browser, and
+    until it has, nothing below the map pretends to be the answer.
     """
-    body = client.get("/manage").text
+    body = client.get("/").text
 
     def opening_tag(marker):
         start = body.index(marker)
         return body[body.rindex("<", 0, start) : body.index(">", start) + 1]
 
-    for marker in ('id="sent"', 'id="gate"', 'id="panel"'):
+    for marker in (
+        'id="signup-section"',
+        'id="already-subscribed"',
+        'id="einstellungen"',
+        'id="account-busy"',
+        'id="account-note"',
+    ):
         assert "hidden" in opening_tag(marker), f"{marker} must start hidden: {opening_tag(marker)}"
-    # ...and something honest is on screen until the script decides.
-    assert 'id="busy"' in body and "spinner" in body
+    # ...and the busy line is the honest thing to show while a subscribed browser is checked.
+    busy = body[body.index('id="account-busy"') :]
+    assert 'class="spinner"' in busy[: busy.index("</p>")]
 
 
 def test_the_session_cookie_is_named_what_the_cdn_lets_through():
@@ -675,87 +694,113 @@ def test_the_session_cookie_actually_round_trips(client, notifier):
     assert client.get("/api/v1/subscriptions/me").status_code == 200
 
 
+def settings_script(client) -> str:
+    response = client.get("/static/settings.js")
+    assert response.status_code == 200, "the settings script is not being served"
+    return response.text
+
+
+def signup_script(client) -> str:
+    return client.get("/static/signup.js").text
+
+
 def test_every_exit_from_the_settings_dispatch_names_a_state(client):
-    """The old code relied on the gate being the default, so several paths just `return`ed and
-    left whatever happened to be on screen. With nothing shown by default that is a blank page,
-    so each one has to say what it wants.
+    """The old settings page relied on its gate being the default, so several paths just
+    `return`ed and left whatever happened to be on screen. With nothing shown by default that is a
+    blank page, so each exit has to say what it wants.
 
-    Two assertions rather than one loose scan: a single "did some function get called near this
-    return" check has to accept `redeem`, and then it is only an allowlist of names. So the
-    dispatch's own returns are checked here, and `redeem` - the one exit that decides elsewhere -
-    is pinned by the test below.
+    Split in two since D-67: settings.js `begin` reports - every exit is an `{opened, note}` - and
+    signup.js `decideOnce` decides, ending every path in `reveal` or in the settings already open.
     """
-    body = client.get("/manage").text
-    dispatch = js_function(body, "start")
+    begin = js_function(settings_script(client), "begin")
+    exits = [line.strip() for line in begin.splitlines() if line.strip().startswith("return")]
+    assert exits, begin
+    for line in exits:
+        assert line.startswith("return { opened:"), line
 
-    deciders = ("show(STATES", "gateWithNote(", "openPanel(", "redeem(")
-    for chunk in dispatch.split("return;")[:-1]:
+    decide = js_function(signup_script(client), "decideOnce")
+    for chunk in decide.split("return;")[:-1]:
         tail = chunk[-400:]
-        assert any(d in tail for d in deciders), tail
+        assert "reveal(" in tail or "pageState === 'settings'" in tail, tail
+    assert decide.rstrip("}").rstrip().endswith("reveal(subscription ? 'subscribed' : 'signup');")
 
 
 def test_a_spent_link_falls_through_to_a_session_this_browser_already_has(client):
     """Opening the settings link twice in one browser is not a dead end.
 
-    The first open spends the token *and* sets the session cookie, so the second answered
-    "dieser Link gilt nicht mehr" to somebody who was signed in - and reloading that same page
+    The first open spends the token *and* sets the session cookie (or registers a key), so the
+    second answered "dieser Link gilt nicht mehr" to somebody who was signed in - and reloading
     then worked, which is the part that makes it baffling rather than merely wrong. `redeem`
-    now reports; only the dispatch decides, and only once the session has also been ruled out.
+    reports; only `begin` decides, and only once the key and the session have been ruled out.
     """
-    body = client.get("/manage").text
+    script = settings_script(client)
+    redeem = js_function(script, "redeem")
+    assert "gilt nicht mehr" not in redeem and "showSettings" not in redeem, redeem
 
-    redeem = body[body.index("async function redeem") : body.index("async function load")]
-    assert "gateWithNote(" not in redeem, "redeem must report, not decide: " + redeem
-
-    start = js_function(body, "start")
-    spent_at = start.index("outcome = await redeem(token)")
-    key_at = start.index("RainKey.signedFetch('GET'")
-    session_at = start.index("/api/v1/manage/csrf")
-    complaint_at = start.index("gilt nicht mehr")
+    begin = js_function(script, "begin")
+    spent_at = begin.index("outcome = await redeem(token)")
+    key_at = begin.index("RainKey.signedFetch('GET'")
+    session_at = begin.index("/api/v1/manage/csrf")
+    # The complaint is worded once (`spentNote`) and handed out where it is reached.
+    assert "gilt nicht mehr" in begin
+    complaint_at = begin.index("note: spentNote")
     # The device key, then the session, are consulted between the failed redemption and the
     # complaint about it (D-64).
-    assert spent_at < key_at < session_at < complaint_at, start
-    # ...and the complaint is reached only when that session lookup fails.
-    assert "if (!again.ok)" in start[session_at:complaint_at], start[session_at:complaint_at]
+    assert spent_at < key_at < session_at < complaint_at, begin
+    # ...and the complaint is reached only when that session lookup fails - or when the session
+    # it found belongs to a subscriber who is gone.
+    assert "if (!again || !again.ok)" in begin[session_at:complaint_at]
+    assert "dropSession();" in begin[complaint_at:]
 
 
 def test_a_spent_link_that_still_opens_says_so(client):
     """Otherwise the second tab looks identical to the first and the earlier confusion just
-    becomes silent. Its own element, because fill() owns #panel-banner and the two would
+    becomes silent. Its own element, because fill() owns #settings-banner and the two would
     overwrite each other."""
-    body = client.get("/manage").text
-    assert 'id="panel-note"' in body
-    note = body[body.index('id="panel-note"') :]
+    body = client.get("/").text
+    note = body[body.index('id="settings-note"') :]
     assert "hidden" in note[: note.index(">")]
-    assert "schon benutzt" in body
+    assert "schon benutzt" in settings_script(client)
 
 
 def test_a_failed_link_request_does_not_blame_the_reader_for_our_fault(client):
     """429 and 500 used to give the same answer, which sent somebody away for an hour over a
     fault on our side."""
-    send_link = js_function(client.get("/manage").text, "sendLink")
+    send_link = js_function(settings_script(client), "sendLink")
     assert "response.status === 429" in send_link
     assert "schiefgegangen" in send_link
 
 
-def test_the_settings_page_says_why_nothing_happens_without_script(client):
-    body = client.get("/manage").text
+def test_the_start_page_says_why_nothing_happens_without_script(client):
+    body = client.get("/").text
     assert "<noscript>" in body
     assert "JavaScript" in body[body.index("<noscript>") : body.index("</noscript>")]
 
 
-def test_the_settings_page_names_no_channel_for_push(client):
+def test_the_settings_name_no_channel_for_push(client):
     """The line "Push auf diesen Browser · aktiv" read as nonsense - the page is open on some
     browser, not necessarily the subscribed one - so a push subscription gets no line at all. Email
     keeps the address, which says whose warnings these are. The states worth saying get their own
     notice."""
-    fill = js_function(client.get("/manage").text, "fill")
+    fill = js_function(settings_script(client), "fill")
     assert "'Push auf diesen Browser'" not in fill
     assert "who.hidden = current.channel !== 'email';" in fill
     assert "current.address + ' · ' + state" in fill
     assert (
         "notices.push(current.health_note)" in fill and "if (current.status === 'pending')" in fill
     )
+
+
+def test_the_old_settings_address_is_gone(client):
+    """D-67: deleted, not redirected - in development there is no backward compatibility to keep."""
+    assert client.get("/manage", follow_redirects=False).status_code == 404
+
+
+def test_settings_links_point_at_the_start_page(client, notifier):
+    subscribed(client, notifier)
+    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    assert "/#t=" in notifier.sent[-1].click_url
+    assert "/manage" not in notifier.sent[-1].click_url + notifier.sent[-1].text
 
 
 @pytest.fixture()
@@ -831,7 +876,7 @@ def test_the_threshold_picker_cannot_widen_the_page(client):
     longest option. Without `min-width:0` the picker was 379px wide on a 360px phone, the page
     scrolled sideways, and the browser zoomed the whole settings page out to fit it - found while
     measuring the map height in Chromium (D-54)."""
-    page = client.get("/manage").text
+    page = client.get("/").text
     rule = page[page.index(".threshold-row select {") :]
     rule = rule[: rule.index("}")]
     assert "min-width:0" in rule.replace(" ", "")
@@ -840,7 +885,7 @@ def test_the_threshold_picker_cannot_widen_the_page(client):
 def test_the_colour_hint_is_plain_text(client):
     """Plain text: the hint names the radar map, it does not send anyone there."""
     assert '<p class="hint">Die Farben sind dieselben wie auf der Radarkarte.</p>' in (
-        client.get("/manage").text
+        client.get("/").text
     )
 
 

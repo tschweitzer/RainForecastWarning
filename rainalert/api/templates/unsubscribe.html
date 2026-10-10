@@ -29,11 +29,11 @@ einmal direkt aus der Nachricht.</p>
   /* Release the browser's own subscription as well as the server's row.
    *
    * Without this, a push subscriber who unsubscribes from a notification link leaves their browser
-   * still holding a live subscription: /manage then reads it, announces "Dieser Browser ist für
-   * Regenwarnungen angemeldet" and offers to send a link for a subscriber that no longer exists -
-   * and the browser goes on listing the site under its notification permissions. The settings page
-   * already calls unsubscribe() on its own delete path; this is the same act on the other route to
-   * the same outcome.
+   * still holding a live subscription: the start page then reads it, announces "Dieser Browser ist
+   * für Regenwarnungen angemeldet" and offers to send a link for a subscriber that no longer exists
+   * - and the browser goes on listing the site under its notification permissions. The settings
+   * (settings.js) already call unsubscribe() on their own delete path; this is the same act on the
+   * other route to the same outcome.
    *
    * Best-effort and deliberately not awaited before submitting: the server-side deletion is what
    * matters and must not be held up by, or made to depend on, a browser API that can reject. */

@@ -62,7 +62,7 @@ self.addEventListener('push', function (event) {
       show({
         title: 'Erfolgreich angemeldet',
         body: 'Ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht.',
-        url: self.registration.scope + 'manage',
+        url: self.registration.scope + '#einstellungen',
         tag: data.tag
       })
     ]);
@@ -78,7 +78,7 @@ function show(data) {
     /* Everything the click handler needs, because it gets the notification and not the push. */
     data: data,
     /* No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `data.url`;
-       settings and unsubscribing live on the settings page only. */
+       settings and unsubscribing live on the start page only (D-67). */
     /* One rain warning at a time: a second replaces the first rather than stacking. Without a
        tag, a shower that keeps re-triggering leaves a column of near-identical notifications
        and the reader stops reading any of them.
@@ -225,8 +225,8 @@ self.addEventListener('notificationclick', function (event) {
  * accepts. A bearer-string API that leaks a location is not a good trade for avoiding that.
  *
  * Note there is no third defence. An earlier version of this comment claimed "the page also
- * re-POSTs its subscription on every load"; nothing does. index.html POSTs only from the submit
- * handler, and manage.html only asks for a settings link.
+ * re-POSTs its subscription on every load"; nothing does. signup.js POSTs only from the submit
+ * handler, and settings.js only asks for a settings link.
  */
 
 function focusOrOpen(url) {

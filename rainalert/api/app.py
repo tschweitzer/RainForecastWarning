@@ -825,7 +825,7 @@ def create_app(
         # bookmark - and a web push notification cannot be a bookmark, because it is gone the
         # moment it is swiped and Android keeps no history by default. What replaces it: this
         # browser now holds a device key (D-64) - or, without one, the session cookie set below -
-        # and the settings page is linked from every page of the site.
+        # and the settings appear on the start page, under the map, whenever it is opened (D-67).
 
         response = page(
             request,
@@ -1041,7 +1041,19 @@ def create_app(
         keys = push_keys(subscriber)
         svc.delete_subscriber(session, subscriber)
         deliver(lambda: deletion_receipt(settings, address, channel=channel, push=keys))
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
+        response = Response(status_code=status.HTTP_204_NO_CONTENT)
+        # The session cookie goes with the subscriber. It is checked without a database lookup
+        # (`session_claims`), so left behind it went on opening "a session" for a row that no
+        # longer exists - and the start page, which asks for one on every visit since D-67,
+        # answered a fresh deletion with "Einstellungen konnten nicht geladen werden".
+        response.delete_cookie(
+            MANAGE_COOKIE,
+            httponly=True,
+            samesite="lax",
+            secure=settings.public_base_url.startswith("https://"),
+            path="/",
+        )
+        return response
 
     # ---- settings-page session --------------------------------------------------------------
     def set_session_cookie(response: Response, subscriber_id, deadline: int | None = None) -> dict:
@@ -1366,6 +1378,8 @@ def create_app(
                 "window_hours": window,
                 "window_pinned": pinned,
                 "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
+                # The settings live on this page too (D-67).
+                "bounds": rule_bounds(),
             },
         )
 
@@ -1395,20 +1409,6 @@ def create_app(
             for face in faces:
                 face["url"] = static_url(face["url"])
         return JSONResponse(style, headers={"Cache-Control": "no-cache"})
-
-    @app.get("/manage", response_class=HTMLResponse, include_in_schema=False)
-    def manage_page(request: Request) -> HTMLResponse:
-        """The settings page. Renders the same shell whether or not anyone is signed in.
-
-        Deliberately side-effect free and identical for everyone: the magic link's token is in
-        the URL *fragment*, which the browser never sends, so the server cannot know at render
-        time whether this request carries one. The page asks.
-        """
-        return page(
-            request,
-            "manage.html",
-            {"bounds": rule_bounds(), "layer_opacity": LAYER_OPACITY, "map_engine": map_engine()},
-        )
 
     #: Served from the root, not from /static. A service worker's default scope is the directory
     #: it was served from, so /static/sw.js could only control /static/* - it would register

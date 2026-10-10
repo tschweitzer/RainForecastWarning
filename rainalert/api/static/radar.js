@@ -58,7 +58,8 @@
     if (opts.bounds) {
       map.fitBounds(opts.bounds, { padding: [opts.padding || 0, opts.padding || 0] });
     } else {
-      // A place and a zoom instead: the settings page opens on the subscriber's location.
+      // A place and a zoom instead. (The settings page used this; since D-67 the settings move the
+      // start page's map with setView.)
       map.setView(opts.center, opts.zoom);
     }
     map.options.zoomSnap = 1;
@@ -102,8 +103,11 @@
      `onChange(lat, lon)` fires for every move, whoever caused it. */
   function picker(map, opts) {
     var marker = null, ring = null, radius = opts.radius || 2000;
+    // Cleared (`clear()`): the map's tap does nothing until code places the pin again.
+    var off = false;
 
     function place(lat, lon, quiet) {
+      off = false;
       if (marker) {
         marker.setLatLng([lat, lon]);
         ring.setLatLng([lat, lon]);
@@ -122,11 +126,23 @@
       if (!quiet && opts.onChange) { opts.onChange(lat, lon); }
     }
 
-    map.on('click', function (event) { place(event.latlng.lat, event.latlng.lng); });
+    map.on('click', function (event) {
+      if (off) { return; }
+      place(event.latlng.lat, event.latlng.lng);
+    });
 
     return {
       set: place,
       has: function () { return marker !== null; },
+      /* Takes the pin off the map and stops the map's tap from setting one: for a page state in
+         which nothing may be picked (D-67). The click listener cannot be removed - it is bound
+         once - so it is switched off instead. */
+      clear: function () {
+        off = true;
+        if (marker) { map.removeLayer(marker); map.removeLayer(ring); }
+        marker = null;
+        ring = null;
+      },
       setRadius: function (metres) {
         radius = metres;
         if (ring) { ring.setRadius(Math.max(metres, 50)); }
@@ -232,6 +248,14 @@
     var pin = L.marker([lat, lon], { icon: pinIcon(), interactive: false, keyboard: false })
       .addTo(map);
     map.__rainalertMark = [circle, pin];
+  }
+
+  /* Takes a `mark` away again. For the settings (D-67): once they open, their own editable pin is
+     the one that counts, and a fixed one beside it would stay behind when it is dragged. */
+  function unmark(map) {
+    if (!map.__rainalertMark) { return; }
+    map.__rainalertMark.forEach(function (layer) { map.removeLayer(layer); });
+    map.__rainalertMark = null;
   }
 
   /* How the timeline puts a frame on the map: `show(url, bounds)` and `hide()`. This one is a
@@ -535,6 +559,7 @@
 
   global.RainRadar = {
     createMap: createMap, basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon,
-    mark: mark, locateControl: locateControl, legendControl: legendControl, PIN_SVG: PIN_SVG
+    mark: mark, unmark: unmark, locateControl: locateControl, legendControl: legendControl,
+    PIN_SVG: PIN_SVG
   };
 })(window);

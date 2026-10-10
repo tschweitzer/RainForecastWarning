@@ -204,7 +204,7 @@ def payload_for(message: OutboundMessage) -> bytes:
     object in the notification's `data` so `notificationclick` knows where to go.
 
     No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `url`, and settings
-    and unsubscribing live on the settings page only.
+    and unsubscribing live in the settings on the start page only (D-67).
     """
     body = json.dumps(
         {

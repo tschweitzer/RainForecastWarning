@@ -637,7 +637,7 @@ def test_the_liveness_run_sends_once_and_records_it(db, settings):
         assert len(sent_messages) == 1
         assert sent_messages[0].channel == "webpush"
         # Tapping it opens the settings page; it carries no buttons (D-64).
-        assert sent_messages[0].click_url.endswith("/manage")
+        assert sent_messages[0].click_url.endswith("/#einstellungen")
         # And now nobody is due, because the send was recorded.
         assert due_for_liveness(session, settings) == []
 
@@ -977,7 +977,7 @@ def test_the_confirmation_page_speaks_to_the_channel_that_confirmed(db, settings
     assert "Knopf \u201aEinstellungen\u2018" in body or "Einstellungen" in body
 
 
-def test_the_settings_page_offers_a_way_out(db, settings):
+def test_the_settings_offer_a_way_out(db, settings):
     """Since D-45 the only one on push: a notification body is plain text nothing linkifies, so the
     "Abmelden:" URL email still carries cannot be tapped there."""
     from fastapi.testclient import TestClient
@@ -986,7 +986,7 @@ def test_the_settings_page_offers_a_way_out(db, settings):
     from rainalert.notify import ConsoleNotifier
 
     client = TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
-    body = page_source(client, "/manage")
+    body = page_source(client, "/")
     assert 'id="delete"' in body
     assert 'id="delete-yes"' in body
     # Two steps: a single mis-tap next to "Sitzung beenden" must not delete an account.

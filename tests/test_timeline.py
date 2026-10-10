@@ -197,7 +197,7 @@ def test_every_inline_script_carries_the_csp_nonce(client):
     a header exists."""
     import re
 
-    for path in ("/", "/manage"):
+    for path in ("/",):
         page = client.get(path)
         assert page.status_code == 200, path
         policy = page.headers["content-security-policy"]
@@ -416,7 +416,6 @@ def test_tiles_identify_the_page_to_the_provider(client, monkeypatch):
 def test_the_page_still_sends_no_referrer_by_default(client):
     """The override is per element. Everything else on the site keeps the strict header."""
     assert client.get("/").headers["Referrer-Policy"] == "no-referrer"
-    assert client.get("/manage").headers["Referrer-Policy"] == "no-referrer"
 
 
 def test_playback_is_slow_enough_to_read(client):
@@ -554,11 +553,13 @@ def test_a_shared_link_is_marked_so_it_can_outrank_a_stored_preference(client):
     assert 'data-window-pinned="false"' in client.get("/?hours=abc").text
 
 
-def test_the_settings_map_shows_the_window_without_offering_to_change_it(client):
-    """The settings map carries the loop so you can see what the weather is doing where you are
-    about to put the pin - not so it can be tuned. The start page is where that belongs."""
-    assert "pastHours: 12" in page_source(client, "/manage")
-    assert 'id="range"' not in client.get("/manage").text
+def test_the_settings_sit_below_the_range_picker(client):
+    """D-67: the settings are no longer a second map with its own fixed twelve-hour loop. They share
+    the start page's map - the loop, the slider and the range picker - and sit below "Zeitraum",
+    so choosing a window is the same act for a subscriber as for anyone else."""
+    body = client.get("/").text
+    assert body.index('id="range"') < body.index('id="einstellungen"')
+    assert body.index('id="map"') < body.index('id="einstellungen"')
 
 
 def test_a_rubbish_hours_parameter_still_gives_you_a_map(client):
@@ -642,7 +643,7 @@ def test_the_map_leaves_room_for_the_slider(client):
     assert "calc(min(100vw - 32px, 34rem) * 1.36)" in body
     assert "clamp(200px," in body
 
-    for path in ("/", "/manage"):
+    for path in ("/",):
         page = client.get(path).text
         assert re.search(r'<div id="map" class="radar-map"></div>', page), path
         assert re.search(r"#map \{ --map-reserve: [\d.]+rem; \}", page), (

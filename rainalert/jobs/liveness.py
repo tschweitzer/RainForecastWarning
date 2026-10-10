@@ -132,9 +132,9 @@ def liveness_message(settings: Settings, subscriber) -> OutboundMessage:
             # the notification contradicted itself inside three sentences.
             f"Sie kommt höchstens alle {days} Tage."
         ),
-        # The settings page, where changing or ending the subscription lives. No buttons on the
-        # notification itself (D-64).
-        click_url=f"{settings.public_base_url.rstrip('/')}/manage",
+        # The settings, where changing or ending the subscription lives - on the start page since
+        # D-67. No buttons on the notification itself (D-64).
+        click_url=f"{settings.public_base_url.rstrip('/')}/#einstellungen",
         push_p256dh=subscriber.push_p256dh,
         push_auth=subscriber.push_auth,
         # The one message here that does not deserve to wake a sleeping phone, and the one that can

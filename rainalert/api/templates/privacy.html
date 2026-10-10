@@ -14,7 +14,7 @@
      deliberately not a feature with a name - to the reader they are simply subscribed. #}
   <li>Bei Push: der öffentliche Teil eines Schlüssels, den dein Browser beim Bestätigen erzeugt.
       Den privaten Teil behält dein Browser; damit erkennen wir ihn als den angemeldeten Browser,
-      wenn du deine Einstellungen öffnest. Dafür ist er erforderlich (§ 25 Abs. 2 Nr. 2 TDDDG), und
+      wenn du diese Website öffnest, und zeigen dir deine Einstellungen. Dafür ist er erforderlich (§ 25 Abs. 2 Nr. 2 TDDDG), und
       er verschwindet, wenn du dich abmeldest oder die Websitedaten löschst.</li>
   <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
       der Einwilligung.</li>
@@ -45,8 +45,8 @@ Kartenserver{% if vector_tile_host == 'vector.openstreetmap.org' %} der OpenStre
 endif %} (<code>{{ vector_tile_host or raster_tile_host }}</code>){% if vector_tile_host and
 raster_tile_host %}, und nur wenn dein Browser diese Karte nicht darstellen kann, stattdessen von
 <code>{{ raster_tile_host }}</code>{% endif %}. Dabei sieht der Kartenserver deine IP-Adresse und
-welchen Kartenausschnitt du ansiehst – auf der Seite „Einstellungen“ ist das die Gegend um deinen
-Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber nicht von welcher
+welchen Kartenausschnitt du ansiehst – ist dieser Browser angemeldet, zeigt die Startseite die
+Gegend um deinen Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber nicht von welcher
 Seite und nichts aus einem Link. Wir selbst geben ihm keine Daten weiter, und es werden dafür
 keine Cookies gesetzt.{% if vector_tile_host == 'vector.openstreetmap.org' %} Für diesen Server gilt die
 <a href="https://wiki.osmfoundation.org/wiki/Privacy_Policy">Datenschutzerklärung der OpenStreetMap
@@ -61,9 +61,10 @@ Foundation</a>.{% endif %}</p>
 <h2>Löschen</h2>
 {# Named both routes. Saying only "in jeder Warnung" made the deletion right look like it opens
    only when it rains, which on the page that documents that right is the worst place for it: in a
-   dry spell there is no warning, and /manage is in the nav of every page. #}
-<p>Bei Push: öffne „Einstellungen“ (unten auf jeder Seite oder über den Knopf in jeder Warnung) und
-wähle dort „Abmelden und meine Daten löschen“. Bei E-Mail: über den Abmeldelink in jeder Mail.
+   dry spell there is no warning. Since D-67 the settings are on the start page of a subscribed
+   browser, so that is where this points. #}
+<p>Bei Push: öffne diese Website in dem Browser, mit dem du angemeldet bist – unter der Karte stehen
+deine Einstellungen – und wähle dort „Abmelden und meine Daten löschen“. Bei E-Mail: über den Abmeldelink in jeder Mail.
 Beides löscht sofort und vollständig.</p>
 
 <h2>Rechtsgrundlage</h2>

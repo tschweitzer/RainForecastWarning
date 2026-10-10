@@ -330,7 +330,7 @@ Restart the server and every message carries that address:
 
 ```
 confirmation   http://203.0.113.10:8000/confirm#a=...   (#t= in mail - D-36)
-settings link  http://203.0.113.10:8000/manage#t=...
+settings link  http://203.0.113.10:8000/#t=...
 unsubscribe    http://203.0.113.10:8000/unsubscribe#t=...
 warning taps   http://203.0.113.10:8000/#l=...
 ```
@@ -384,8 +384,8 @@ locate button, no matter what the page does.
 
 ### Changing the settings from the web page
 
-`/manage` is the settings page: threshold, lead time, radius and location, with the location
-pickable on a map. It needs no access key - reaching it always comes down to the one thing the
+The settings are on the start page, under the map (D-67): threshold, lead time, radius and
+location, with the location pickable on the map above. They need no access key - reaching it always comes down to the one thing the
 service can check, which is that a message sent to the channel arrived.
 
 There are three ways in, and only the last one involves typing anything.
@@ -393,21 +393,22 @@ There are three ways in, and only the last one involves typing anything.
 **Confirming.** Tapping the confirmation notification already proves the channel reaches you -
 the same proof a magic link gives, a few seconds earlier. On push, `POST /confirm` registers a
 device key in this browser (D-64, docs/PLAN_DEVICE_KEY.md); on email it opens the session. The page
-that follows has a button straight into the settings. A new subscriber never needs a link at all.
+that follows has a button straight into the settings - and when the service worker confirms by
+itself (D-66), the start page opens them in place. A new subscriber never needs a link at all.
 
 **Coming back** (push). The browser that confirmed keeps a device key and signs every settings
-request with it, so `/manage` simply opens - no link, no notification, no session to expire. Reached
-through the "Einstellungen" link on every page; notifications carry no buttons (D-64).
+request with it, so the start page simply shows the settings - no link, no notification, no session
+to expire. Notifications carry no buttons (D-64).
 
 Locally, the key is bound to `PUBLIC_BASE_URL`'s origin: open the site at exactly that address -
 `http://localhost:8000` and `http://127.0.0.1:8000` are different origins - or every signature fails
 and the page quietly falls back to the link.
 
-**The form on `/manage`**, for a new device or a cleared history: on email, give the address and
-the link is sent. On push there is nothing to give - the endpoint is 200-odd characters the reader
-has never seen - so the page reads the browser's own subscription instead and offers one button,
-"Link an diesen Browser schicken". A browser with neither a subscription nor the email channel is
-told plainly that it cannot be helped from there, because it cannot.
+**Asking for a link**, for a new device or a cleared history: on email, "Schon per E-Mail
+angemeldet?" under the signup form takes the address and the link is sent. On push there is nothing
+to give - the endpoint is 200-odd characters the reader has never seen - so a browser that holds a
+subscription but no key is shown "Dieser Browser ist angemeldet" and one button, "Einstellungen
+öffnen", which sends the link to that browser. A browser with neither is simply shown the signup.
 
 #### If the browser's site data is gone
 
@@ -422,7 +423,7 @@ is sent to the dead endpoint and the push service answers 410 - within days if i
 otherwise at the next weekly liveness run (D-46).
 
 
-1. Open `/manage` and delete the subscription.
+1. Open the start page and, under "Einstellungen", delete the subscription.
 2. Sign up again.
 
 That mints a topic in a browser session the other party is not in, so they never learn it, and
@@ -430,11 +431,11 @@ the old one stops being published to. What it costs you is retyping the location
 lead time and radius - which is the only thing a rotate button would have saved.
 
 ```sh
-make serve                      # then open http://localhost:8000/manage
+make serve                      # then open http://localhost:8000/
 make outbox                     # the link it sent, decoded
 ```
 
-The link looks like `…/manage#t=<token>`. **The token is in the fragment on purpose:** a fragment
+The link looks like `…/#t=<token>`. **The token is in the fragment on purpose:** a fragment
 is never sent to the server, so unlike `?token=` it cannot land in a request log or a `Referer`
 header (SECURITY_REVIEW.md F-4/F-8). The page reads it, trades it for a session cookie, and
 erases it from the address bar. It is good for 15 minutes and **once** - opening the same link
@@ -510,7 +511,7 @@ Limits and failure modes:
   will not notice; a loop will.
 
 **If the access key is lost, there is no way to get it back.** It is stored hashed and displayed
-exactly once, and nothing re-issues it. That is what `/manage` is for: it asks for a fresh link
+exactly once, and nothing re-issues it. That is what the settings are for: it asks for a fresh link
 on the channel instead, so a lost key no longer means a lost subscription. The key still matters
 for anything talking to the API directly - a script, or the app that does not exist yet - and for
 that case, while developing, go around the API instead:

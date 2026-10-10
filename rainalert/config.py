@@ -296,7 +296,7 @@ class Settings(BaseSettings):
     transactional_mail_cap_per_day: int = 50
     rate_limit_retention_days: int = 7
 
-    # --- Self-service settings page (§11.2) ----------------------------------------------------
+    # --- Self-service settings (§11.2; on the start page since D-67) ----------------------------
     #: How long a magic link works. Short, because it is a bearer credential to someone's home
     #: coordinates sitting in their inbox; single use on top of that (tokens.py).
     manage_link_ttl_minutes: int = 15

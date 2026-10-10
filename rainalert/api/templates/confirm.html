@@ -137,7 +137,7 @@ noch einmal direkt aus der Nachricht.</p>
      script re-runs, the token is never read, and nothing happens. The signup is then never
      confirmed and is purged after `unconfirmed_purge_hours` without the reader ever learning why.
 
-     Rarer than the same trap on `/manage`, which was reported from the field, and costlier when it
+     Rarer than the same trap on the old settings page, which was reported from the field, and costlier when it
      lands. Every page the worker can send anyone to needs this; `tests/test_pages.py` enumerates
      them from the click_urls rather than trusting anyone to remember. */
   window.addEventListener('hashchange', readTheToken);

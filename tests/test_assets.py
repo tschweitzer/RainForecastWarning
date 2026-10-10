@@ -27,7 +27,7 @@ def client(db, tmp_path):
     return TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
 
 
-@pytest.mark.parametrize("path", ["/", "/manage", "/confirm", "/privacy"])
+@pytest.mark.parametrize("path", ["/", "/confirm", "/privacy"])
 def test_every_page_asks_for_the_current_version(client, path):
     """A bare `/static/x.js` in a page is the bug again: cached on a guess, kept after a deploy."""
     page = client.get(path).text

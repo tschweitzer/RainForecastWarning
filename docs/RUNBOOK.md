@@ -393,15 +393,16 @@ Reported instances, for shape recognition:
 | Page | Symptom |
 | --- | --- |
 | `/` | A second warning opened the country view, or stayed on the first warning's place |
-| `/manage` | "Link an diesen Browser senden", stay on the page, tap the notification — nothing |
+| `/manage` (now `/#t=`, D-67) | "Link an diesen Browser senden", stay on the page, tap the notification — nothing |
 | `/confirm` | Found while fixing the above, unreported. Costlier: a signup that is never confirmed is purged after `unconfirmed_purge_hours` and the reader is never told why |
 
 If a fourth page ever receives a token, it needs the same three lines. Two things make a naive fix
 insufficient, both learned the hard way:
 
-* **Re-running the page's bootstrap must be safe.** `manage.html` builds a map (MapLibre, or Leaflet as the fallback), and
-  `L.map()` on an already-initialised container throws `Map container is already initialized`, which
-  kills the rest of the handler. `buildMap()` returns early and re-places the pin instead.
+* **Re-running the page's bootstrap must be safe.** The old settings page built a map of its own,
+  and `L.map()` on an already-initialised container throws `Map container is already initialized`,
+  which killed the rest of the handler. Since D-67 the settings use the start page's one map and
+  only move its pin (`RainPage.place` in signup.js), so a second `#t=` link re-places the pin.
 * **The re-entry guard must queue, not discard.** A flag that simply returns while a run is in
   flight drops a fragment that arrives during a slow redeem — the same "nothing happened", rarer and
   harder to report. `restart()` schedules exactly one more pass.
@@ -641,7 +642,7 @@ Cloud Shell with `cloud-sql-proxy` is the other clean option if a real psql prom
 
 ## 3c. The vector map
 
-The start page and the settings page draw their maps with MapLibre on OpenStreetMap's vector
+The start page (and the settings on it, D-67) draws its map with MapLibre on OpenStreetMap's vector
 tiles (DESIGN.md D-58, the default since D-59). Leaflet with raster tiles (`MAP_TILE_URL`) is now
 only the fallback.
 
@@ -666,8 +667,8 @@ only the fallback.
     the styles against the new schema (`scripts/map-style/`, check `@versatiles/style` supports
     it), test, and change `vector_tile_url`.
   - Never prefetch or bulk-download their tiles, and never put a caching proxy in front.
-- **Privacy:** the tile server sees each visitor's IP and map area - on the settings page, the area
-  around their warning location. The privacy page names the configured hosts; change them and it
+- **Privacy:** the tile server sees each visitor's IP and map area - for a subscribed browser, the
+  area around their warning location, on every visit to the start page (D-67). The privacy page names the configured hosts; change them and it
   follows by itself.
 - **Changing the map's look:** the styles are generated, not hand-edited. `scripts/map-style/`
   builds `rainalert/api/static/map/gray.json` and `gray-dark.json` (the dark one is lightened
@@ -707,14 +708,15 @@ The migration handles this correctly in both directions — it deletes the `webp
 down, because the older schema has nowhere to put their keys. It is the ordering that has to be
 right, and it is the opposite of the usual "deploy, then migrate".
 
-### Device keys: the settings page without a link
+### Device keys: the settings without a link
 
 Since D-64 a push subscriber's browser signs its settings requests with a device key it registered
 when it confirmed (docs/PLAN_DEVICE_KEY.md). Expected, and not a bug:
 
-- **Settings open without any link or notification.** That is the point. The "Link an diesen
-  Browser schicken" step appears only for a browser without a key: subscribers from before the
-  release (once - the link registers a key), and browsers that cannot keep one.
+- **Settings open without any link or notification**, under the map on the start page (D-67). That
+  is the point. "Dieser Browser ist angemeldet" with an "Einstellungen öffnen" button (one link to
+  this browser) appears only for a browser without a key: subscribers from before the release (once
+  - the link registers a key), browsers that cannot keep one, and signups not yet confirmed.
 - **No session cookie, no countdown** for push subscribers. Email works as before.
 - **No sign-out button** for anyone. Only subscribing and unsubscribing exist.
 
@@ -862,12 +864,13 @@ look before the next run.
   because it measures successful *sends*. Two things bound it, and they are worth stating because
   together they make the gap smaller than it first looks:
   1. **A confirmation proves the chain once, per subscriber.** A push subscriber cannot reach
-     `confirmed_at` unless a notification was encrypted, delivered, rendered and tapped. So day-one
+     `confirmed_at` unless a push was encrypted, delivered and decrypted by this browser's service
+     worker - which since D-66 confirms by itself, so a tap is no longer part of the proof. So day-one
      breakage is impossible; what is left is *regression* — a VAPID rotation, a payload-shape change
      — after a subscriber is already confirmed.
   2. **A tap on a warning reaches the server.** Its `#l=` link is resolved by `POST /api/v1/locate`,
-     which records `subscribers.last_seen_at` (at most daily); opening the settings page with a
-     device key does too. Notifications carry no buttons any more (DESIGN.md D-64).
+     which records `subscribers.last_seen_at` (at most daily); opening the start page with a
+     device key does too, since the settings load there (D-67). Notifications carry no buttons any more (DESIGN.md D-64).
   `run_liveness` now logs `silent=<n>`: confirmed push subscribers with successful sends, no
   `last_seen_at` and no settings link ever issued. It is a smell, not an alarm — someone can simply never need
   their settings — but a number that climbs while sends succeed is the signature of this failure,

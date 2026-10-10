@@ -11,7 +11,8 @@
 {% endif %}
 
 <p>
-  <a href="/manage"><button type="button">Einstellungen öffnen</button></a>
+  {# The settings are on the start page, under the map (D-67). #}
+  <a href="/#einstellungen"><button type="button">Einstellungen öffnen</button></a>
 </p>
 <p class="hint">
   Ort, Schwelle, Vorwarnzeit und Umkreis – du bist gerade angemeldet und kommst direkt hinein.
@@ -23,11 +24,12 @@
      diesen Browser schicken" without waiting for weather. A reader who wanted to move their pin,
      or exercise deletion, in a dry spell was told to wait for rain. #}
   {# "sie", not "wieder hierher": the reader is on the "Angemeldet" page and "Einstellungen" goes to
-     /manage, so "hierher" promised a return to this page - the same class of error as the
+     the start page, so "hierher" promised a return to this page - the same class of error as the
      "Weg zurück hierher" sentence this paragraph replaced. #}
   {# Notifications carry no buttons any more and the settings open directly in this browser
-     (D-64), so there is no "we send you a notification first" to explain. #}
-  Später öffnest du sie über „Einstellungen“ auf jeder Seite.
+     (D-64), so there is no "we send you a notification first" to explain. And since D-67 they are
+     not behind a link of their own: the start page shows them to a subscribed browser. #}
+  Später findest du sie auf der Startseite unter der Karte.
   {% endif %}
 </p>
 
@@ -66,7 +68,7 @@
   {% endif %}
 </p>
 {# Tells this browser that the key it sent with the confirmation was registered, so it becomes the
-   one the settings page signs with (devicekey.js). Without one, any key left pending is dropped. #}
+   one the settings sign with (devicekey.js). Without one, any key left pending is dropped. #}
 <div id="device-key" hidden{% if key_id %} data-key-enrolled="{{ key_id }}"{% endif %}></div>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('pendingconfirm.js') }}"></script>

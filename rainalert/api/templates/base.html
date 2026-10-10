@@ -38,7 +38,7 @@
          font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
   /* 1rem on top, the same as the side gutter - the usual mobile margin, and the least that does
      not leave the headline pressed against the browser's address bar. It was 2rem, which on a
-     phone is space the map on the start and settings pages could use instead. */
+     phone is space the start page's map could use instead. */
   main { max-width: 34rem; margin: 0 auto; padding: 1rem 0 3rem; }
   h1 { font-size:1.5rem; margin:0 0 .25rem; }
   p.lede { color:var(--muted); margin-top:0; }
@@ -67,8 +67,9 @@
   @media (prefers-reduced-motion: reduce) { .spinner { animation:none; } }
   nav.site { display:flex; flex-wrap:wrap; gap:1.25rem; margin-top:2.5rem; padding-top:1rem;
              border-top:1px solid var(--line); font-size:.95rem; }
-  nav.site strong { color:var(--muted); font-weight:600; }
   footer { margin-top:1.1rem; font-size:.82rem; color:var(--muted); }
+  /* Without the navigation above it (the start page), the footer takes over its separation. */
+  footer.alone { margin-top:2.5rem; padding-top:1rem; border-top:1px solid var(--line); }
   .note { border-left:3px solid var(--accent); padding:.6rem .9rem; margin:1.25rem 0;
           background:rgba(127,127,127,.07); font-size:.94rem; }
   /* Used by every page that has a geolocation button, so it lives here rather than in
@@ -77,7 +78,7 @@
   .hint.error { color:var(--warn); }
   /* The on-map "where am I" button, for the same reason as .hint above: both the radar and the
      signup map draw one, and Leaflet already styles .leaflet-bar to match its own controls. */
-  /* The radar map on the start and the settings page: as tall as the screen allows while the
+  /* The radar map on the start page: as tall as the screen allows while the
      time slider and the timestamp under it stay on screen (D-54).
      - The middle term is the screen minus `--map-reserve`, which each page sets to what sits
        above the map plus the slider and timestamp below it. In rem, so it grows with the text.
@@ -119,31 +120,24 @@
 <body{% block body_attrs %}{% endblock %}><main>
 {% block body %}{% endblock %}
 
-{# The same three destinations on every page, in the same place, under the same rule.
+{# The way back to the start page, from every other page, in the same place.
    Before this each page invented its own: the front page was reached as "Zur Anmeldung" from
    the map, "Zur Startseite" from the settings and "Neu anmelden" after unsubscribing, while
    /confirm, /unsubscribe and /privacy offered nothing at all - a link that had expired left the
-   reader on a page with no way off it.
+   reader on a page with no way off it. Datenschutz is not here: it belongs with the imprint-ish
+   material in the footer, not among the places you go to do something.
 
-   The current page stays in the list rather than being dropped, so the set never changes shape
-   as you move around; it is marked instead. Datenschutz is not here: it belongs with the
-   imprint-ish material in the footer, not among the places you go to do something.
-
-   Two entries, not three. `Regenradar` pointed at `/map`, which no longer exists: the radar and
-   the signup form are the same page now, so a separate `Regenradar` link would be `Start` under
-   another name - and a navigation whose two entries go to one place teaches the reader that it
-   cannot be trusted. #}
+   One link, and none on the start page itself (D-67). There used to be more: `Regenradar` (the
+   radar is the start page now) and `Einstellungen` (the settings are on it too). With one page
+   left to go to, a navigation on that page would only name where the reader already is; the
+   other pages - reached from a mail, a notification or the footer - still need the way back. #}
+{% if request.url.path != '/' %}
 <nav class="site" aria-label="Seiten">
-  {% for href, label in [('/', 'Start'), ('/manage', 'Einstellungen')] %}
-    {% if request.url.path == href %}
-      <strong aria-current="page">{{ label }}</strong>
-    {% else %}
-      <a href="{{ href }}">{{ label }}</a>
-    {% endif %}
-  {% endfor %}
+  <a href="/">Start</a>
 </nav>
+{% endif %}
 
-<footer>
+<footer{% if request.url.path == '/' %} class="alone"{% endif %}>
   {# A Jinja global, so the credit cannot drift between the footer, the messages and the map's
      own legend. CC BY wants the modification indicated and this service reprojects, coarsens
      and colours the grid - see rainalert/attribution.py. #}

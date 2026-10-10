@@ -41,7 +41,7 @@ UPSTREAM_SHA256 = {
     "leaflet.css": "a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6",
 }
 
-MAP_PAGES = ("/", "/manage")
+MAP_PAGES = ("/",)
 
 
 @pytest.fixture()

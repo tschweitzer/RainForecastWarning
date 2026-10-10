@@ -31,7 +31,7 @@ function webglAvailable() {
 
 /* The map, wrapped in the handful of Leaflet-shaped calls signup.js makes. */
 function createMap(id, opts) {
-  // The start page fits Germany; the settings page opens on a place and a zoom (Leaflet's scale).
+  // The start page fits Germany; a place and a zoom (Leaflet's scale) is the other way in.
   const view0 = opts.bounds
     ? { bounds: [[opts.bounds[0][1], opts.bounds[0][0]], [opts.bounds[1][1], opts.bounds[1][0]]],
         fitBoundsOptions: { padding: opts.padding || 0 } }
@@ -116,6 +116,12 @@ function ring(view, id) {
   }
 
   return {
+    clear() {
+      pending = { type: 'FeatureCollection', features: [] };
+      view.ready(() => {
+        if (view.gl.getSource(source)) { view.gl.getSource(source).setData(pending); }
+      });
+    },
     set(lat, lon, metres) {
       pending = polygon(lat, lon, metres);
       view.ready(() => {
@@ -139,9 +145,11 @@ function ring(view, id) {
 function picker(view, opts) {
   let marker = null;
   let radius = opts.radius || 2000;
+  let off = false;   // cleared: the map's tap does nothing until code places the pin again
   const circle = ring(view, 'pick');
 
   function place(lat, lon, quiet) {
+    off = false;
     if (marker) {
       marker.setLngLat([lon, lat]);
     } else {
@@ -163,12 +171,20 @@ function picker(view, opts) {
        stops marker clicks before the map sees them; here it has to be said. */
     const target = event.originalEvent && event.originalEvent.target;
     if (target && target.closest && target.closest('.maplibregl-marker')) { return; }
+    if (off) { return; }
     place(event.lngLat.lat, event.lngLat.lng);
   });
 
   return {
     set: place,
     has: () => marker !== null,
+    // radar.js `picker().clear()` says why.
+    clear() {
+      off = true;
+      if (marker) { marker.remove(); }
+      marker = null;
+      circle.clear();
+    },
     setRadius(metres) {
       radius = metres;
       if (marker) {
@@ -189,6 +205,14 @@ function mark(view, lat, lon, radius) {
   view.marked.marker = new Marker({ element: pinElement(), anchor: 'bottom' })
     .setLngLat([lon, lat]).addTo(view.gl);
   view.marked.circle.set(lat, lon, Math.max(radius || 0, 50));
+}
+
+/* Takes a `mark` away again (radar.js `unmark` says why). */
+function unmark(view) {
+  if (!view.marked) { return; }
+  if (view.marked.marker) { view.marked.marker.remove(); }
+  view.marked.marker = null;
+  view.marked.circle.clear();
 }
 
 /* The "where am I" button, as a MapLibre control. Behaviour as radar.js `locateControl`. */
@@ -300,6 +324,6 @@ function timeline(view, opts) {
 
 if (webglAvailable() && window.RainRadar) {
   window.RainRadarGL = {
-    createMap, basemap, picker, mark, timeline, locateControl, legendControl
+    createMap, basemap, picker, mark, unmark, timeline, locateControl, legendControl
   };
 }

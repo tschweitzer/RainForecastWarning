@@ -317,149 +317,241 @@ function openOnTheWarningsPlace() {
   }).then(function (place) {
     if (!place.located) {
       // Said rather than silently ignored: a map that opens on the whole country when you
-      // expected your own street reads as broken unless it says why.
-      stale.hidden = false;
+      // expected your own street reads as broken unless it says why. Not with the settings open,
+      // whose own pin shows the place anyway.
+      stale.hidden = pageState === 'settings';
       return;
     }
-    Engine.mark(map, place.lat, place.lon, place.radius_m);
-    // 11 is what the settings map opens on - about 40 km across, enough to see which town you are
+    // With the settings open, their own pin is already there and editable; a second, fixed one
+    // on top would stay behind when it is dragged.
+    if (pageState !== 'settings') { Engine.mark(map, place.lat, place.lon, place.radius_m); }
+    // 11 is what the settings open on - about 40 km across, enough to see which town you are
     // in and to judge a shower's distance against it.
     map.setView([place.lat, place.lon], 11);
   }).catch(function () { /* the map is still a map */ });
 }
 
-/* Does this browser already hold a subscription we could send to?
+/* This browser's push subscription, if it is one we could send to - else null.
 
    Browser-side only, and it has to be: the server has no endpoint that answers "is this endpoint
-   subscribed" without a session, and adding one would be an oracle letting anyone test whether a
-   given push endpoint is registered here. So this asks the same question /manage asks, with the
-   same `sameKey` bias - a subscription bound to a different applicationServerKey is not a route
-   into anything, because every send signed with our current key is rejected forever.
+   subscribed" without proof, and adding one would be an oracle letting anyone test whether a given
+   push endpoint is registered here. A subscription bound to a different applicationServerKey is not
+   a route into anything, because every send signed with our current key is rejected forever
+   (`sameKey`).
 
    It therefore answers "this browser believes it is subscribed", not "the server has a confirmed
-   row". A signup abandoned before confirmation leaves a live browser subscription behind, and
-   that reader sees state B until the server purges it. The line state B shows is worded for
-   exactly that: it says where to go, and the settings page is where the truth is. */
-async function thisBrowserIsSubscribed() {
-  if (!pushSupported() || !VAPID_KEY) { return false; }
+   row". A signup abandoned before confirmation leaves a live browser subscription behind, and that
+   reader sees state B until the server purges it. */
+async function ownSubscription() {
+  if (!pushSupported() || !VAPID_KEY) { return null; }
   try {
     var registration = await navigator.serviceWorker.getRegistration('/');
-    if (!registration) { return false; }
+    if (!registration) { return null; }
     var subscription = await registration.pushManager.getSubscription();
-    return !!subscription && sameKey(subscription, VAPID_KEY);
+    return subscription && sameKey(subscription, VAPID_KEY) ? subscription : null;
   } catch (error) {
-    return false;
+    return null;
   }
 }
 
-/* Decide which half of the page below the map the reader gets.
+/* What the page below the map is showing: 'signup' (state A), 'subscribed' (state B: a push
+   subscription this browser cannot prove yet), 'settings' (D-67) - or null before the first
+   decision. Exactly one of the three sections is visible, and `reveal` is the only writer. */
+var pageState = null;
 
-   Fail-open, in three places, because the failure that matters is a visitor who cannot sign up:
-   the catch, the timeout, and `getRegistration` resolving to nothing all end at the signup form.
-   Only a positive answer hides it.
+/* A sentence written into the signup's own result line - "Angemeldet", "der Ort ist jetzt
+   aktualisiert" - that must survive the signup section being hidden when the page moves on to the
+   settings or to state B. `reveal` carries it into the note above them. */
+var carryNote = null;
 
-   `serviceWorker.getRegistration`, not `.ready`: `ready` never resolves when no worker is
-   registered, which is every first-time visitor - the form would have stayed hidden forever on
-   exactly the browsers it exists for.
-
-   Called at the very bottom of this script, not here, for the same reason `announceCapability()`
-   is: it reads `VAPID_KEY`, which is declared further down with `var`. `var` hoists the
-   declaration without the assignment, so running this in place read `undefined`, decided no
-   subscription could exist, and showed every returning subscriber the signup form - which is the
-   whole bug this state check was added to remove. */
-function decideSignupState() {
-  var section = document.getElementById('signup-section');
-  var already = document.getElementById('already-subscribed');
-  var settled = false;
-
-  function reveal(subscribed) {
-    if (settled) { return; }
-    settled = true;
-    section.hidden = !!subscribed;
-    already.hidden = !subscribed;
-    if (subscribed) { enableViewing(); } else { enablePicking(); }
-  }
-
-  // The floor under the whole thing. `getSubscription()` is normally a few milliseconds, but it
-  // talks to the browser's push machinery and there is no contract that it ever settles; a
-  // visitor staring at a map with nothing under it is a worse outcome than a subscriber seeing
-  // the form for a moment.
-  var guard = window.setTimeout(function () { reveal(false); }, 1500);
-
-  thisBrowserIsSubscribed().then(function (subscribed) {
-    window.clearTimeout(guard);
-    reveal(subscribed);
-  }).catch(function (error) {
-    // Still fail-open - a visitor who cannot sign up is the outcome that matters - but no longer
-    // silent. Nothing here is expected to throw, so anything that does is a bug in this file, and
-    // a bug that degrades gracefully is one nobody reports. The console is where it shows, and
-    // the browser harness collects console errors.
-    if (window.console) { window.console.error('signup state check failed', error); }
-    window.clearTimeout(guard);
-    reveal(false);
-  });
+function reveal(state) {
+  pageState = state;
+  document.getElementById('account-busy').hidden = true;
+  document.getElementById('signup-section').hidden = state !== 'signup';
+  document.getElementById('already-subscribed').hidden = state !== 'subscribed';
+  document.getElementById('einstellungen').hidden = state !== 'settings';
+  // A note from before (a deletion, a spent link) explains what the reader sees instead of the
+  // settings; once they are open, it explains nothing.
+  if (state === 'settings') { accountNote(null); }
+  if (state !== 'signup' && carryNote) { accountNote(carryNote); }
+  addLocate();
+  // The pin is for choosing a place: in the signup and in the settings. State B gets none - a pin
+  // that looks draggable would appear to move a warning location this browser cannot change yet,
+  // so one left over from the signup is taken off the map.
+  if (state === 'signup') { ensurePicker(); }
+  if (state === 'subscribed' && pick) { pick.clear(); }
 }
 
-/* The pin, and the locate button that sets it. Only ever called for a reader who is not signed
-   up: on this page a subscriber's location is not editable, because editing it here would be the
-   settings page rebuilt in a second place. */
-function enablePicking() {
-  if (!map) { return; }
+/* One picker for both states that choose a place, created on first use. A picker binds the map's
+   click for good, so the signup and the settings cannot each have their own; where a move goes is
+   decided at the moment it happens. */
+function ensurePicker() {
+  if (pick || !map) { return pick; }
   pick = Engine.picker(map, {
     radius: CONFIG.radius,
-    onChange: function (lat, lon) { setPlace(lat, lon, true); }
-  });
-
-  // On the map rather than under it: this is a map control, it belongs where a map keeps them,
-  // and here it sets the pin rather than merely showing where the device is.
-  map.addControl(Engine.locateControl({
-    onStatus: function (text, kind) {
-      if (kind === 'error' && text) {
-        var hint = document.getElementById('map-hint');
-        hint.textContent = text;
-        hint.className = 'hint error';
-      }
-    },
-    onFound: function (lat, lon) {
-      setPlace(lat, lon, false);
-      // 12 rather than the opening 5: having just asked to be found, you want to see the street,
-      // and 12 is as far as 1 km radar lets the tile layer go.
-      map.setView([lat, lon], 12);
+    onChange: function (lat, lon) {
+      if (pageState === 'settings') { window.RainSettings.moved(lat, lon); }
+      else if (pageState === 'signup') { setPlace(lat, lon, true); }
     }
-  }));
+  });
+  return pick;
 }
 
-/* The same button for a reader who is already signed up, with the half that changes a
-   subscription taken out.
-
-   It is still here, and that is the point of the distinction: "where am I on this radar" is a map
-   question, and a subscriber watching a shower approach wants it answered as much as anyone. What
-   they must not get is a pin that looks draggable, because dragging it would appear to move their
-   warning location and would not - that lives on the settings page.
-
-   `RainRadar.mark` rather than the picker's pin: nothing about it is interactive, and it replaces
-   its predecessor through `map.__rainalertMark`, so pressing the button twice leaves one marker
-   instead of a trail. The accuracy circle it draws is honest here - at 1 km radar resolution,
-   "somewhere within 2 km" and "here" look identical and only one of them is true. */
-function enableViewing() {
-  if (!map) { return; }
+/* The "where am I" button on the map, once, doing what the current state means by it: in the
+   signup and the settings it moves the pin; in state B it only shows where the device is, with
+   `RainRadar.mark`, because "where am I on this radar" is a map question everybody may ask. */
+var locateAdded = false;
+function addLocate() {
+  if (!map || locateAdded) { return; }
+  locateAdded = true;
   var banner = document.getElementById('banner');
   map.addControl(Engine.locateControl({
     onStatus: function (text, kind) {
-      // Reuses the page's banner rather than the signup form's hint, which is hidden in this
-      // state - an error message inside a hidden section is an error nobody is told about.
-      if (kind === 'error' && text) {
+      if (kind !== 'error' || !text) { return; }
+      // Next to the controls of the current state; the page's banner in state B, whose section
+      // has no hint line - an error message inside a hidden element is one nobody is told about.
+      var hint = pageState === 'signup' ? document.getElementById('map-hint')
+        : pageState === 'settings' ? document.getElementById('settings-hint') : null;
+      if (hint) {
+        hint.textContent = text;
+        hint.className = 'hint error';
+      } else {
         banner.hidden = false;
         banner.textContent = text;
       }
     },
     onFound: function (lat, lon, accuracy) {
-      banner.hidden = true;
-      Engine.mark(map, lat, lon, Math.max(accuracy || 0, 50));
-      map.setView([lat, lon], Math.max(map.getZoom(), 10));
+      if (pageState === 'signup') {
+        setPlace(lat, lon, false);
+      } else if (pageState === 'settings') {
+        ensurePicker().set(lat, lon, true);
+        window.RainSettings.moved(lat, lon);
+      } else {
+        banner.hidden = true;
+        Engine.mark(map, lat, lon, Math.max(accuracy || 0, 50));
+        map.setView([lat, lon], Math.max(map.getZoom(), 10));
+        return;
+      }
+      // 12: having just asked to be found, you want to see the street, and 12 is as far as 1 km
+      // radar lets the tile layer go.
+      map.setView([lat, lon], 12);
     }
   }));
-}// The button beside the coordinate fields, which are only on screen when Leaflet failed to
+}
+
+/* What settings.js may do to the page (see its header). */
+var RainPage = {
+  showSettings: function () {
+    reveal('settings');
+    // "The map no longer shows your place" is false from here on: the settings' pin is on it.
+    document.getElementById('stale-link').hidden = true;
+    if (window.location.hash === '#einstellungen') { scrollToSettings(); }
+  },
+  /* The subscription's own pin and circle, editable, and - when opening - zoomed in to them: 11
+     is about 40 km across, enough to see which town you are in and to judge a radius against it.
+     Never zoomed out, if the reader is already closer. */
+  place: function (lat, lon, radius, zoomIn) {
+    if (!map) { return; }
+    // A warning's pin, or a "where am I" marker, would sit on or beside this one and stay behind
+    // when it is dragged - two pins and no way to tell which is the warning location.
+    if (Engine.unmark) { Engine.unmark(map); }
+    var picker = ensurePicker();
+    picker.setRadius(radius);
+    picker.set(lat, lon, true);
+    if (zoomIn) { map.setView([lat, lon], Math.max(map.getZoom(), 11)); }
+  },
+  setRadius: function (metres) { if (pick) { pick.setRadius(metres); } },
+  hasMap: function () { return !!map; },
+  ownSubscription: ownSubscription
+};
+
+function scrollToSettings() {
+  document.getElementById('einstellungen').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+function accountNote(text) {
+  var note = document.getElementById('account-note');
+  note.textContent = text || '';
+  note.hidden = !text;
+}
+
+function within(promise, ms, fallback) {
+  return Promise.race([promise, new Promise(function (resolve) {
+    window.setTimeout(function () { resolve(fallback); }, ms);
+  })]);
+}
+
+/* Decide which state the page below the map shows (see the template).
+
+   Fail-open, because the failure that matters is a visitor who cannot sign up: a browser with no
+   push subscription is shown the signup at once, and only replaced by the settings if a session
+   turns up after all (an email subscriber). A browser that does hold something - a push
+   subscription, or a settings link in `#t=` - is shown "Einen Moment" instead of a signup form it
+   does not need, but never for long: after a few seconds without an answer it gets state B or the
+   signup, and the settings still replace that if they open later.
+
+   Queued rather than re-entered: it redeems single-use links, so two runs at once could spend one
+   link twice. A request to decide again while a run is in flight schedules exactly one more pass:
+   a flag that simply returned would drop a link that arrived during a slow redeem - one more shape
+   of "tapped the notification, nothing happened". It cannot spin: a link is erased as it is read,
+   so the extra pass finds none. */
+var deciding = false, decideAgain = false;
+async function decideSignupState() {
+  if (deciding) { decideAgain = true; return; }
+  deciding = true;
+  try {
+    do {
+      decideAgain = false;
+      await decideOnce();
+    } while (decideAgain);
+  } catch (error) {
+    // Nothing here is expected to throw, so anything that does is a bug in this file - fail open,
+    // but not silently: the console is where it shows, and the browser harness collects it.
+    if (window.console) { window.console.error('signup state check failed', error); }
+    if (pageState === null) { reveal('signup'); }
+  } finally {
+    deciding = false;
+  }
+}
+
+async function decideOnce() {
+  /* A settings link's token, read and erased before anything is awaited - replaceState, so Back
+     does not return to a URL still carrying a spent token. */
+  var hash = window.location.hash || '';
+  var token = hash.indexOf('#t=') === 0 ? decodeURIComponent(hash.slice(3)) : '';
+  if (token) {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+  var link = !!token;
+  /* `getSubscription()` is normally a few milliseconds, but there is no contract that it ever
+     settles. `serviceWorker.getRegistration`, not `.ready`, inside: `ready` never resolves when no
+     worker is registered, which is every first-time visitor. */
+  var subscription = await within(ownSubscription(), 1500, null);
+  if (pageState !== 'settings' && (link || subscription)) {
+    document.getElementById('account-busy').hidden = false;
+  } else if (pageState === null) {
+    reveal('signup');
+  }
+
+  var attempt = window.RainSettings
+    ? window.RainSettings.begin(RainPage, { token: token, session: !!subscription || EMAIL_AVAILABLE })
+    : Promise.resolve({ opened: false, note: null });
+  var outcome = await within(attempt, 8000, null);
+  if (outcome === null) {
+    // Slow, not refused: show what the page can show meanwhile, and keep waiting - inside this run,
+    // so a second link cannot start a second redemption alongside this one (one pending key slot).
+    if (pageState === null || pageState === 'signup') {
+      reveal(subscription ? 'subscribed' : 'signup');
+    }
+    outcome = await attempt;
+  }
+  document.getElementById('account-busy').hidden = true;
+  if (outcome.note) { accountNote(outcome.note); }
+  if (outcome.opened || pageState === 'settings') { return; }
+  reveal(subscription ? 'subscribed' : 'signup');
+}
+
+// The button beside the coordinate fields, which are only on screen when Leaflet failed to
 // load. With a map there is a control on it; without one, this is the only way to avoid typing
 // decimal degrees, so it does not disappear with the map - it appears with the fields.
 (function () {
@@ -734,7 +826,30 @@ function sameKey(subscription, expected) {
 
 /* Everything it reads - VAPID_KEY, pushSupported, EMAIL_AVAILABLE - is defined above by here. */
 announceCapability();
+
+/* Back from deleting a subscription (settings.js): say that it happened, once. Told through this
+   tab's sessionStorage, which another site cannot write - a URL marker could be linked by anyone. */
+(function () {
+  var key = 'rainalert.deleted';
+  var deleted = null;
+  try {
+    deleted = window.sessionStorage.getItem(key);
+    window.sessionStorage.removeItem(key);
+  } catch (error) { deleted = null; }
+  if (deleted) { accountNote('Abgemeldet. Standort und Verlauf sind gelöscht.'); }
+})();
+
 decideSignupState();
+
+/* The fragments this page answers to, besides a warning's `#l=` (handled by the map above):
+   `#t=` a settings link, `#einstellungen` the way to the settings. A change of fragment is a
+   same-document navigation, which is how they usually arrive - the service worker reuses an open
+   tab - so without this a tapped settings link would do nothing at all. */
+window.addEventListener('hashchange', function () {
+  var hash = window.location.hash || '';
+  if (hash.indexOf('#t=') === 0) { decideSignupState(); }
+  else if (hash === '#einstellungen' && pageState === 'settings') { scrollToSettings(); }
+});
 
 /* A confirmation that arrived for this browser goes through without its notification being clicked
    (D-65): the service worker keeps the link and posts it here. Taken once, then this page goes to
@@ -746,20 +861,23 @@ function confirmIfHandedOver() {
     if (url) { window.location.assign(url); }
   });
 }
-/* Usually the service worker has already confirmed by itself (D-66) and only says so: the page
-   then says it too, in place of the waiting line, and stays where it is. */
+/* Usually the service worker has already confirmed by itself (D-66) and only says so. The page
+   says it too, and since the confirmation registered this browser's key, the settings now open
+   right here (D-67) - the note above them says why they appeared. Where they cannot open (a
+   browser that could not keep a key), the line goes in place of the waiting line instead. */
+var CONFIRMED_TEXT = 'Angemeldet \u2013 ab jetzt bekommst du hier eine Benachrichtigung, wenn bei '
+  + 'dir Regen aufzieht.';
 var confirmedByWorker = false;
 function showConfirmedHere() {
   confirmedByWorker = true;
+  // Every open tab hears the worker. One already showing the settings has nothing to learn, and
+  // re-opening them would throw away whatever is being edited there.
+  if (pageState === 'settings') { return; }
+  carryNote = CONFIRMED_TEXT;
   var out = document.getElementById('result');
   out.innerHTML = '';
-  out.appendChild(el('p', 'done', 'Angemeldet \u2013 ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht.'));
-  var toSettings = el('p', 'alt');
-  var link = document.createElement('a');
-  link.href = '/manage';
-  link.textContent = 'Einstellungen \u00f6ffnen';
-  toSettings.appendChild(link);
-  out.appendChild(toSettings);
+  out.appendChild(el('p', 'done', CONFIRMED_TEXT));
+  decideSignupState();
 }
 if (window.RainPending) {
   window.RainPending.listen(function (type) {
@@ -909,14 +1027,12 @@ document.getElementById('signup').addEventListener('submit', async function (eve
        waiting for one would never resolve. The location has been updated, which is what signing up
        again from this page almost always means - somebody moved, or picked a better spot. */
     out.innerHTML = '';
-    out.appendChild(el('p', 'done', 'Dieser Browser war schon angemeldet \u2013 der Ort ist jetzt aktualisiert.'));
-    var toSettings = el('p', 'alt');
-    var link = document.createElement('a');
-    link.href = '/manage';
-    link.textContent = 'Einstellungen \u00f6ffnen';
-    toSettings.appendChild(link);
-    out.appendChild(toSettings);
+    carryNote = 'Dieser Browser war schon angemeldet \u2013 der Ort ist jetzt aktualisiert.';
+    out.appendChild(el('p', 'done', carryNote));
     settled(false);
+    // The settings, if this browser can open them: the page showed the signup because it could
+    // not tell, and the rest of this subscription is better seen than described.
+    decideSignupState();
     return;
   }
 

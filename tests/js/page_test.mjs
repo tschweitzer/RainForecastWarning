@@ -16,10 +16,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const body = fs.readFileSync(process.argv[2], 'utf8');
-/* The settings page, when given: `usesOurKey` there mirrors `sameKey` here, and two copies of a
-   comparison that decides whether a subscription is usable is exactly the pair that drifts. It is
-   still the rendered page, because manage.html still carries its script inline. */
-const managed = process.argv[3] ? fs.readFileSync(process.argv[3], 'utf8') : null;
 
 function extract(name, source = body) {
   const at = source.indexOf('function ' + name + '(');
@@ -88,32 +84,175 @@ test('a key that is not an ArrayBuffer at all is reused', () => {
   assert.equal(sameKey({ options: { applicationServerKey: KEY } }, KEY), true);
 });
 
-// --- the settings page's copy of the same decision ---
-if (managed) {
+// --- the one reader of an existing subscription (D-67) ---
+/* The settings page used to carry its own copy of this decision (`usesOurKey`), tested here for
+   agreement with `sameKey`. Since D-67 the settings are on this page and state B, the settings and
+   the signup all read the subscription through `ownSubscription`, so what is tested is that one
+   reader: it hands out only a subscription made with our key, and fails closed to null. */
+async function ownWith({ registration, key = KEY, throws = false }) {
   const box = {};
-  new Function('box', `const VAPID_KEY = ${JSON.stringify(KEY)};\n` +
-    `${extract('usesOurKey', managed)}\nbox.usesOurKey = usesOurKey;`)(box);
-  const { usesOurKey } = box;
-
-  const shapes = [
-    ['our key', { options: { applicationServerKey: bytes.buffer } }, true],
-    ['a different key', { options: { applicationServerKey: other.buffer } }, false],
-    ['a truncated key', { options: { applicationServerKey: bytes.slice(0, 32).buffer } }, false],
-    ['no options', {}, true],
-    ['options without a key', { options: {} }, true],
-    ['a null key', { options: { applicationServerKey: null } }, true],
-    ['an empty ArrayBuffer', { options: { applicationServerKey: new ArrayBuffer(0) } }, true],
-    ['a key that is not an ArrayBuffer', { options: { applicationServerKey: KEY } }, true]
-  ];
-  for (const [label, sub, want] of shapes) {
-    test(`/manage agrees with / on ${label}`, () => {
-      assert.equal(usesOurKey(sub), want);
-      // The two must not merely both be defined - they must decide the same way, or a subscription
-      // is usable on one page and dead on the other.
-      assert.equal(usesOurKey(sub), sameKey(sub, KEY));
-    });
-  }
+  const navigatorFake = {
+    serviceWorker: {
+      getRegistration: async () => {
+        if (throws) { throw new Error('boom'); }
+        return registration;
+      }
+    }
+  };
+  new Function('box', 'navigator', 'window',
+    `const VAPID_KEY = ${JSON.stringify(key)};\n${extract('keyBytes')}\n${extract('sameKey')}\n` +
+    `${extract('pushSupported')}\nasync ${extract('ownSubscription')}\nbox.own = ownSubscription;`
+  )(box, navigatorFake, { PushManager: {}, Notification: {} });
+  return box.own();
 }
+const subWith = (buffer) => ({ endpoint: 'https://push.example/x', options: { applicationServerKey: buffer } });
+const registrationWith = (sub) => ({ pushManager: { getSubscription: async () => sub } });
+const asyncResults = [];
+async function testAsync(name, fn) {
+  try { await fn(); asyncResults.push(['ok', name]); }
+  catch (e) { asyncResults.push(['FAIL', name, e.message]); }
+}
+await testAsync('a subscription made with our key is handed out', async () => {
+  const sub = subWith(bytes.buffer);
+  assert.equal(await ownWith({ registration: registrationWith(sub) }), sub);
+});
+await testAsync('a subscription made with another key is not', async () => {
+  assert.equal(await ownWith({ registration: registrationWith(subWith(other.buffer)) }), null);
+});
+await testAsync('no worker registered means no subscription', async () => {
+  assert.equal(await ownWith({ registration: undefined }), null);
+});
+await testAsync('a browser that throws means no subscription, not a broken page', async () => {
+  assert.equal(await ownWith({ registration: undefined, throws: true }), null);
+});
+await testAsync('without a VAPID key there is nothing to send to', async () => {
+  assert.equal(await ownWith({ registration: registrationWith(subWith(bytes.buffer)), key: '' }), null);
+});
+results.push(...asyncResults.splice(0));
+
+/* --- what the page shows below the map (D-67) -------------------------------------------------
+ *
+ * `decideOnce` is all async flow - a timeout racing a slow settings answer, a second link arriving
+ * mid-run, a picker left from the signup - and a test that checks the source's shape cannot see any
+ * of it. So it runs here, against a fake settings module, a fake page and timers scaled down a
+ * hundredfold (the 8 s guard becomes 80 ms). */
+function stateMachine({ subscription = null, begin, hash = '' }) {
+  const store = {};
+  const doc = { getElementById: (id) => (store[id] = store[id] || { id, hidden: true, textContent: '' }) };
+  const elements = new Proxy({}, { get: (target, id) => doc.getElementById(id) });
+  const held = { subscription };
+  const log = { replaced: [], begins: [], cleared: 0, maxActive: 0, active: 0 };
+  const win = {
+    location: { hash, pathname: '/', search: '' },
+    setTimeout: (fn, ms) => setTimeout(fn, ms / 100),
+    console: { error: () => {} },
+    RainSettings: null
+  };
+  const hist = { replaceState: (a, b, url) => { log.replaced.push(url); win.location.hash = ''; } };
+  const fakePick = { clear: () => { log.cleared++; } };
+  const box = {};
+  new Function('box', 'document', 'window', 'history', 'ownSubscriptionFake', 'fakePick',
+    `var pageState = null, deciding = false, decideAgain = false, map = null, pick = null;
+     var EMAIL_AVAILABLE = false;
+     function ownSubscription() { return Promise.resolve(ownSubscriptionFake.subscription); }
+     function addLocate() {}
+     function ensurePicker() { pick = pick || fakePick; return pick; }
+     ${extract('reveal')}
+     ${extract('accountNote')}
+     ${extract('within')}
+     async ${extract('decideSignupState')}
+     async ${extract('decideOnce')}
+     var carryNote = null;
+     var RainPage = { showSettings: function () { reveal('settings'); } };
+     box.decide = decideSignupState;
+     box.state = function () { return pageState; };
+     box.page = RainPage;`
+  )(box, doc, win, hist, held, fakePick);
+  win.RainSettings = {
+    begin: async (page, options) => {
+      log.begins.push(options);
+      log.active++; log.maxActive = Math.max(log.maxActive, log.active);
+      try { return await begin(page, options); } finally { log.active--; }
+    }
+  };
+  return { ...box, elements, log, held };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await testAsync('nobody subscribed: the signup, at once', async () => {
+  const m = stateMachine({ begin: async () => ({ opened: false, note: null }) });
+  await m.decide();
+  assert.equal(m.state(), 'signup');
+  assert.equal(m.elements['signup-section'].hidden, false);
+  assert.equal(m.elements['einstellungen'].hidden, true);
+  assert.equal(m.elements['already-subscribed'].hidden, true);
+});
+
+await testAsync('a session that turns up late replaces the signup with the settings', async () => {
+  const m = stateMachine({ begin: async (page) => { await sleep(20); page.showSettings(); return { opened: true, note: null }; } });
+  const run = m.decide();
+  await sleep(5);
+  assert.equal(m.state(), 'signup', 'fail-open: the signup is shown while asking');
+  await run;
+  assert.equal(m.state(), 'settings');
+  assert.equal(m.elements['signup-section'].hidden, true);
+  assert.equal(m.elements['einstellungen'].hidden, false);
+});
+
+await testAsync('a subscribed browser waits on "Einen Moment", not on a signup form', async () => {
+  const m = stateMachine({ subscription: {}, begin: async () => { await sleep(20); return { opened: false, note: null }; } });
+  const run = m.decide();
+  await sleep(5);
+  assert.equal(m.state(), null);
+  assert.equal(m.elements['account-busy'].hidden, false);
+  assert.equal(m.elements['signup-section'].hidden, true);
+  await run;
+  assert.equal(m.state(), 'subscribed');
+  assert.equal(m.elements['account-busy'].hidden, true);
+});
+
+await testAsync('a slow answer: state B meanwhile, and its late note still arrives', async () => {
+  const m = stateMachine({ subscription: {}, begin: async () => { await sleep(150); return { opened: false, note: 'spät' }; } });
+  const run = m.decide();
+  await sleep(110);   // past the (scaled) 8 s guard
+  assert.equal(m.state(), 'subscribed');
+  await run;
+  assert.equal(m.elements['account-note'].textContent, 'spät');
+  assert.equal(m.elements['account-note'].hidden, false);
+  assert.equal(m.elements['account-busy'].hidden, true);
+});
+
+await testAsync('a second decision while one is slow waits for it - never two redemptions at once', async () => {
+  const m = stateMachine({ subscription: {}, begin: async () => { await sleep(150); return { opened: false, note: null }; } });
+  const first = m.decide();
+  await sleep(110);   // the guard has fired; the first begin is still running
+  await m.decide();
+  await first;
+  assert.equal(m.log.maxActive, 1, 'two begin() calls overlapped');
+  assert.equal(m.log.begins.length, 2, 'the second request must still run, after the first');
+});
+
+await testAsync('a settings link is read and erased before anything is awaited', async () => {
+  let seen = null;
+  const m = stateMachine({ hash: '#t=abc%2Ddef', begin: async (page, options) => { seen = options.token; return { opened: false, note: null }; } });
+  const run = m.decide();
+  assert.deepEqual(m.log.replaced, ['/'], 'the token must leave the address bar synchronously');
+  await run;
+  assert.equal(seen, 'abc-def');
+});
+
+await testAsync('state B takes a pin left over from the signup off the map', async () => {
+  const m = stateMachine({ begin: async () => ({ opened: false, note: null }) });
+  await m.decide();
+  assert.equal(m.state(), 'signup');
+  assert.equal(m.log.cleared, 0, 'the signup keeps its pin');
+  // Signed up since, and the settings cannot open here (a browser that could not keep a key).
+  m.held.subscription = {};
+  await m.decide();
+  assert.equal(m.state(), 'subscribed');
+  assert.equal(m.log.cleared, 1, 'a draggable pin in state B would move nothing');
+});
+results.push(...asyncResults.splice(0));
 
 /* --- the remembered radar window ------------------------------------------------------------
  *

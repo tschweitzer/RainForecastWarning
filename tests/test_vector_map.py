@@ -44,17 +44,16 @@ def client(db, tmp_path):
 
 def test_without_a_tile_server_the_pages_are_plain_leaflet(db, tmp_path):
     client = make_client(db, tmp_path, vector_tile_url="")
-    for path in ("/", "/manage"):
+    for path in ("/",):
         page = client.get(path).text
         assert "maplibre" not in page and "radar-gl.js" not in page and "importmap" not in page, (
             path
         )
     assert 'data-map-engine="leaflet"' in client.get("/").text
-    assert 'var MAP_ENGINE = "leaflet";' in client.get("/manage").text
     assert client.get("/map-style/gray.json").status_code == 404
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
+@pytest.mark.parametrize("path", ["/"])
 def test_both_map_pages_load_maplibre_by_versioned_url_and_keep_leaflet(client, path):
     page = client.get(path).text
     importmap = re.search(
@@ -72,19 +71,12 @@ def test_both_map_pages_load_maplibre_by_versioned_url_and_keep_leaflet(client, 
 
 def test_each_page_asks_for_the_vector_engine(client):
     assert 'data-map-engine="vector"' in client.get("/").text
-    # The start page's script runs `defer`, after the module; the settings page's runs inline, so
-    # it must wait for the module before choosing - or a quick session reply builds Leaflet.
+    # The page's scripts run `defer`, after the module, so the engine is chosen once it has run.
+    # The settings (settings.js, D-67) build no map of their own: they use this one.
     page = client.get("/").text
     assert page.index("radar-gl.js") < page.index("signup.js")
-    manage = client.get("/manage").text
-    assert 'var MAP_ENGINE = "vector";' in manage
-    build = manage[manage.index("function buildMap()") :]
-    assert build.index("if (!parsed) {") < build.index("Engine.createMap(")
-    # The event, not readyState: 'interactive' arrives before the module has run.
-    assert (
-        "document.addEventListener('DOMContentLoaded', function () { parsed = true; });" in manage
-    )
-    assert "readyState" not in build
+    assert page.index("radar-gl.js") < page.index("settings.js")
+    assert "createMap" not in client.get("/static/settings.js").text
 
 
 @pytest.mark.parametrize("theme", ["gray", "gray-dark"])
@@ -222,7 +214,7 @@ def test_tile_requests_add_no_headers():
 
 def test_a_contact_address_is_shown_only_when_configured(db, tmp_path):
     with_contact = make_client(db, tmp_path, contact_email="rain@example.org")
-    for path in ("/", "/manage", "/privacy"):
+    for path in ("/", "/privacy"):
         assert '<a href="mailto:rain@example.org">Kontakt</a>' in with_contact.get(path).text, path
     assert "mailto:" not in make_client(db, tmp_path).get("/").text
 

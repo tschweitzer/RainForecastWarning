@@ -113,12 +113,8 @@ def test_the_pages_own_javascript_behaves(tmp_path, capsys):
     assert response.status_code == 200, "the page's script is not being served"
     script.write_text(response.text)
 
-    # Still the rendered page: manage.html carries its script inline.
-    manage = tmp_path / "manage.html"
-    manage.write_text(client.get("/manage").text)
-
     result = subprocess.run(
-        ["node", str(REPO / "tests" / "js" / "page_test.mjs"), str(script), str(manage)],
+        ["node", str(REPO / "tests" / "js" / "page_test.mjs"), str(script)],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -132,4 +128,4 @@ def test_the_pages_own_javascript_behaves(tmp_path, capsys):
     assert result.returncode == 0, (
         f"page javascript tests failed:\n{result.stdout}\n{result.stderr}"
     )
-    assert "all 29 passed" in result.stdout, result.stdout
+    assert "all 33 passed" in result.stdout, result.stdout

@@ -139,9 +139,9 @@ def unsubscribe_line(settings: Settings, subscriber_id) -> str:
     **Email only since D-45.** ntfy's clients linkified a bare URL, so this was tappable there
     without being a button. A web push notification body is plain text that nothing linkifies, so
     printing it would show the reader an exit they cannot take. The exit on push is the settings
-    page, which carries "Abmelden und Daten loeschen" for exactly this reason, reached through the
-    site's own "Einstellungen" link. Notifications carry no buttons at all (D-64): settings and
-    unsubscribing live on the settings page only.
+    section of the start page (D-67), which carries "Abmelden und meine Daten loeschen" for exactly
+    this reason. Notifications carry no buttons at all (D-64): settings and unsubscribing live
+    there only.
     """
     return f"Abmelden: {unsubscribe_url(settings, subscriber_id)}"
 
@@ -155,14 +155,15 @@ def manage_link_message(
     channel: str = "email",
     subscriber=None,
 ) -> OutboundMessage:
-    """The magic link to the settings page.
+    """The magic link to the settings (on the start page since D-67).
 
     The token rides in the URL **fragment**, not the query string, and that is the whole point of
     the shape. A fragment is never sent to the server, so it cannot appear in a request log, in a
     proxy's history or in a Referer header - which is exactly the leak F-4/F-8 describe for
     `?token=`. The page reads it from `location.hash`, trades it for a session, and erases it.
     """
-    link = f"{settings.public_base_url.rstrip('/')}/manage#t={token}"
+    # The start page, which carries the settings since D-67.
+    link = f"{settings.public_base_url.rstrip('/')}/#t={token}"
     minutes = settings.manage_link_ttl_minutes
     if channel == "email":
         text = f"""Hier geht es zu deinen Einstellungen:
@@ -284,7 +285,7 @@ def alert_message(
     is_push = subscriber.channel == Channel.WEBPUSH
 
     # The way out is printed only where it can be taken. See unsubscribe_line: on push this body
-    # is plain text nothing linkifies, and the exit is the Einstellungen button below.
+    # is plain text nothing linkifies, and the exit is in the settings on the start page (D-67).
     exit_line = "" if is_push else f"\n{unsubscribe_line(settings, subscriber.id)}\n"
     # A push body also has no room for the provenance paragraph - a notification shows two or
     # three lines before it truncates, and the attribution is on every page of the site.

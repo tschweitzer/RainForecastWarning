@@ -810,6 +810,17 @@ What changed for this finding:
   carries (IP, map area, the site's origin), nothing from the page or the subscription. The privacy
   page links the OSMF privacy policy.
 
+**Status (2026-10-10): the settings moved onto the start page** (DESIGN.md D-67). Two things
+change for the findings above, nothing new is trusted:
+
+- **Tiles:** for a subscribed browser the start page itself now opens on the warning location at
+  zoom 11 - on every visit, not only when the settings were opened. The privacy page says so.
+- **Clickjacking:** the delete control is on `/` now. Unchanged protection: `frame-ancestors 'none'`
+  is set on every page by the same middleware.
+
+`/manage` is gone (404). The redemption checks (`Sec-Fetch-Site`,
+subscription proof before the token is spent) are the API's and did not move.
+
 **Status (2026-10-09): device keys replace the session for push subscribers** (DESIGN.md D-64;
 design and three reviews in docs/PLAN_DEVICE_KEY.md). What changed for this finding:
 

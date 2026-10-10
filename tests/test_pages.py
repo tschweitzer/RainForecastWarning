@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from rainalert.api.app import create_app
 from rainalert.config import Settings
 from rainalert.notify import ConsoleNotifier, OutboundMessage
-from tests.helpers import page_source
+from tests.helpers import js_function, page_source
 
 
 @pytest.fixture()
@@ -49,16 +49,19 @@ def test_the_geolocation_helper_is_served(client):
     assert "javascript" in response.headers["content-type"]
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
-def test_every_page_with_a_locate_button_loads_the_helper(client, path):
-    assert "/static/geolocate.js" in client.get(path).text
+def test_every_page_with_a_locate_button_loads_the_helper(client):
+    assert "/static/geolocate.js" in client.get("/").text
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
-def test_the_form_pages_have_somewhere_to_show_a_failure(client, path):
+# The signup's fields and the settings' own (D-67): two forms on one page, ids prefixed apart.
+FORMS = ["", "settings-"]
+
+
+@pytest.mark.parametrize("prefix", FORMS)
+def test_the_form_pages_have_somewhere_to_show_a_failure(client, prefix):
     # Without this element the handler has nowhere to report, which is how the button came to
     # fail silently in the first place.
-    assert 'id="locate-status"' in client.get(path).text
+    assert f'id="{prefix}locate-status"' in client.get("/").text
 
 
 def test_every_map_has_an_on_map_locate_control(client, db):
@@ -80,9 +83,8 @@ def test_every_map_has_an_on_map_locate_control(client, db):
     assert "locate-control" in gl and "Zu meinem Standort" in gl
     assert "event.stopPropagation();" in gl
 
-    # Both pages call whichever engine they chose (D-59).
-    for path in ("/", "/manage"):
-        assert "Engine.locateControl(" in page_source(client, path), path
+    # The page calls whichever engine it chose (D-59) - once, for every state (D-67).
+    assert page_source(client, "/").count("Engine.locateControl(") == 1
 
 
 def enclosing_ids(markup: str, element_id: str) -> list[str]:
@@ -134,16 +136,16 @@ def enclosing_ids(markup: str, element_id: str) -> list[str]:
     return walker.found
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
-def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db, path):
+@pytest.mark.parametrize("prefix", FORMS)
+def test_a_picker_page_keeps_a_plain_locate_button_only_without_a_map(client, db, prefix):
     """With a map there is a control on it. Without one - a blocked CDN - the coordinate fields
     are all that is left, and typing decimal degrees should not be the only way through."""
-    body = client.get(path).text
-    assert 'id="locate"' in body
+    body = client.get("/").text
+    assert f'id="{prefix}locate"' in body
     # Inside the block that stays hidden until Leaflet fails, not merely somewhere after it:
     # a button beside the map would show up permanently, which is what this replaced.
-    assert "coord-fallback" in enclosing_ids(body, "locate"), path
-    assert "coord-fallback" in enclosing_ids(body, "locate-status"), path
+    assert f"{prefix}coord-fallback" in enclosing_ids(body, f"{prefix}locate"), prefix
+    assert f"{prefix}coord-fallback" in enclosing_ids(body, f"{prefix}locate-status"), prefix
 
 
 def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
@@ -201,7 +203,9 @@ def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
             )
         )
     assert targets, "no click_url targets found - has mail.py changed shape?"
-    assert targets == {"/", "/confirm", "/manage"}, (
+    # `/manage` left this set with D-67: settings links go to `/#t=` now, so `/` re-reads two
+    # fragments (`#l=` and `#t=`).
+    assert targets == {"/", "/confirm"}, (
         f"the set of notification targets changed: {targets}. Every one of them needs to re-read "
         f"its fragment - see this test's docstring - so update the expectation deliberately."
     )
@@ -213,6 +217,12 @@ def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
             f"{path} can be opened by a notification but never re-reads its fragment - a tab "
             f"already on {path} will silently ignore the token. See this test's docstring."
         )
+    # `/` receives two fragments, and one listener existing proves nothing about the other: the
+    # warning's `#l=` one would pass this for a page that ignored settings links (`#t=`).
+    signup = client.get("/static/signup.js").text
+    assert "window.addEventListener('hashchange', openOnTheWarningsPlace);" in signup
+    routing = signup[signup.rindex("window.addEventListener('hashchange'") :]
+    assert "hash.indexOf('#t=') === 0) { decideSignupState(); }" in routing, routing[:400]
 
 
 def test_the_pages_module_constants_are_const_not_var(client):
@@ -244,7 +254,8 @@ def test_the_pages_module_constants_are_const_not_var(client):
         # "oben", because on the merged page the map is above the form rather than inside it,
         # and a hint pointing at a control the reader has scrolled past has to say where it is.
         ("/", "Tippe oben in die Karte, um deinen Ort zu setzen."),
-        ("/manage", "Tippe in die Karte, um den Ort zu setzen."),
+        # The settings, on the same page below the same map since D-67.
+        ("/", "Tippe oben in die Karte, um den Ort zu setzen."),
     ],
 )
 def test_the_map_hint_names_one_gesture_and_not_both(client, db, path, hint):
@@ -339,7 +350,7 @@ def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
     """
     from rainalert.radar.overlay import INTENSITY_BANDS, legend
 
-    page = page_source(client, "/manage")
+    page = page_source(client, "/")
     for threshold, rgba, label in INTENSITY_BANDS:
         assert f'value="{threshold}"' in page, f"{label} missing from the dropdown"
         assert f"rgba({rgba[0]},{rgba[1]},{rgba[2]}," in page
@@ -350,7 +361,7 @@ def test_the_dropdown_and_the_map_legend_come_from_one_source(client):
     # The rendered page only: `page_source` would pull in radar.js, which contains "mm/h" in a
     # code path that formats a tooltip - a true statement about the source and a false one about
     # what the reader is shown. This assertion is about the reader.
-    assert "mm/h" not in client.get("/manage").text
+    assert "mm/h" not in client.get("/").text
     # The same list the map draws its legend from.
     assert [b["from_mm_5min"] for b in legend()] == [t for t, _, _ in INTENSITY_BANDS]
 
@@ -429,7 +440,7 @@ def test_there_is_only_one_opacity(client):
     assert "opacity: opts.layerOpacity" in module
     assert "opacity: 0.75" not in module
     # And every page must hand it the real value rather than typing one of its own.
-    for path in ("/", "/manage"):
+    for path in ("/",):
         page = page_source(client, path)
         assert "layerOpacity" in page
         assert "opacity: 0.75" not in page
@@ -517,20 +528,24 @@ def test_the_settings_page_has_no_sign_out_control(client):
     """Subscribed or not: the only account controls are subscribing and unsubscribing
     (PLAN_DEVICE_KEY.md §11). With a device key a sign-out would do nothing - the next visit signs
     in again - and email sessions end on their own."""
-    page = page_source(client, "/manage")
+    page = page_source(client, "/")
     assert 'id="logout"' not in page
     assert "Sitzung auf diesem Gerät beenden" not in page
     assert "/api/v1/manage/logout" not in page
 
 
-def test_the_subscribe_page_links_to_the_settings_page(client):
-    """Someone already subscribed lands on / looking for their settings."""
-    assert 'href="/manage"' in page_source(client)
+def test_the_settings_are_on_the_start_page(client):
+    """Someone already subscribed lands on / looking for their settings - and since D-67 that is
+    where they are: a section under the map, not a link to a page of its own. Nothing links to the
+    old address any more; it only redirects, for links already out there."""
+    body = client.get("/").text
+    assert 'id="einstellungen"' in body and "<h2>Einstellungen</h2>" in body
+    for path in ("/", "/confirm", "/privacy", "/unsubscribe"):
+        assert 'href="/manage"' not in client.get(path).text, path
 
 
-@pytest.mark.parametrize("path", ["/", "/manage"])
-def test_both_maps_zoom_to_street_level(client, path):
-    assert "maxZoom: 18" in page_source(client, path)
+def test_the_map_zooms_to_street_level(client):
+    assert "maxZoom: 18" in page_source(client, "/")
 
 
 # --- the map marker ------------------------------------------------------------------------------
@@ -567,7 +582,7 @@ def test_the_policy_was_not_widened_to_fix_the_marker(client):
     That trades a drawing problem for a privacy one - an image request is a page view reported
     to a CDN - so it must stay refused, and this says so out loud.
     """
-    policy = client.get("/manage").headers["content-security-policy"]
+    policy = client.get("/").headers["content-security-policy"]
     img_src = next(part for part in policy.split(";") if part.strip().startswith("img-src"))
     assert "unpkg" not in img_src
     assert "'self'" in img_src and "data:" in img_src
@@ -581,7 +596,7 @@ def test_no_page_relies_on_a_third_party_image(client):
     tests/test_vendored_leaflet.py asserts the general form. This stays as the specific one,
     because the marker icon is exactly where it was broken before.
     """
-    for path in ("/", "/manage"):
+    for path in ("/", "/confirm", "/privacy"):
         page = client.get(path).text
         for marker in ('<img src="https://', "src: 'https://", "iconUrl"):
             assert marker not in page, f"{path} pulls an image from elsewhere"
@@ -590,7 +605,7 @@ def test_no_page_relies_on_a_third_party_image(client):
 # --- attribution (DESIGN.md 4.2) ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", ["/", "/manage", "/privacy"])
+@pytest.mark.parametrize("path", ["/", "/privacy"])
 def test_every_page_credits_dwd_and_says_the_data_was_modified(client, path):
     """CC BY 4.0 wants the source, the licence, and any modification indicated.
 
@@ -699,7 +714,7 @@ def test_the_session_cookie_secure_flag_follows_the_same_setting(db, notifier, s
         token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
         client.post("/confirm", data={"token": token})
         client.post("/api/v1/manage/link", json={"channel": "email", "address": address})
-        link = notifier.sent[-1].text.split("/manage#t=")[1].split()[0]
+        link = notifier.sent[-1].text.split("/#t=")[1].split()[0]
         response = client.post("/api/v1/manage/session", data={"token": link})
         assert ("secure" in response.headers["set-cookie"].lower()) is expect_secure, base
 
@@ -728,7 +743,7 @@ def test_a_push_payload_carries_no_buttons():
         subject="s",
         text="t",
         channel="webpush",
-        click_url="https://rain.example.invalid/manage",
+        click_url="https://rain.example.invalid/#einstellungen",
         push_p256dh="k" * 87,
         push_auth="a" * 22,
     )
@@ -738,17 +753,17 @@ def test_a_push_payload_carries_no_buttons():
 # --- the map is how a place is chosen ----------------------------------------------------
 
 
-def test_both_picker_pages_offer_a_map_and_no_coordinate_fields(client):
+@pytest.mark.parametrize("prefix", FORMS)
+def test_both_forms_offer_a_map_and_no_coordinate_fields(client, prefix):
     """Decimal degrees are not something anyone knows about where they live. The fields survive
-    only as the fallback for a failed Leaflet load, which is why they are marked hidden."""
-    for path in ("/", "/manage"):
-        body = client.get(path).text
-        assert 'id="map"' in body
-        assert 'id="coord-fallback" hidden' in body
-        # Not `required`: a required field that is hidden refuses the submit with a browser
-        # message pointing at something invisible, which reads as the form being broken.
-        fallback = body.split('id="coord-fallback"')[1].split("</div>")[0]
-        assert "required" not in fallback
+    only as the fallback for a failed map load, which is why they are marked hidden."""
+    body = client.get("/").text
+    assert 'id="map"' in body
+    assert f'id="{prefix}coord-fallback" hidden' in body
+    # Not `required`: a required field that is hidden refuses the submit with a browser
+    # message pointing at something invisible, which reads as the form being broken.
+    fallback = body.split(f'id="{prefix}coord-fallback"')[1].split("</div>")[0]
+    assert "required" not in fallback
 
 
 def test_hidden_survives_the_row_layout(client):
@@ -781,7 +796,7 @@ def test_the_picker_map_does_not_depend_on_the_radar(client):
 def test_lead_and_radius_are_sliders_with_a_readable_value(client):
     """Both have a step and a range the number field never expressed, and both are judgements
     rather than figures anyone knows - a slider shows the whole scale you are choosing on."""
-    body = page_source(client, "/manage")
+    body = page_source(client, "/")
     for field in ("lead", "radius"):
         row = body.split(f'id="{field}"')[0].rsplit("<input", 1)[-1] + f'id="{field}"'
         assert 'type="range"' in row, f"{field} is not a slider"
@@ -798,13 +813,13 @@ def test_the_hidden_coordinate_fields_carry_no_validation_constraints(client):
     dropped outside Germany produced no request at all and an empty result area. `required`
     was already gone for this reason; the range attributes were the same trap.
     """
-    for path in ("/", "/manage"):
-        body = client.get(path).text
-        # Bounded by the locate button that follows it in both templates, so the slice cannot
-        # run past the block and pick up attributes belonging to other fields.
-        fallback = body.split('id="coord-fallback"')[1].split("<button")[0]
+    body = client.get("/").text
+    for prefix in FORMS:
+        # Bounded by the locate button that follows it in both forms, so the slice cannot run
+        # past the block and pick up attributes belonging to other fields.
+        fallback = body.split(f'id="{prefix}coord-fallback"')[1].split("<button")[0]
         for attribute in ("required", 'min="', 'max="'):
-            assert attribute not in fallback, f"{path}: {attribute} on a hidden field"
+            assert attribute not in fallback, f"{prefix or 'signup'}: {attribute} on a hidden field"
 
 
 def test_a_place_outside_germany_is_refused_next_to_the_map(client):
@@ -825,7 +840,8 @@ def test_a_place_outside_germany_is_refused_next_to_the_map(client):
 def test_the_page_asks_for_permission_only_on_submit(client):
     """Asking before anyone has said what they want is how a site trains people to hit Block, and a
     blocked site cannot recover without the reader going into browser settings."""
-    body = page_source(client)
+    # signup.js alone: settings.js, which the page loads first, has submit handlers of its own.
+    body = client.get("/static/signup.js").text
     assert "Notification.requestPermission()" in body
     # The prompt lives in pushSubscription(), which the submit handler awaits. What matters is that
     # nothing calls it on load - a bare call at top level, or from a DOMContentLoaded handler, is
@@ -962,7 +978,7 @@ def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
 #: Every page a reader can land on. Listed here rather than discovered, so adding a route means
 #: deciding whether it belongs in the navigation instead of finding out later that it does not
 #: have any - which is how /confirm, /unsubscribe and /privacy became dead ends.
-EVERY_PAGE = ("/", "/manage", "/confirm", "/unsubscribe", "/privacy")
+EVERY_PAGE = ("/", "/confirm", "/unsubscribe", "/privacy")
 
 
 def test_no_shared_cache_may_keep_a_page_that_carries_a_nonce(client, db):
@@ -991,34 +1007,33 @@ def test_no_shared_cache_may_keep_a_page_that_carries_a_nonce(client, db):
         )
 
 
-def test_every_page_carries_the_same_navigation(client, db):
-    for path in EVERY_PAGE:
+OTHER_PAGES = tuple(path for path in EVERY_PAGE if path != "/")
+
+
+def test_every_other_page_links_back_to_the_start_page(client, db):
+    """D-67: one page to go to, so one link - and only where it leads somewhere else. A mail, a
+    notification or the footer can land a reader on these pages, and a page with no way off it is
+    how /confirm, /unsubscribe and /privacy used to be."""
+    for path in OTHER_PAGES:
         body = client.get(path).text
         nav = body.split('<nav class="site"')[1].split("</nav>")[0]
-        for label in ("Start", "Einstellungen"):
-            assert label in nav, f"{path} is missing {label}"
+        assert '<a href="/">Start</a>' in nav, f"{path} has no way back"
+        assert nav.count("<a ") == 1, f"{path} offers more than the way back: {nav}"
+
+
+def test_the_start_page_carries_no_navigation(client, db):
+    """On the start page a navigation could only name the page the reader is on."""
+    body = client.get("/").text
+    assert '<nav class="site"' not in body
+    # The footer takes over the separation the navigation gave it.
+    assert '<footer class="alone">' in body
 
 
 def test_the_navigation_sits_between_the_content_and_the_footer(client, db):
     """Always in the same place, so it is found by habit rather than by looking."""
-    for path in EVERY_PAGE:
+    for path in OTHER_PAGES:
         body = client.get(path).text
-        assert body.index('<nav class="site"') < body.index("<footer>"), path
-
-
-def test_the_page_you_are_on_is_marked_and_is_not_a_link(client, db):
-    """The set keeps its shape as you move around - the current entry is marked, not dropped."""
-    import re
-
-    for path, label in (("/", "Start"), ("/manage", "Einstellungen")):
-        nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
-        # Whitespace-insensitive: the assertion is about which element wraps the label, not
-        # about how Jinja happened to indent it.
-        current = re.search(r'<strong aria-current="page">\s*([^<\s]+)', nav)
-        assert current and current.group(1) == label, (
-            f"{path}: marked {current and current.group(1)}"
-        )
-        assert f'href="{path}"' not in nav, f"{path} links to itself"
+        assert body.index('<nav class="site"') < body.index("<footer"), path
 
 
 def test_the_navigation_does_not_depend_on_there_being_radar_imagery(client, db):
@@ -1032,9 +1047,9 @@ def test_the_navigation_does_not_depend_on_there_being_radar_imagery(client, db)
     """
     # This client has no overlay store configured, which is the case under test.
     assert "Noch keine Radardaten" in client.get("/static/radar.js").text
-    for path in EVERY_PAGE:
+    for path in OTHER_PAGES:
         nav = client.get(path).text.split('<nav class="site"')[1].split("</nav>")[0]
-        assert "Start" in nav and "Einstellungen" in nav, path
+        assert "Start" in nav, path
     # And the map is still on the start page, overlay store or not.
     assert 'id="map"' in client.get("/").text
 
@@ -1137,7 +1152,7 @@ def test_every_page_links_the_manifest(client):
     """Without a linked manifest iOS has no web push at all - `PushManager` simply is not there for
     a page that is not an installed web app. The link was missing from `base.html` entirely, which
     made the iPhone half of D-45 impossible, and nothing failed."""
-    for path in ("/", "/manage", "/privacy"):
+    for path in ("/", "/privacy"):
         body = client.get(path).text
         assert 'rel="manifest"' in body, f"{path} does not link the manifest"
 
@@ -1181,17 +1196,22 @@ def test_every_icon_the_manifest_names_is_served(client):
     assert "maskable" in purposes
 
 
-def test_both_pages_check_the_vapid_key_before_reusing_a_subscription(client):
+def test_every_reader_of_the_subscription_checks_the_vapid_key(client):
     """A subscription is bound to the `applicationServerKey` it was made with, and a push signed
     with any other key is refused 403 forever - invisibly, from the reader's side.
 
-    Both routes that read an existing subscription have to check: `/` before reusing one to sign up,
-    and `/manage` before offering to send a settings link to one. The signup page's comparison is
-    exercised by driving it (tests/js/page_test.mjs); this asserts that neither page has lost the
-    check, which is the failure mode that would otherwise be silent on both.
+    Every route that reads an existing subscription has to check: the signup before reusing one,
+    state B before offering to send a settings link to one, the settings before unsubscribing it.
+    Since D-67 they are one page and share one reader, `ownSubscription`, so there is one check
+    instead of two copies that could drift; settings.js must not grow a reader of its own. The
+    comparison itself is exercised by driving it (tests/js/page_test.mjs).
     """
-    assert "function sameKey(" in page_source(client)
-    assert "function usesOurKey(" in page_source(client, "/manage")
+    signup = client.get("/static/signup.js").text
+    own = js_function(signup, "ownSubscription")
+    assert "sameKey(subscription, VAPID_KEY)" in own
+    settings_js = client.get("/static/settings.js").text
+    assert "getSubscription" not in settings_js
+    assert "page.ownSubscription()" in settings_js
 
 
 @pytest.mark.parametrize("path", ["/manage/", "/privacy/", "/api/v1/subscriptions/me/"])

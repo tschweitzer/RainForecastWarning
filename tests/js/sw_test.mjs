@@ -234,7 +234,7 @@ await test('a confirmation is confirmed by the worker and announced as done', as
   assert.equal(w.shown.length, 1);
   assert.equal(w.shown[0].title, 'Erfolgreich angemeldet');
   assert.doesNotMatch(w.shown[0].options.body, /tipp|klick|best\u00e4tig/i);
-  assert.equal(w.shown[0].options.data.url, 'https://rain.example.invalid/manage');
+  assert.equal(w.shown[0].options.data.url, 'https://rain.example.invalid/#einstellungen');
   assert.deepEqual(w.posted, [{ url: 'https://rain.example.invalid/', data: { type: 'rainalert-confirmed' } }]);
 });
 

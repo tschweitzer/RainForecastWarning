@@ -128,7 +128,7 @@ def enrolled(client, notifier) -> Browser:
 
 
 def link_token(notifier) -> str:
-    return notifier.sent[-1].click_url.split("/manage#t=")[1]
+    return notifier.sent[-1].click_url.split("/#t=")[1]
 
 
 # --- the pure parts --------------------------------------------------------------------------
@@ -606,7 +606,12 @@ def test_pages_render_the_client_version_themselves(client):
         f'name="client" id="client" value="{devicekeys.CLIENT_VERSION}"'
         in client.get("/confirm").text
     )
-    assert f"body.set('client', \"{devicekeys.CLIENT_VERSION}\")" in client.get("/manage").text
+    # The start page carries the settings since D-67: the version is in its markup, and
+    # settings.js sends that, not something of its own.
+    assert f'data-device-key-client="{devicekeys.CLIENT_VERSION}"' in client.get("/").text
+    settings_js = client.get("/static/settings.js").text
+    assert "body.set('client', CLIENT);" in settings_js
+    assert "var CLIENT = data.deviceKeyClient || '';" in settings_js
     script = (
         Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "devicekey.js"
     ).read_text(encoding="utf-8")

@@ -79,6 +79,7 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-19 | Frontend: server-rendered HTML, no build step; Leaflet for the map, basemap tiles from a configured provider or none (§11.1). *Since D-59 the maps are drawn by MapLibre on vector tiles; Leaflet with raster tiles is the fallback* | Non-technical friends must be able to subscribe |
 | D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
+| D-67 | **The settings are on the start page; `/manage` is gone.** Below the map and its "Zeitraum" picker, a section "Einstellungen" carries what `/manage` carried from its map hint to "Abmelden und meine Daten löschen"; the map above shows the subscription's pin and circle, editable, zoomed in to at least 11. What the page shows below the map is decided in the browser (signup.js): the settings when this browser can prove a subscription (a device key, a settings link in `#t=`, an email session), state B ("Dieser Browser ist angemeldet" plus "Einstellungen öffnen", which sends one link to this browser) when it holds a push subscription it cannot prove yet, else the signup - with, where email is on, "Schon per E-Mail angemeldet?" for a settings link. Settings links now point at `/#t=`; the liveness ping and the worker's "Erfolgreich angemeldet" at `/#einstellungen`. `/manage` is deleted, not redirected (in development: no backward compatibility until the service is declared production-ready), so a settings link mailed before this release answers 404. The start page carries no navigation; the other pages keep one link, "Start", back to it. After the service worker confirms a signup (D-66), the settings open in place. Deleting clears the session cookie too and reloads `/`, which says "Abgemeldet" once (told through sessionStorage: a URL marker could be linked by anyone) | Requested 2026-10-10: with device keys (D-64) a subscribed browser proves itself on every request, so a separate page in front of the same map added a second address and nothing else. One page means one map, one picker and one locate control (signup.js dispatches a pin move to whichever state is shown) and one reader of the push subscription (`ownSubscription`, so the VAPID-key check exists once instead of two copies). Privacy consequence, stated on `/privacy`: a subscribed browser now shows the area around its warning location to the tile server on every visit to the start page, not only when the settings were opened; and every such visit is a signed request, which also counts as "seen" for liveness (`last_seen_at`). Verified in Chromium on Leaflet and MapLibre: signup through the worker straight into the settings, reload with a key, editing and saving the place, state B and its link in the same tab, deletion, and an email session |
 | D-66 | **The service worker confirms a push signup itself; the notification says it is done.** On a confirmation push the worker POSTs `/confirm` exactly as the confirm page would - the token, proof that this browser holds the subscription, a fresh device key (`devicekey.js`, imported into the worker) - and only then shows *Erfolgreich angemeldet - ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht* (tap: settings). Open pages are told (`rainalert-confirmed`) and say the same in place of the waiting line. If the worker cannot confirm (offline, refused, 15 s passed) it shows the old confirmation and hands the link over (D-65) | Reported 2026-10-10: after D-65 the signup completed by itself, but the notification still asked to be tapped to activate - which by then was false. No new trust: the token was decrypted by this browser and opening it is what a tap does (D-36); the same redemption checks apply (proof before the token is spent, `Sec-Fetch-Site` same-origin). Accepted residual: a confirmation that succeeds only after the 15 s bound shows the fallback as well, and the handed-over link then finds its token spent. Verified in Chromium with a real worker and a push delivered through DevTools: page open, page closed, and a worker without the subscription (fallback) |
 | D-65 | **A push confirmation completes without its notification being clicked.** The service worker keeps the confirmation link it receives (IndexedDB `rainalert-sw`/`pending`, this origin only, only `/confirm#a=` links) and posts it to open pages; the start page takes it once and goes to `/confirm`, on arrival or the next time it is opened. The confirmed page forgets the link and closes the notification. Tapping the notification still works | Reported 2026-10-10 on desktop Chrome on a Mac: clicking the confirmation did nothing, so signing up was impossible. `registration.getNotifications()` came back empty while macOS still showed the notification - Chrome had dropped it, and a click on it reaches no service worker. Nothing on the page can make that click arrive; the worker, which already holds the link, can. No new trust: the link is the same single-use token, it never leaves the browser that decrypted it, and opening it is exactly what a tap does (D-36). Verified in Chromium with a real worker and a push delivered through DevTools, page open and page reopened later |
 | D-64 | **A push subscriber's settings open with a device key, not a session; notifications carry no buttons.** The browser registers a non-extractable WebCrypto ECDSA P-256 key together with a push-delivered single-use token (the confirmation or a settings link) and signs every settings request with it (`Authorization: RainKey`, over origin, method, raw path, server time and body hash). No cookie, no CSRF value, nothing to expire; the key rotates silently once a day and dies with the subscription. Only subscribe and unsubscribe are offered - no sign-out, no word about keys. Full design and its three security reviews: docs/PLAN_DEVICE_KEY.md | The push round trip proved the right thing (only the subscribed browser can decrypt the push) but cost availability and friction: muted notifications or a push-service hiccup locked people out of their settings, including deletion, and every visit cost a push. A key bound to that same proof is as strong, is cheap to check per request, and makes a session pointless (PLAN §9), which also removes CSRF for key holders. A long-lived cookie would have done nearly as well; the key wins only against copy-the-bytes leaks (HAR files, cookie exporters). Push token redemptions now require the browser holding that subscription (endpoint or `p256dh`), checked before the token is spent, and refuse cross-site POSTs by `Sec-Fetch-Site` - which closes login CSRF too. Pages from before the release redeem as before. The notification buttons, the durable request token behind them and `/manage/request` are gone; the liveness job's "acted on nothing" signal is now `last_seen_at` (a tapped warning, an opened settings page). Push subscribers no longer get the long-lived API token. Kill switch: `DEVICE_KEY_LOGIN_ENABLED` |
@@ -345,7 +346,7 @@ Cloud Run Job: ingest ───────────────────�
 └──────────────────────────────────────────────────────────────────┘
 
 Cloud Run Service: api  (scale to zero, min-instances 0)
-  FastAPI + Jinja2:  /  /confirm  /manage  /unsubscribe  /privacy
+  FastAPI + Jinja2:  /  /confirm  /unsubscribe  /privacy   (/manage removed, D-67)
                      /api/v1/... , /healthz, /readyz, /metrics
         │                    │
         ▼                    ▼
@@ -785,10 +786,10 @@ Server-rendered Jinja2, no build step, no SPA. Pages:
   **Plus the rain timeline overlay + slider (D-20, D-22).**
 - **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
   the app later"), and the manage link.
-- **`/manage` — settings.** Threshold, lead time, radius and location, the last pickable on a
-  map centred on the stored point at zoom 11, with the radius drawn as a circle and the current
-  radar frame underneath. Reached by a magic link, not by the API token (§11.2). Pause/resume
-  and delete are still not built.
+- **Settings — on `/`, below the map (D-67).** Threshold, lead time, radius and location, the last
+  pickable on the start page's map, which then centres on the stored point at zoom 11 or closer,
+  with the radius drawn as a circle and the radar loop underneath. Shown when this browser proves
+  a subscription: a device key, a magic link, or an email session (§11.2). `/manage` is gone. Pause/resume is still not built; delete is.
 - **`/unsubscribe`** — confirmation of one-click unsubscribe.
 - **`/privacy`** — §13. There is **no `/attribution` page** and none is needed: §4.2 asks for the
   credit on the map page, the privacy page and in every alert, and the footer is on every page
@@ -1045,25 +1046,26 @@ is kept as its own option wearing the colour of the band it falls into, never sn
 neighbour: silently changing someone's threshold while showing them a settings page is worse
 than an odd-looking dropdown.
 
-### 11.2 Settings page (`/manage`)
+### 11.2 Settings (on the start page since D-67)
 
 Self-service, for the subscriber themselves. There is no admin view: nothing in this service
 needs to read someone else's coordinates, and building a page that can is a GDPR liability
 before it is a feature.
 
-**Getting in.** The page has no idea who you are when it renders - the token is in the fragment,
-so the request that fetched the page did not carry it. It asks. Three states, decided in the
-browser:
+**Getting in.** The page has no idea who you are when it renders - a link's token is in the
+fragment, so the request that fetched the page did not carry it. It asks (settings.js `begin`, in
+this order):
 
-1. No token, no session: a form asking which channel you signed up with.
-2. A token in `#t=`: it is POSTed to `/manage/session`, spent, and replaced by a cookie. The
-   fragment is erased with `replaceState` so Back does not return to a URL holding a spent token.
-3. A session: the settings form.
+1. A token in `#t=`: it is POSTed to `/manage/session`, spent, and replaced by a device key (push,
+   D-64) or a cookie. The fragment is erased with `replaceState` so Back does not return to a URL
+   holding a spent token.
+2. A device key: every request is signed, so the page asks the API directly and there is no
+   session.
+3. A cookie session: the settings with a countdown.
 
-**Since D-64, for push:** a browser holding a device key skips all three - every request it makes is
-signed, so the page asks the API directly and there is no session. The states above are what is
-left when there is no key (a subscriber from before the release, a browser that cannot keep one) and
-for email. A link redeemed in such a browser registers a key, so the link step happens once.
+Failing all three, the page shows state B when this browser holds a push subscription (one link to
+this browser registers a key, so the link step happens once), else the signup - which, where email
+is on, offers "Schon per E-Mail angemeldet?" to request a link.
 
 `POST /manage/link` answers `202` whether or not the address is known, and sends nothing to an
 **unconfirmed** subscriber - confirmation is what proves the channel reaches the person, and a

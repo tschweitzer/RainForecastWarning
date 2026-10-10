@@ -1,10 +1,14 @@
 {% extends "base.html" %}
-{# The map and the signup form on one page.
+{# The map, the signup form and the settings on one page.
 
    They were two: `/` had a small map for putting a pin in, `/map` had the radar loop. A visitor
    who had already subscribed still landed on a page whose entire purpose was to offer them a
    subscription, and the radar - the thing worth coming back for - was a separate address they had
-   to know about. `/map` is gone rather than redirected; this is it. #}
+   to know about. `/map` is gone rather than redirected; this is it.
+
+   And since D-67 the settings are here too: a subscribed browser proves itself on every request
+   (D-64), so a separate page in front of the same map added nothing but a second address. `/manage`
+   is gone, not redirected: still in development, so no address is kept alive for old links. #}
 {% block body_attrs %} data-has-overlay="{{ (has_map | default(false)) | tojson }}"
  data-tile-url="{{ settings.map_tile_url or '' }}"
  data-tile-attribution="{{ settings.map_tile_attribution or '' }}"
@@ -20,7 +24,12 @@
  {# Whether `?hours=` was given. A shared link must win over the stored preference: someone who
     sends you "look at the last 48 hours" is not asking about your settings. #}
  data-window-pinned="{{ window_pinned | tojson }}"
- data-map-engine="{{ map_engine | default('leaflet') }}"{% endblock %}
+ data-map-engine="{{ map_engine | default('leaflet') }}"
+ {# For the settings (settings.js). The client version is rendered by the server, not left to
+    devicekey.js - see confirm.html. #}
+ data-link-ttl="{{ settings.manage_link_ttl_minutes }}"
+ data-device-key-client="{{ device_key_client }}"
+ data-server-time="{{ server_time() }}"{% endblock %}
 {% block body %}
 <style>
   /* Sized by .radar-map in base.html. The reserve is what must stay on screen besides the map:
@@ -79,15 +88,50 @@
   .waiting { display:flex; gap:.6rem; align-items:center; }
   .already { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line);
              font-size:.9rem; color:var(--muted); }
+  .already summary { cursor:pointer; }
+
+  /* The settings (D-67): what /manage carried under its map. */
+  #einstellungen h2 { margin:1.5rem 0 .25rem; font-size:1.2rem; }
+  .threshold-row { display:flex; gap:.6rem; align-items:center; }
+  /* min-width:0, because a flex item will not shrink below its content by default, and a
+     select's content is its longest option ("extremer Starkregen – ab 6.0 mm/5 min"). On a 360px
+     phone that made the page wider than the screen, so the browser zoomed the whole page out. */
+  .threshold-row select { flex:1; min-width:0; padding:.6rem .7rem; font-size:1rem; border:1px solid var(--line);
+                          border-radius:8px; background:var(--bg); color:var(--fg); }
+  /* The selected band's colour, shown separately because option backgrounds are honoured by
+     some browsers and ignored by others - notably iOS Safari. This one works everywhere. */
+  .swatch { width:1.6rem; height:1.6rem; border-radius:5px; border:1px solid var(--line);
+            flex:0 0 auto; background:transparent; }
+  /* The live value belongs with the thing it labels, not in a second column. */
+  output { font-weight:400; color:var(--muted); }
+  #einstellungen input[type=range] { width:100%; accent-color:var(--accent); }
+  /* A generated address has no spaces in it, so it broke mid-token and left "· aktiv" stranded
+     on the next line. */
+  #who { overflow-wrap:anywhere; }
+  .session-end { margin-top:2rem; padding-top:1rem; border-top:1px solid var(--line);
+                 font-size:.85rem; color:var(--muted); }
+  /* Set apart from the controls above it, because it does something they do not: it deletes.
+     The rule is the separation, not decoration. */
+  .danger { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line); }
+  .danger-link { color:#b3261e; }
+  .danger #delete-confirm { margin-top:.5rem; }
+  .danger #delete-confirm .hint { margin:0 0 .6rem; }
+  /* A button, because it performs an action - but it must not look like one of the two next to
+     the form, where anything button-shaped reads as "save" or "cancel". */
+  .linklike { background:none; border:0; padding:0; margin:0; font:inherit; color:var(--accent);
+              text-decoration:underline; cursor:pointer; }
+  .ok { color:var(--accent); font-weight:600; }
 </style>
 <h1>Regenwarnung</h1>
 
 {# Above the map, because both are about the map: a radar that failed to load, and a warning's
    link that has outlived its hour. #}
 <div id="banner" class="note" hidden></div>
+{# No pointer to the settings any more: with them open, their own pin shows the place and this
+   line is hidden (signup.js); without them, there is nothing on this page that could show it. #}
 <p class="hint" id="stale-link" hidden>Dieser Link ist älter als
-  {{ settings.locate_link_ttl_minutes }} Minuten – die Karte zeigt deshalb nicht mehr deinen
-  Ort. Über <a href="/manage">Einstellungen</a> siehst du ihn jederzeit.</p>
+  {{ settings.locate_link_ttl_minutes }} Minuten – die Karte zeigt deshalb nicht mehr den Ort
+  der Warnung.</p>
 
 <div id="map" class="radar-map"></div>
 <div class="controls" id="radar-controls" hidden>
@@ -106,14 +150,130 @@
   {% endfor %}
 </nav>
 
-{# State B: this browser already holds a push subscription made with the key we sign with.
+{# Which of the states below is shown is decided in the browser (signup.js `decideSignupState`):
+   the settings when this browser can prove a subscription - a device key, a settings link, or an
+   email session - else state B when it holds a push subscription without such proof, else the
+   signup. Exactly one of them, never two.
 
-   Deliberately the only thing here. An earlier sketch offered a location map and an unsubscribe
-   button too, which is the settings page rebuilt in a second place - two screens that can
-   disagree about what someone's subscription says. The navigation already points at the real
-   one. #}
-<p class="lede" id="already-subscribed" hidden>Dieser Browser ist für Regenwarnungen angemeldet.
-  Ort, Empfindlichkeit und Abmeldung findest du in den <a href="/manage">Einstellungen</a>.</p>
+   While that is being decided for a browser that does hold something - a link to redeem, or a
+   push subscription - say so, rather than flashing a signup form at a subscriber. #}
+<p class="working" id="account-busy" hidden><span class="spinner" aria-hidden="true"></span>
+<span role="status">Einen Moment …</span></p>
+{# Why the settings did not open, or what just happened to them: a link that was already spent,
+   one that belongs to another browser, a deletion. Above whichever state follows, because it
+   explains it. #}
+<p class="note" id="account-note" hidden></p>
+
+{# Everything below the map is decided in the browser: whether this browser is subscribed, and a
+   settings link's token, which sits behind the `#` and is never sent to the server on purpose. #}
+<noscript>
+  <p class="hint error">Anmelden und Einstellungen brauchen JavaScript: ob dieser Browser angemeldet
+  ist, weiß nur der Browser selbst, und der Zugangscode eines Links steht hinter dem
+  <code>#</code>, den er absichtlich nie an den Server schickt.</p>
+</noscript>
+
+{# State B: this browser holds a push subscription made with the key we sign with, but cannot
+   prove it - subscribed before device keys existed (D-64), or a browser that cannot keep one, or
+   a signup not yet confirmed. One link to this browser registers a key, and from then on the
+   settings open here by themselves. #}
+<div id="already-subscribed" hidden>
+  <p class="lede">Dieser Browser ist für Regenwarnungen angemeldet.</p>
+  <p class="hint">Um Ort, Empfindlichkeit oder Abmeldung hier zu öffnen, schicken wir diesem
+  Browser einmal eine Benachrichtigung mit einem Link.</p>
+  <button type="button" id="link-to-browser">Einstellungen öffnen</button>
+  {# Its own status line, next to its own button: an answer further down appeared below the
+     thing that invites a second press. #}
+  <p id="link-to-browser-result" role="status"></p>
+</div>
+
+{# State C: the settings, under the map they act on (D-67). What /manage carried from its map
+   hint to "Abmelden": the map itself is the one above, which now shows this subscription's pin
+   and circle, zoomed in. #}
+<section id="einstellungen" hidden>
+  <h2>Einstellungen</h2>
+  {# Only for email: the address says whose warnings these are. For push there is nothing to
+     show - the endpoint identifies nothing to the reader. #}
+  <p class="lede" id="who" hidden></p>
+  {# Why the settings opened even though the link was spent. Separate from #settings-banner,
+     which `fill()` uses for facts about the subscription itself. #}
+  <p class="hint" id="settings-note" hidden></p>
+  <div id="settings-banner" class="note" hidden></div>
+
+  <p class="hint" id="settings-hint">Tippe oben in die Karte, um den Ort zu setzen. Der Kreis
+    zeigt den Umkreis, der ausgewertet wird.</p>
+
+  <form id="settings-form">
+    {# Only shown when no map library loaded. The map is the way to set a place - a pair of
+       decimal degrees is not something anyone knows about where they live - but "the map is
+       gone" must not also mean "your location is frozen". #}
+    <div class="row" id="settings-coord-fallback" hidden>
+      <div>
+        <label for="settings-lat">Breite</label>
+        <input type="number" id="settings-lat" step="any">
+      </div>
+      <div>
+        <label for="settings-lon">Länge</label>
+        <input type="number" id="settings-lon" step="any">
+      </div>
+      <button type="button" class="secondary" id="settings-locate">Meinen Standort verwenden</button>
+      <p id="settings-locate-status" class="hint" role="status"></p>
+    </div>
+
+    <label for="threshold">Ab wie viel Regen warnen?</label>
+    {# The options are the map's own colour bands, rendered from the server so the dropdown and
+       the legend cannot disagree about what a colour means. #}
+    <div class="threshold-row">
+      <span id="threshold-swatch" class="swatch" aria-hidden="true"></span>
+      <select id="threshold" required>
+        {% for band in bounds.intensity_bands %}
+          <option value="{{ band.from_mm_5min }}"
+                  data-rgba="rgba({{ band.rgba[0] }},{{ band.rgba[1] }},{{ band.rgba[2] }},{{ '%.2f'|format(band.rgba[3] / 255) }})">
+            {{ band.label }} – ab {{ band.from_mm_5min }} mm/5 min
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <p class="hint">Die Farben sind dieselben wie auf der Radarkarte.</p>
+
+    <label for="lead">Wie weit voraus schauen? <output id="lead-value"></output></label>
+    <input type="range" id="lead" step="{{ bounds.lead_step }}"
+           min="{{ bounds.lead_min }}" max="{{ bounds.lead_max }}">
+    <p class="hint">Je weiter voraus, desto mehr Vorwarnzeit – und desto mehr Fehlalarme. Die
+      Vorhersage reicht {{ bounds.lead_max }} Minuten.</p>
+
+    <label for="radius">Umkreis <output id="radius-value"></output></label>
+    <input type="range" id="radius" step="250" min="0" max="{{ bounds.radius_max }}">
+    <p class="hint">Das Radar hat 1 km Auflösung, unter etwa 500 m ist es immer dieselbe Zelle.</p>
+
+    <button type="submit">Speichern</button>
+  </form>
+  <p id="settings-result" role="status"></p>
+
+  {# The session countdown, for a cookie session only (email, or a browser that cannot keep a
+     device key). With a device key there is no session and nothing to count down (D-64), and the
+     script hides this. No "Sitzung beenden" either way: the only account controls here are
+     subscribing and unsubscribing (PLAN_DEVICE_KEY.md §11). #}
+  <p class="session-end" id="session-end" hidden>
+    <span id="session-left" role="status"></span>
+    <button type="button" class="linklike" id="extend" hidden>Verlängern</button>
+  </p>
+
+  {# The way out, and the only one on the push channel: a notification body is plain text
+     nothing linkifies, and notifications carry no buttons (D-64).
+
+     Two steps, not one. It deletes the location and the history, and a single mis-tap would be a
+     bad way to discover that. #}
+  <div class="danger">
+    <p><button type="button" class="linklike danger-link" id="delete">Abmelden und meine Daten
+    löschen</button></p>
+    <div id="delete-confirm" hidden>
+      <p class="hint">Standort, Regel und Verlauf werden gelöscht, und es kommen keine Warnungen
+      mehr. Das lässt sich nicht rückgängig machen – eine neue Anmeldung ist jederzeit möglich.</p>
+      <button type="button" id="delete-yes">Ja, endgültig löschen</button>
+      <button type="button" class="secondary" id="delete-no">Abbrechen</button>
+    </div>
+  </div>
+</section>
 
 {# State A: nobody is signed up on this browser.
 
@@ -205,11 +365,12 @@
          the bold permission sentence - the only thing on this page a reader cannot undo - in the
          middle of a paragraph instead of standing alone.
 
-         "Bestätigen", not "Testbenachrichtigung": what arrives is titled "Regenwarnung bestätigen"
-         with the body "Zum Aktivieren antippen", and /confirm then says "wir bestätigen deine
-         Anmeldung", so the page was the only place calling it a test. #}
-      <p class="for-push" style="margin:.6rem 0 0">Du bekommst dann eine Benachrichtigung zum
-      Bestätigen – tippe sie an, dann bist du angemeldet. Ohne Bestätigung wird die Anmeldung nach
+         No "tippe sie an" any more: since D-66 the service worker confirms by itself and the
+         notification that arrives says "Erfolgreich angemeldet". Asking for a tap promised a step
+         that no longer exists. #}
+      <p class="for-push" style="margin:.6rem 0 0">Dein Browser bestätigt die Anmeldung dann mit
+      einer Benachrichtigung – meist in wenigen Sekunden, von selbst. Ohne Bestätigung wird die
+      Anmeldung nach
       {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
       Nachrichten.</p>
 
@@ -264,6 +425,22 @@
     <button type="submit">Anmelden</button>
   </form>
   <p id="result" role="status"></p>
+
+  {# An email subscriber opens the settings through a link: in the mail, or requested here. Push
+     needs no such form - a subscribed browser shows state B or the settings instead. Collapsed,
+     because almost nobody looking at the signup form is an email subscriber. #}
+  {% if settings.email_channel_enabled %}
+  <details class="already" id="email-link">
+    <summary>Schon per E-Mail angemeldet? Link zu den Einstellungen schicken</summary>
+    <form id="link-form">
+      <label for="link-address">E-Mail</label>
+      <input type="email" id="link-address" required autocomplete="email"
+             placeholder="du@example.org">
+      <button type="submit">Link schicken</button>
+    </form>
+    <p id="link-result" role="status"></p>
+  </details>
+  {% endif %}
 </section>
 
 <link rel="stylesheet" href="{{ static_url('vendor/leaflet/leaflet.css') }}">
@@ -271,6 +448,9 @@
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('geolocate.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar.js') }}"></script>
 {% include '_map_engine.html' %}
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}" defer></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('pendingconfirm.js') }}" defer></script>
+{# Before signup.js: deferred scripts run in order, and signup.js asks settings.js first. #}
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('settings.js') }}" defer></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('signup.js') }}" defer></script>
 {% endblock %}
