@@ -6,7 +6,8 @@
 
    `take()` resolves to the link and deletes it, or to null. Only a fresh link (younger than the
    token it carries can live) to this origin's /confirm is ever returned. `listen(fn)` calls `fn`
-   when the worker posts one while the page is open. `clear()` forgets it and closes the
+   with the message type when the worker posts while the page is open: 'rainalert-confirm' for a
+   link to take, 'rainalert-confirmed' when the worker confirmed by itself (D-66). `clear()` forgets it and closes the
    confirmation notification, so a later click cannot open an already spent link. */
 (function () {
   'use strict';
@@ -76,7 +77,8 @@
   function listen(handler) {
     if (!('serviceWorker' in navigator)) { return; }
     navigator.serviceWorker.addEventListener('message', function (event) {
-      if (event.data && event.data.type === 'rainalert-confirm') { handler(); }
+      var type = event.data && event.data.type;
+      if (type === 'rainalert-confirm' || type === 'rainalert-confirmed') { handler(type); }
     });
   }
 

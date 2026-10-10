@@ -416,7 +416,11 @@ Notification Center after Chrome has dropped that notification can be clicked an
 seen for a *fresh* confirmation too: `registration.getNotifications()` in the worker's DevTools
 came back empty while macOS still showed it. That is why a confirmation no longer needs the click
 (DESIGN.md D-65): the worker hands the link to the start page, which confirms by itself, on arrival
-or the next time the site is opened. For warnings a dead click only costs the map view.
+or the next time the site is opened. Since D-66 the worker does not even wait for the page: it
+confirms by itself and then shows "Erfolgreich angemeldet", so no click is asked for at all. If a
+reader still sees the old "zum Bestätigen" notification, the worker could not confirm (offline, or
+`push redemption refused` in the log) and the hand-over took over. For warnings a dead click only
+costs the map view.
 
 ### A subscriber says they got nothing
 

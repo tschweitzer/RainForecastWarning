@@ -746,8 +746,25 @@ function confirmIfHandedOver() {
     if (url) { window.location.assign(url); }
   });
 }
+/* Usually the service worker has already confirmed by itself (D-66) and only says so: the page
+   then says it too, in place of the waiting line, and stays where it is. */
+var confirmedByWorker = false;
+function showConfirmedHere() {
+  confirmedByWorker = true;
+  var out = document.getElementById('result');
+  out.innerHTML = '';
+  out.appendChild(el('p', 'done', 'Angemeldet \u2013 ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht.'));
+  var toSettings = el('p', 'alt');
+  var link = document.createElement('a');
+  link.href = '/manage';
+  link.textContent = 'Einstellungen \u00f6ffnen';
+  toSettings.appendChild(link);
+  out.appendChild(toSettings);
+}
 if (window.RainPending) {
-  window.RainPending.listen(confirmIfHandedOver);
+  window.RainPending.listen(function (type) {
+    if (type === 'rainalert-confirmed') { showConfirmedHere(); } else { confirmIfHandedOver(); }
+  });
   confirmIfHandedOver();
 }
 
@@ -906,12 +923,12 @@ document.getElementById('signup').addEventListener('submit', async function (eve
   out.innerHTML = '';
   var waiting = el('p', 'waiting');
   waiting.appendChild(el('span', 'spinner'));
-  waiting.appendChild(el('span', null, 'Wir schicken dir gerade eine Benachrichtigung zum Best\u00e4tigen \u2013 sobald sie ankommt, geht es hier von selbst weiter. Du kannst sie auch antippen.'));
+  waiting.appendChild(el('span', null, 'Einen Moment \u2013 wir best\u00e4tigen gerade deine Anmeldung \u2026'));
   out.appendChild(waiting);
-  // No polling. When the confirmation reaches this browser the service worker posts it to this
-  // page, which then confirms by itself (D-65, `confirmIfHandedOver` at the bottom). A tap on the
-  // notification does the same. If neither happens the push never arrived, and the line below
-  // says what to do about that.
+  // No polling. When the confirmation reaches this browser the service worker confirms it and
+  // tells this page (D-66, `showConfirmedHere` at the bottom); failing that it hands the link here
+  // to confirm (D-65). If neither happens the push never arrived, and the line below says what to
+  // do about that.
   // Ends at the browser settings, not at "melde dich noch einmal an": `settled()` hides the form
   // on the next line, so that instruction named a control no longer on the page - and the reader
   // whose notification did not arrive is exactly the one who scrolls looking for it. The restart
@@ -920,4 +937,6 @@ document.getElementById('signup').addEventListener('submit', async function (eve
     + 'Pr\u00fcfe die Benachrichtigungen f\u00fcr diese Seite in den Browser-Einstellungen und fang '
     + 'dann von vorn an.'));
   settled();
+  // The worker can be quicker than the answer to this very request.
+  if (confirmedByWorker) { showConfirmedHere(); }
 });

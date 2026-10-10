@@ -1215,4 +1215,7 @@ def test_a_confirmation_does_not_depend_on_its_notification_being_clicked(client
     signup = (
         Path(__file__).resolve().parents[1] / "rainalert" / "api" / "static" / "signup.js"
     ).read_text(encoding="utf-8")
-    assert "window.RainPending.listen(confirmIfHandedOver)" in signup
+    assert "window.RainPending.listen(" in signup
+    assert "confirmIfHandedOver();" in signup
+    # D-66: usually the worker has confirmed by itself and only says so; the page says it too.
+    assert "type === 'rainalert-confirmed') { showConfirmedHere(); }" in signup

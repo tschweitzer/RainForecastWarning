@@ -51,7 +51,7 @@ def test_the_service_worker_behaves(capsys):
             print(result.stderr)
     assert result.returncode == 0, f"service worker tests failed:\n{result.stdout}\n{result.stderr}"
     # Guards the bridge itself: if the runner ever stops finding cases it must not pass silently.
-    assert "all 21 passed" in result.stdout, result.stdout
+    assert "all 24 passed" in result.stdout, result.stdout
 
 
 def test_the_worker_only_references_assets_that_exist():

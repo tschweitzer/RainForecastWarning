@@ -206,6 +206,59 @@ await test('a confirmation is handed to open pages as well as shown', async () =
   assert.deepEqual(w.posted, [{ url: 'https://rain.example.invalid/', data: { type: 'rainalert-confirm', url } }]);
 });
 
+function fakeKeys(log) {
+  return {
+    prepareRedemption: () => Promise.resolve({ client: 'dk1', endpoint: 'https://push.example/e',
+      p256dh: 'pk', device_key: 'spki' }),
+    activate: (id) => { log.push(['activate', id]); return Promise.resolve(); },
+    dropPending: () => { log.push(['dropPending']); return Promise.resolve(); }
+  };
+}
+const KEY_ID = 'A'.repeat(43);
+
+await test('a confirmation is confirmed by the worker and announced as done', async () => {
+  // D-66: the notification says what is true - signed up - rather than asking for a tap.
+  const url = 'https://rain.example.invalid/confirm#a=tok%2Dx';
+  const log = [];
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'],
+    rainKey: fakeKeys(log), fetchText: `<div id="device-key" data-key-enrolled="${KEY_ID}"></div>` });
+  await fire(w.listeners.push, { data: { json: () => ({ title: 'Regenwarnung bestätigen', url, tag: 'c' }) } });
+  assert.equal(w.fetches.length, 1);
+  assert.equal(w.fetches[0].url, '/confirm');
+  assert.equal(w.fetches[0].init.method, 'POST');
+  const body = w.fetches[0].init.body;
+  assert.equal(body.get('token'), 'tok-x');
+  assert.equal(body.get('client'), 'dk1');
+  assert.equal(body.get('device_key'), 'spki');
+  assert.deepEqual(log, [['activate', KEY_ID]]);
+  assert.equal(w.shown.length, 1);
+  assert.equal(w.shown[0].title, 'Erfolgreich angemeldet');
+  assert.doesNotMatch(w.shown[0].options.body, /tipp|klick|best\u00e4tig/i);
+  assert.equal(w.shown[0].options.data.url, 'https://rain.example.invalid/manage');
+  assert.deepEqual(w.posted, [{ url: 'https://rain.example.invalid/', data: { type: 'rainalert-confirmed' } }]);
+});
+
+await test('a confirmation the server refuses falls back to the notification and the hand-over', async () => {
+  const url = 'https://rain.example.invalid/confirm#a=tok';
+  const log = [];
+  const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'],
+    rainKey: fakeKeys(log), fetchOk: false });
+  await fire(w.listeners.push, { data: { json: () => ({ title: 'Regenwarnung bestätigen', url }) } });
+  assert.deepEqual(log, [['dropPending']]);
+  assert.equal(w.shown.length, 1);
+  assert.equal(w.shown[0].title, 'Regenwarnung bestätigen');
+  assert.deepEqual(w.posted, [{ url: 'https://rain.example.invalid/', data: { type: 'rainalert-confirm', url } }]);
+});
+
+await test('a rain warning is never posted to the confirm endpoint', async () => {
+  const log = [];
+  const w = loadWorker({ maxActions: 2, rainKey: fakeKeys(log) });
+  await fire(w.listeners.push, { data: { json: () => WARNING } });
+  assert.deepEqual(w.fetches, []);
+  assert.deepEqual(log, []);
+  assert.equal(w.shown.length, 1);
+});
+
 await test('nothing but a confirmation on our own origin is handed over', async () => {
   const w = loadWorker({ maxActions: 2, windows: ['https://rain.example.invalid/'] });
   for (const url of ['https://rain.example.invalid/#l=tok', 'https://evil.example/confirm#a=tok',

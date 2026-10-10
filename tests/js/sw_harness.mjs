@@ -61,6 +61,8 @@ export function loadWorker(options = {}) {
   const self = {
     addEventListener: (name, fn) => { listeners[name] = fn; },
     skipWaiting: () => {},
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
     registration: {
       scope,
       showNotification: (title, opts) => { shown.push({ title, options: opts }); return Promise.resolve(); }
@@ -74,13 +76,18 @@ export function loadWorker(options = {}) {
     }
   };
 
+  /* devicekey.js, as importScripts would have set it. The harness has no importScripts, so
+     without this the worker takes its "cannot confirm here" path. */
+  if (options.rainKey) self.RainKey = options.rainKey;
+
   const Notification = {};
   if ('maxActions' in options) Notification.maxActions = options.maxActions;
 
   const fetchImpl = (url, init) => {
     fetches.push({ url, init });
     if (options.fetchFails) return Promise.reject(new Error('offline'));
-    return Promise.resolve({ ok: options.fetchOk !== false });
+    return Promise.resolve({ ok: options.fetchOk !== false,
+      text: () => Promise.resolve(options.fetchText || '') });
   };
 
   // `self` is also the global inside a worker, so the source's bare `Notification` and `fetch`

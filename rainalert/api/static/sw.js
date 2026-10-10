@@ -45,30 +45,108 @@ self.addEventListener('push', function (event) {
     data = {};
   }
 
-  event.waitUntil(Promise.all([
-    handOver(data.url),
-    self.registration.showNotification(data.title || FALLBACK_TITLE, {
-      body: data.body || '',
-      icon: ICON,
-      badge: BADGE,
-      lang: 'de',
-      /* Everything the click handler needs, because it gets the notification and not the push. */
-      data: data,
-      /* No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `data.url`;
-         settings and unsubscribing live on the settings page only. */
-      /* One rain warning at a time: a second replaces the first rather than stacking. Without a
-         tag, a shower that keeps re-triggering leaves a column of near-identical notifications
-         and the reader stops reading any of them.
-
-         From the payload, because a single tag for every kind of message meant a settings link, or
-         this worker's own acknowledgement, replaced a live warning and its map link at the moment
-         the reader wanted it. Falls back to the old single tag when the sender does not say. */
-      tag: data.tag || FALLBACK_TAG,
-      renotify: true,
-      requireInteraction: false
-    })
-  ]));
+  if (!isConfirmation(data.url)) {
+    event.waitUntil(show(data));
+    return;
+  }
+  /* A signup confirmation is confirmed right here, before anything is shown (D-66), so the
+     notification can say what is true: "angemeldet", not "tap to activate". Only if that fails -
+     offline, say - does the old notification appear, together with the hand-over to the page
+     (D-65); either way the reader ends up confirmed. */
+  event.waitUntil(confirmHere(data.url).then(function (confirmed) {
+    if (!confirmed) {
+      return Promise.all([handOver(data.url), show(data)]);
+    }
+    return Promise.all([
+      tellPages({ type: 'rainalert-confirmed' }),
+      show({
+        title: 'Erfolgreich angemeldet',
+        body: 'Ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht.',
+        url: self.registration.scope + 'manage',
+        tag: data.tag
+      })
+    ]);
+  }));
 });
+
+function show(data) {
+  return self.registration.showNotification(data.title || FALLBACK_TITLE, {
+    body: data.body || '',
+    icon: ICON,
+    badge: BADGE,
+    lang: 'de',
+    /* Everything the click handler needs, because it gets the notification and not the push. */
+    data: data,
+    /* No `actions`: notifications carry no buttons (DESIGN.md D-64). A tap opens `data.url`;
+       settings and unsubscribing live on the settings page only. */
+    /* One rain warning at a time: a second replaces the first rather than stacking. Without a
+       tag, a shower that keeps re-triggering leaves a column of near-identical notifications
+       and the reader stops reading any of them.
+
+       From the payload, because a single tag for every kind of message meant a settings link, or
+       this worker's own acknowledgement, replaced a live warning and its map link at the moment
+       the reader wanted it. Falls back to the old single tag when the sender does not say. */
+    tag: data.tag || FALLBACK_TAG,
+    renotify: true,
+    requireInteraction: false
+  });
+}
+
+/* The device-key code, shared with the pages (devicekey.js): it registers this browser's key with
+   the confirmation, as the confirm page would (D-64). Guarded, because nothing may stop this worker
+   from starting - without it the confirmation simply falls back to the notification. */
+try {
+  importScripts('/static/devicekey.js');
+} catch (e) { /* confirmHere answers false */ }
+
+/* POST the confirmation from here, exactly as /confirm would: the token, proof that this browser
+   holds the subscription, and a fresh device key (D-64, D-66). Nothing new is trusted - the token
+   could only be decrypted by this browser, and opening it is what a tap does (D-36). Bounded, so a
+   slow network still leaves time to show a notification. Never rejects. */
+function confirmHere(url) {
+  var keys = self.RainKey;
+  if (!keys) { return Promise.resolve(false); }
+  var token = decodeURIComponent(url.slice(url.indexOf(CONFIRM_PATH) + CONFIRM_PATH.length));
+  var attempt = keys.prepareRedemption({ persistentOnly: true }).then(function (fields) {
+    var body = new URLSearchParams();
+    body.set('token', token);
+    Object.keys(fields).forEach(function (name) { body.set(name, fields[name]); });
+    return fetch('/confirm', { method: 'POST', body: body, credentials: 'same-origin' });
+  }).then(function (response) {
+    if (!response.ok) {
+      return keys.dropPending().then(function () { return false; });
+    }
+    return response.text().then(function (page) {
+      /* The confirmed page names the key it registered; promote ours only then. */
+      var enrolled = /data-key-enrolled="([A-Za-z0-9_-]{43})"/.exec(page);
+      var settle = enrolled ? keys.activate(enrolled[1]) : keys.dropPending();
+      return settle.then(function () { return true; });
+    });
+  }).catch(function () { return false; });
+  var timer;
+  var timeout = new Promise(function (resolve) {
+    timer = self.setTimeout(function () { resolve(false); }, 15000);
+  });
+  return Promise.race([attempt, timeout]).then(function (confirmed) {
+    self.clearTimeout(timer);
+    return confirmed;
+  });
+}
+
+function tellPages(message) {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (windows) {
+      windows.forEach(function (client) {
+        if (typeof client.postMessage === 'function') { client.postMessage(message); }
+      });
+    })
+    .catch(function () { /* nothing to tell */ });
+}
+
+function isConfirmation(url) {
+  return typeof url === 'string'
+    && url.indexOf(self.registration.scope.replace(/\/$/, '') + CONFIRM_PATH) === 0;
+}
 
 /* A confirmation does not wait for its notification to be clicked (D-65).
 
@@ -86,21 +164,10 @@ self.addEventListener('push', function (event) {
 var CONFIRM_PATH = '/confirm#a=';
 
 function handOver(url) {
-  if (typeof url !== 'string' || url.indexOf(self.registration.scope.replace(/\/$/, '') + CONFIRM_PATH) !== 0) {
-    return Promise.resolve();
-  }
+  if (!isConfirmation(url)) { return Promise.resolve(); }
   return keepPending(url)
     .catch(function () { /* the message below still reaches an open page */ })
-    .then(function () {
-      return self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    })
-    .then(function (windows) {
-      windows.forEach(function (client) {
-        if (typeof client.postMessage === 'function') {
-          client.postMessage({ type: 'rainalert-confirm', url: url });
-        }
-      });
-    })
+    .then(function () { return tellPages({ type: 'rainalert-confirm', url: url }); })
     .catch(function () { /* never at the notification's expense */ });
 }
 

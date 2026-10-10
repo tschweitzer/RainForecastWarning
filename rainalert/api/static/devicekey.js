@@ -19,6 +19,10 @@
 (function () {
   'use strict';
 
+  /* A page's `window`, or the service worker's `self`: sw.js imports this file too, to confirm a
+     signup the moment its push arrives (D-66), and a worker has no `window`. */
+  var G = typeof window !== 'undefined' ? window : self;
+
   /* The `client` value the server uses to tell this script from a page that predates it. */
   var CLIENT = 'dk1';
   var PREFIX = 'rainalert-request-v1';
@@ -33,7 +37,7 @@
   var rotation = null;      // a rotation in flight; this tab's other requests wait for it
 
   function supported() {
-    return !!(window.crypto && window.crypto.subtle && window.TextEncoder);
+    return !!(G.crypto && G.crypto.subtle && G.TextEncoder);
   }
 
   function b64url(bytes) {
@@ -44,16 +48,16 @@
 
   // ---- storage ---------------------------------------------------------------------------------
   function database() {
-    if (useMemory || !window.indexedDB) { return Promise.resolve(null); }
+    if (useMemory || !G.indexedDB) { return Promise.resolve(null); }
     if (!dbPromise) {
       dbPromise = new Promise(function (resolve) {
         /* Bounded: in some private modes and stuck profiles `open` never fires any event, and a
            page waiting on it - the confirm page holds its submit until the proof is ready - would
            wait forever (code review). After three seconds this tab carries on in memory. */
-        window.setTimeout(function () { resolve(null); }, 3000);
+        G.setTimeout(function () { resolve(null); }, 3000);
         var request;
         try {
-          request = window.indexedDB.open(DB_NAME, 1);
+          request = G.indexedDB.open(DB_NAME, 1);
         } catch (error) {
           resolve(null);
           return;
@@ -123,15 +127,15 @@
   // ---- keys --------------------------------------------------------------------------------------
   function generate() {
     var pair;
-    return window.crypto.subtle.generateKey(
+    return G.crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']
     ).then(function (generated) {
       pair = generated;
       /* The public half of a non-extractable pair is always exportable. */
-      return window.crypto.subtle.exportKey('spki', pair.publicKey);
+      return G.crypto.subtle.exportKey('spki', pair.publicKey);
     }).then(function (spki) {
       var bytes = new Uint8Array(spki);
-      return window.crypto.subtle.digest('SHA-256', bytes).then(function (hash) {
+      return G.crypto.subtle.digest('SHA-256', bytes).then(function (hash) {
         return {
           privateKey: pair.privateKey,
           spki: b64url(bytes),
@@ -184,12 +188,12 @@
   function authorization(record, method, path, bodyText) {
     var encoder = new TextEncoder();
     var t = serverNow();
-    return window.crypto.subtle.digest('SHA-256', encoder.encode(bodyText)).then(function (hash) {
+    return G.crypto.subtle.digest('SHA-256', encoder.encode(bodyText)).then(function (hash) {
       var message = [
-        PREFIX, window.location.origin, method.toUpperCase(), path, String(t),
+        PREFIX, G.location.origin, method.toUpperCase(), path, String(t),
         b64url(new Uint8Array(hash))
       ].join('\n');
-      return window.crypto.subtle.sign(
+      return G.crypto.subtle.sign(
         { name: 'ECDSA', hash: 'SHA-256' }, record.privateKey, encoder.encode(message)
       );
     }).then(function (signature) {
@@ -256,7 +260,11 @@
 
   // ---- registering --------------------------------------------------------------------------------
   function pushSubscription() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    /* In the service worker, its own registration; on a page, the one registered at '/'. */
+    if (G.registration && G.registration.pushManager) {
+      return G.registration.pushManager.getSubscription().catch(function () { return null; });
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in G)) {
       return Promise.resolve(null);
     }
     return navigator.serviceWorker.getRegistration('/').then(function (registration) {
@@ -274,7 +282,7 @@
        answers. Without an answer the fields stay empty and the server says so. */
     var subscription = Promise.race([
       pushSubscription(),
-      new Promise(function (resolve) { window.setTimeout(function () { resolve(null); }, 5000); })
+      new Promise(function (resolve) { G.setTimeout(function () { resolve(null); }, 5000); })
     ]);
     return subscription.then(function (subscription) {
       if (subscription) {
@@ -364,7 +372,7 @@
     return rotation;
   }
 
-  window.RainKey = {
+  G.RainKey = {
     CLIENT: CLIENT,
     supported: supported,
     syncFromPage: syncFromPage,
