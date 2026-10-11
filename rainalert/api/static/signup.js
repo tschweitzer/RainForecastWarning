@@ -619,13 +619,17 @@ function announceCapability() {
        length and then withdrew it with "Wir haben E-Mail für dich ausgewählt", and said "hier
        anmelden" when the Home Screen opens a fresh page with an empty form - so the one word naming
        where to act pointed at the wrong place in both configurations. */
+    /* "in Safari", explicitly: Chrome on an iPad offers no "Zum Home-Bildschirm" (reported
+       2026-10-11), so the instruction alone sent a Chrome reader looking for a menu entry that does
+       not exist. Said even to a reader already in Safari - it costs them nothing. */
     if (isApplePhone()) {
       message = EMAIL_AVAILABLE
         ? 'Wir haben E-Mail für dich ausgewählt – so bekommst du die Warnungen auch auf dem '
-          + 'iPhone und iPad. Push geht dort nur als Web-App: füge die Seite über „Teilen → Zum '
-          + 'Home-Bildschirm“ hinzu und melde dich dort an.'
-        : 'Auf iPhone und iPad geht Push nur als Web-App: füge die Seite über „Teilen → Zum '
-          + 'Home-Bildschirm“ hinzu und öffne sie von dort. Dort kannst du dich dann anmelden.';
+          + 'iPhone und iPad. Push geht dort nur als Web-App: öffne diese Seite in Safari, füge sie '
+          + 'über „Teilen → Zum Home-Bildschirm“ hinzu und melde dich dort an.'
+        : 'Auf iPhone und iPad geht Push nur als Web-App: öffne diese Seite in Safari, füge sie über '
+          + '„Teilen → Zum Home-Bildschirm“ hinzu und öffne sie von dort. Dort kannst du dich dann '
+          + 'anmelden.';
     } else {
       message = EMAIL_AVAILABLE
         ? 'Dieser Browser kann keine Push-Benachrichtigungen empfangen. Wir haben E-Mail für dich '
@@ -719,8 +723,8 @@ async function pushSubscription() {
        there. Everywhere else, offer the channel that does work if there is one. */
     if (/iPhone|iPad|iPod/.test(navigator.userAgent)
         || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) {
-      throw new Error('Auf iPhone und iPad geht das nur, wenn du die Seite über „Teilen → Zum '
-        + 'Home-Bildschirm“ hinzufügst und sie von dort öffnest.');
+      throw new Error('Auf iPhone und iPad geht das nur als Web-App: öffne diese Seite in Safari, '
+        + 'füge sie über „Teilen → Zum Home-Bildschirm“ hinzu und öffne sie von dort.');
     }
     throw new Error('Dieser Browser kann keine Push-Benachrichtigungen empfangen.'
       + (EMAIL_AVAILABLE ? ' Du kannst dich stattdessen per E-Mail anmelden.' : ''));

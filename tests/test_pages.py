@@ -885,6 +885,11 @@ def test_the_page_says_what_an_iphone_needs(client):
     caveat a reader cannot discover for themselves - the API simply is not there."""
     body = page_source(client)
     assert "Home-Bildschirm" in body
+    # And in which browser: Chrome on an iPad has no "Zum Home-Bildschirm", Safari does. Every
+    # message that gives the instruction names it.
+    signup = client.get("/static/signup.js").text
+    for instruction in signup.split("Home-Bildschirm")[:-1]:
+        assert "in Safari" in instruction[-160:], instruction[-160:]
 
 
 def test_a_finished_signup_stops_being_a_form(client):
@@ -1268,5 +1273,6 @@ def test_the_signup_button_is_never_disabled_for_good(client):
     assert signup.count(".disabled = true") == 1, "only the in-flight guard may disable the button"
     # ...and the reason it gives on an iPad names the iPad.
     assert "Auf iPhone und iPad geht das nur" in js_function(signup, "pushSubscription")
+    assert "in Safari" in js_function(signup, "pushSubscription")
     # A disabled button must look it, so the in-flight state is not mistaken for a dead page.
     assert "button:disabled {" in client.get("/").text
