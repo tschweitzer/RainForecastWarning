@@ -66,6 +66,12 @@ const CONFIG = config();
    default every visit, which is the old behaviour and fine. */
 const WINDOW_KEY = 'rainalert.windowHours';
 
+/* The radar refresh (D-68, `refreshRadar` below). Up here, before the map setup assigns them. */
+let shownHours = null;          // the window on screen, kept by the range picker
+let radarLoadedAt = 0;          // when a load last succeeded (epoch ms)
+const REFRESH_AFTER_MS = 5 * 60 * 1000;
+const MIN_SPIN_MS = 800;        // one turn, so a fast answer does not flicker
+
 
 /* A signup that has gone through is not a form any more.
  *
@@ -203,10 +209,15 @@ var Engine = null;
       controls.hidden = true;
       document.getElementById('frame-stamp').textContent = '';
     },
-    onReady: function () { controls.hidden = false; }
+    onReady: function (now) {
+      controls.hidden = false;
+      radarLoadedAt = Date.now();
+      showDataTime(now);
+    }
   });
 
   rangePicker();
+  refreshControl();
 })();
 
 /* Which window the slider opens on.
@@ -269,6 +280,7 @@ function rangePicker() {
   var buttons = [].slice.call(nav.querySelectorAll('button[data-hours]'));
   if (!buttons.length) { return; }
   nav.hidden = false;
+  shownHours = initialWindow();
 
   function mark(hours) {
     buttons.forEach(function (b) {
@@ -282,6 +294,7 @@ function rangePicker() {
       var hours = +button.dataset.hours;
       mark(hours);
       rememberWindow(hours);
+      shownHours = hours;
       /* The cursor lands on "jetzt", which `load()` does for us: it picks the frame at offset 0.
          Keeping the old slider index would be meaningless - index 40 of a 3-hour window and index
          40 of a 48-hour window are ten hours apart - and keeping the old *time* would drop a
@@ -290,6 +303,74 @@ function rangePicker() {
       radar.load(hours);
     });
   });
+}
+
+/* Refreshing the radar (D-68).
+
+   The page loads the timeline once, and a new radar cycle arrives every five minutes. An app opened
+   from the Home Screen has no reload gesture and is usually resumed rather than reopened, so it
+   went on showing whatever it had loaded hours before. Two ways out:
+
+   - the button at the end of the "Zeitraum" row, which spins until the newest frame is on screen;
+   - by itself, when the page becomes visible again and its data is older than REFRESH_AFTER_MS.
+
+   Either way: the same window, the slider back on "jetzt", playback stopped - what a range change
+   does. A refresh that fails keeps the picture that is there (radar.js `keepOnFailure`). Nothing
+   else on the page is touched: not the pin, not the settings being edited. */
+/* Its state (`shownHours`, `radarLoadedAt` and the two durations) is declared at the top of this
+   file: the map setup below assigns them while the page loads, and a `var` declared down here
+   would reset them afterwards - the hoisting trap this file has shipped three times. */
+
+function showDataTime(now) {
+  var stamp = document.getElementById('refresh-stamp');
+  if (!stamp || !now) { return; }
+  stamp.textContent = 'Stand ' + new Date(now.valid_time).toLocaleTimeString('de-DE', {
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+var refreshing = false;
+function refreshRadar() {
+  var button = document.getElementById('refresh');
+  if (!radar || refreshing) { return Promise.resolve(); }
+  refreshing = true;
+  var started = Date.now();
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.classList.add('spinning');
+  }
+  return radar.load(shownHours || initialWindow(), { keepOnFailure: true })
+    .then(function (outcome) { return outcome && outcome.ready; })
+    .catch(function () { /* radar.js has said what went wrong */ })
+    .then(function () {
+      var left = MIN_SPIN_MS - (Date.now() - started);
+      return new Promise(function (resolve) { window.setTimeout(resolve, Math.max(0, left)); });
+    })
+    .then(function () {
+      refreshing = false;
+      if (button) {
+        button.disabled = false;
+        button.removeAttribute('aria-busy');
+        button.classList.remove('spinning');
+      }
+    });
+}
+
+function refreshControl() {
+  var button = document.getElementById('refresh');
+  if (!button || !radar) { return; }
+  button.addEventListener('click', function () { refreshRadar(); });
+  /* Back in front - the app resumed, the tab shown again, or the page restored from the
+     back/forward cache - with data older than one radar cycle. Not on every glance: switching
+     away and straight back costs nothing. */
+  function onReturn() {
+    if (document.visibilityState !== 'visible') { return; }
+    if (Date.now() - radarLoadedAt < REFRESH_AFTER_MS) { return; }
+    refreshRadar();
+  }
+  document.addEventListener('visibilitychange', onReturn);
+  window.addEventListener('pageshow', function (event) { if (event.persisted) { onReturn(); } });
 }
 
 /* Tapped a warning? Centre on the place it was about.

@@ -62,6 +62,21 @@
                   background:none; border:1px solid var(--line); color:var(--muted); }
   .range button[aria-pressed="true"] { color:var(--accent); border-color:var(--accent);
                                        font-weight:600; }
+  /* At the row's right end (D-68); on a narrow phone it wraps there as a pair with its stamp. */
+  .range .refresh-wrap { margin-left:auto; display:inline-flex; align-items:center; gap:.45rem; }
+  .range .refresh-stamp { font-variant-numeric:tabular-nums; }
+  .range button.refresh { display:inline-flex; align-items:center; justify-content:center;
+                          width:2.5rem; height:2.5rem; padding:0; border-radius:50%;
+                          color:var(--accent); }
+  .range button.refresh:disabled { opacity:1; }
+  .refresh svg { width:1.3rem; height:1.3rem; fill:currentColor; }
+  .refresh.spinning svg { animation:refresh-spin .8s linear infinite; }
+  @keyframes refresh-spin { to { transform:rotate(360deg); } }
+  /* Still a signal that something is happening, without the motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .refresh.spinning svg { animation:refresh-pulse 1.2s ease-in-out infinite; }
+  }
+  @keyframes refresh-pulse { 50% { opacity:.35; } }
 
   /* The legend, inside its on-map control. Not a strip under the map any more: it would sit
      between the radar and the signup form, costing every visitor the space to explain a scale
@@ -152,6 +167,18 @@
   {% for choice in choices %}
   <button type="button" data-hours="{{ choice }}" aria-pressed="false">{{ choice }} h</button>
   {% endfor %}
+  {# Refresh (D-68): an app opened from the Home Screen has no reload gesture, and is usually
+     resumed rather than reopened - so without this it shows whatever it loaded hours ago. In this
+     row rather than the slider's, because that one is hidden exactly when a refresh is wanted most:
+     no data yet, or the last load failed. The icon is Material Icons' "refresh" (Apache-2.0),
+     inline rather than the icon font, which would be a request to Google from every visitor. #}
+  <span class="refresh-wrap">
+    <span class="refresh-stamp" id="refresh-stamp"></span>
+    <button type="button" class="refresh" id="refresh" aria-label="Radardaten aktualisieren"
+            title="Radardaten aktualisieren">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+  </span>
 </nav>
 
 {# Which of the states below is shown is decided in the browser (signup.js `decideSignupState`):

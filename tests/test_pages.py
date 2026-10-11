@@ -1270,9 +1270,37 @@ def test_the_signup_button_is_never_disabled_for_good(client):
     signup = client.get("/static/signup.js").text
     capability = js_function(signup, "announceCapability")
     assert ".disabled = true" not in capability
-    assert signup.count(".disabled = true") == 1, "only the in-flight guard may disable the button"
+    assert signup.count("submit.disabled = true") == 1, (
+        "only the in-flight guard may disable the signup button"
+    )
     # ...and the reason it gives on an iPad names the iPad.
     assert "Auf iPhone und iPad geht das nur" in js_function(signup, "pushSubscription")
     assert "in Safari" in js_function(signup, "pushSubscription")
     # A disabled button must look it, so the in-flight state is not mistaken for a dead page.
     assert "button:disabled {" in client.get("/").text
+
+
+def test_the_radar_can_be_refreshed_from_the_zeitraum_row(client):
+    """D-68: an app opened from the Home Screen has no reload gesture and is resumed rather than
+    reopened, so the radar it showed could be hours old. Behaviour is driven in Chromium; this pins
+    the pieces a refactor could quietly drop."""
+    body = client.get("/").text
+    nav = body[
+        body.index('<nav class="range"') : body.index("</nav>", body.index('<nav class="range"'))
+    ]
+    assert 'id="refresh"' in nav and 'aria-label="Radardaten aktualisieren"' in nav
+    # The Material icon inline, not the icon font: that would be a request to Google per visitor.
+    assert "<svg" in nav and "fonts.googleapis" not in body
+    assert "prefers-reduced-motion" in body[body.index(".refresh.spinning") :]
+
+    radar = client.get("/static/radar.js").text
+    load = js_function(radar, "load")
+    # Only the newest request may change what is shown, and a failed refresh keeps the picture.
+    assert "if (mine !== generation)" in load
+    assert "keepOnFailure" in load and "Aktualisieren hat nicht geklappt" in load
+
+    signup = client.get("/static/signup.js").text
+    assert "addEventListener('visibilitychange', onReturn)" in signup
+    assert "event.persisted" in signup
+    # Declared before the map setup assigns them - the hoisting trap this file knows too well.
+    assert signup.index("let shownHours = null;") < signup.index("Engine = chooseEngine();")

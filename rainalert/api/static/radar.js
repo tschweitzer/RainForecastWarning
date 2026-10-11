@@ -493,10 +493,35 @@
        The image cache is deliberately *not* cleared. It is keyed by URL and the ranges nest -
        everything in 6 h is also in 12 h - so a reader stepping down the ranges re-shows frames
        that are already decoded. */
-    function load(pastHours) {
+    /* Only the newest request may change what is shown. Two can be in flight - a refresh and then
+       a different range, or two quick range taps - and the slower answer used to win, putting the
+       older window back on screen under the button the reader pressed last. */
+    var generation = 0;
+
+    /* Resolves to `{status, ready}`: 'ok', 'empty', 'failed', or 'superseded' (a newer request took
+       over); `ready` settles once the "jetzt" frame's image has loaded, which is when a refresh is
+       actually visible.
+
+       `options.keepOnFailure`, for a refresh (D-68): a request that fails, or comes back empty,
+       leaves the frames already on screen where they are and says so, instead of clearing the map -
+       offline, a refresh that wiped the last good picture would be worse than no button at all. */
+    function load(pastHours, options) {
+      var mine = ++generation;
+      var keep = !!(options && options.keepOnFailure) && frames.length > 0;
+      var shownBefore = keep ? frames.filter(function (f) { return f.offset_minutes === 0; })[0] : null;
       stop();
       if (slider) { slider.disabled = true; }
-      if (banner) { banner.hidden = true; }
+      if (banner && !keep) { banner.hidden = true; }
+
+      function kept() {
+        if (slider) { slider.disabled = false; }
+        var when = shownBefore ? new Date(shownBefore.valid_time).toLocaleTimeString('de-DE', {
+          hour: '2-digit', minute: '2-digit'
+        }) : null;
+        say('Aktualisieren hat nicht geklappt' + (when ? ' – du siehst den Stand von ' + when + ' Uhr.' : '.'));
+        return { status: 'failed', ready: Promise.resolve() };
+      }
+
       return fetch('/api/v1/overlays/timeline?past_hours=' + encodeURIComponent(pastHours))
         .then(function (r) {
           // `fetch` does not reject on 4xx/5xx, so without this the error body flows on and
@@ -507,7 +532,10 @@
           return r.json();
         })
         .then(function (data) {
-          frames = Array.isArray(data.frames) ? data.frames : [];
+          if (mine !== generation) { return { status: 'superseded', ready: Promise.resolve() }; }
+          var fresh = Array.isArray(data.frames) ? data.frames : [];
+          if ((!fresh.length || !data.bounds) && keep) { return kept(); }
+          frames = fresh;
           gaps = data.gaps || [];
           bounds = data.bounds;
 
@@ -517,8 +545,9 @@
             overlay.hide();
             say('Noch keine Radardaten vorhanden.');
             if (opts.onEmpty) { opts.onEmpty(); }
-            return;
+            return { status: 'empty', ready: Promise.resolve() };
           }
+          if (banner) { banner.hidden = true; }
           if (data.stale) {
             say('Die Radardaten sind ' + Math.round(data.age_minutes)
               + ' Minuten alt – das Bild zeigt nicht die aktuelle Lage.');
@@ -533,8 +562,8 @@
           show(at);
           if (opts.legend) {
             // The band names go in the title rather than inline: seven of them spelled out wraps
-            // to four lines on a phone and competes with the map for the screen. The settings page
-            // spells them out, because there the name is what you are choosing.
+            // to four lines on a phone and competes with the map for the screen. The settings
+            // spell them out, because there the name is what you are choosing.
             opts.legend.innerHTML = (data.colorscale || []).map(function (s) {
               var c = s.rgba;
               var name = s.label ? s.label + ' – ab ' + s.from_mm_5min + ' mm/5 min (~'
@@ -545,11 +574,28 @@
             }).join('') + '<span>mm / 5 min</span>';
           }
           if (opts.onReady) { opts.onReady(frames[at]); }
+          return { status: 'ok', ready: imageReady(frames[at]) };
         })
         .catch(function () {
+          if (mine !== generation) { return { status: 'superseded', ready: Promise.resolve() }; }
+          if (keep) { return kept(); }
           say('Die Radardaten konnten nicht geladen werden.');
           if (opts.onEmpty) { opts.onEmpty(); }
+          return { status: 'failed', ready: Promise.resolve() };
         });
+    }
+
+    /* Settles when a frame's image has loaded (or failed to), at most ten seconds on. A frame in a
+       gap has no image and is ready at once. */
+    function imageReady(frame) {
+      if (!frame || gapAt(frame.offset_minutes)) { return Promise.resolve(); }
+      var img = preload(frame.url);
+      if (img.complete) { return Promise.resolve(); }
+      return new Promise(function (resolve) {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+        setTimeout(resolve, 10000);
+      });
     }
 
     load(opts.pastHours);
