@@ -622,9 +622,9 @@ function announceCapability() {
     if (isApplePhone()) {
       message = EMAIL_AVAILABLE
         ? 'Wir haben E-Mail für dich ausgewählt – so bekommst du die Warnungen auch auf dem '
-          + 'iPhone. Push geht dort nur als Web-App: füge die Seite über „Teilen → Zum '
+          + 'iPhone und iPad. Push geht dort nur als Web-App: füge die Seite über „Teilen → Zum '
           + 'Home-Bildschirm“ hinzu und melde dich dort an.'
-        : 'Auf dem iPhone geht Push nur als Web-App: füge die Seite über „Teilen → Zum '
+        : 'Auf iPhone und iPad geht Push nur als Web-App: füge die Seite über „Teilen → Zum '
           + 'Home-Bildschirm“ hinzu und öffne sie von dort. Dort kannst du dich dann anmelden.';
     } else {
       message = EMAIL_AVAILABLE
@@ -657,13 +657,12 @@ function announceCapability() {
     var email = document.querySelector('input[name=channel][value=email]');
     if (email) { email.checked = true; syncChannelFields(); }
   }
-  if (impossible && !EMAIL_AVAILABLE) {
-    /* Nothing on this page can succeed, so the button stops inviting the attempt. Only this branch:
-       a *denied* permission is two taps to undo and the reader may well come back and press, so that
-       button stays live - the same judgement as not switching their channel for them. */
-    var submit = document.querySelector('#signup button[type=submit]');
-    if (submit) { submit.disabled = true; }
-  }
+  /* No disabled button, even where nothing on this page can succeed (push impossible, no email).
+     It was disabled here, and a disabled button looks exactly like a live one: on an iPad, where a
+     browser tab has no Push API, "Anmelden" did nothing at all when tapped - not the consent
+     warning, not the location hint - while the note explaining why sat a screen above, out of view.
+     Pressed, it now runs the form's own checks and then `pushSubscription()` answers with the same
+     reason, in the result line right under the button. */
 }
 /* Called at the very bottom of this script, not here. `var VAPID_KEY` is declared further down, and
    `var` hoists the declaration without the assignment - so calling this during parse read VAPID_KEY
@@ -720,7 +719,7 @@ async function pushSubscription() {
        there. Everywhere else, offer the channel that does work if there is one. */
     if (/iPhone|iPad|iPod/.test(navigator.userAgent)
         || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)) {
-      throw new Error('Auf dem iPhone geht das nur, wenn du die Seite über „Teilen → Zum '
+      throw new Error('Auf iPhone und iPad geht das nur, wenn du die Seite über „Teilen → Zum '
         + 'Home-Bildschirm“ hinzufügst und sie von dort öffnest.');
     }
     throw new Error('Dieser Browser kann keine Push-Benachrichtigungen empfangen.'

@@ -1253,3 +1253,20 @@ def test_every_slider_on_the_page_has_the_same_colour(client):
     assert all(
         "var(--accent)" in declarations for selector, declarations in rules if "range" in selector
     )
+
+
+def test_the_signup_button_is_never_disabled_for_good(client):
+    """Reported on Chrome on an iPad: "Anmelden" did nothing at all - not the consent warning, not
+    the location hint. A browser tab there has no Push API, email was off, and the page disabled the
+    button so that it would not "invite an attempt"; a disabled button looks exactly like a live
+    one. Pressed, the form now runs its own checks and then says why it cannot work here.
+
+    The submit handler still disables it while a request is in flight; nothing else may."""
+    signup = client.get("/static/signup.js").text
+    capability = js_function(signup, "announceCapability")
+    assert ".disabled = true" not in capability
+    assert signup.count(".disabled = true") == 1, "only the in-flight guard may disable the button"
+    # ...and the reason it gives on an iPad names the iPad.
+    assert "Auf iPhone und iPad geht das nur" in js_function(signup, "pushSubscription")
+    # A disabled button must look it, so the in-flight state is not mistaken for a dead page.
+    assert "button:disabled {" in client.get("/").text
