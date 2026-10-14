@@ -183,6 +183,17 @@ is concerned.
   recording and alerting on the certificate's issuer/SPKI changing, which is cheap and catches the
   realistic mis-issuance case. Do not attempt hard pinning — you will break yourself.
 
+**Status (2026-10-14, D-70): the wet-fraction gate is built, and it replaced the blast radius.** A
+cycle whose wet share at t+0 rises more than `implausible_rise_pp` (20) points against the previous
+believable cycle, or whose forecast is that much wetter than its own t+0, is set aside - no state
+moves, nothing is sent, an ERROR line raises the operator alert. Measured real weather moves the
+share by under one point per cycle; the corrupt "rain everywhere" cycle this finding describes moves
+it by 85-95. The blast radius bounded the same worst case by subscriber count instead, and that
+dropped real warnings whenever subscribers clustered - five browsers in one household, or a city
+under one front - with no way to get them back. The ceiling on mails stays, now on mail only
+(`email_alert_cap_per_day`), since mail is what has a quota to protect; push is bounded per
+subscription (F-15). The national-max gate (`PLAUSIBILITY_MAX_MM_5MIN`) is unchanged.
+
 ---
 
 ### F-3 — One bad subscription row kills the cycle for everyone
@@ -352,7 +363,7 @@ What that buys an attacker, and what bounds it:
   (default 50, env `TRANSACTIONAL_MAIL_CAP_PER_DAY`) counts confirmation and settings-link mails
   across all requests, in one rate-limit bucket (`mail:transactional`) that no header can split.
   Past it, mails are not sent, the request answers as usual, and an error is logged (RUNBOOK
-  "Transactional mail cap reached"). Rain warnings have their own cap (`global_alert_cap_per_day`)
+  "Transactional mail cap reached"). Rain warnings have their own cap (`email_alert_cap_per_day`)
   and are not counted. This is the global cap the fix list above asked for.
 - *Still open:* the per-IP limits on settings writes and location updates (authenticated anyway),
   and rows in `rate_limit_hits` (purged after `rate_limit_retention_days`). The real fix - making
@@ -716,6 +727,10 @@ still means "close to always"; it just cannot cost anyone else their warnings an
   the account being capped is the one that caused it, reaching this means somebody is not warned
   about weather that is happening for a reason that is not theirs. If it fires, the question is
   whether the traffic is real — not whether to raise the number.
+- **Revised 2026-10-14 (D-70)**, to drop fewer valid notifications: the per-subscription
+  ceiling is 24 (four hours of two an hour was too close to a long wet day) and logs a warning when
+  reached; the global ceiling became `email_alert_cap_per_day` and counts mail only - push spends
+  no quota and no reputation, and the per-subscription ceiling already bounds it.
 - Both follow the rule the other throttles follow: the state still advances, only the send is
   dropped. Rolling the transition back would re-fire the identical event on the next cycle and
   achieve nothing but a delay.
@@ -990,6 +1005,6 @@ Collected for convenience — these are the places an implementer will fill in w
 3. **F-6, F-8, F-9, F-18** — M6 deployment configuration; `--max-instances` and the bucket split are
    single lines with outsized value.
 4. **F-2, F-10, F-7** — the upstream-trust cluster; do the plausibility gate and the blast-radius cap
-   together in M4.
+   together in M4. (The blast-radius cap was replaced by a wet-share gate in D-70.)
 5. **F-12** — accept the DPAs now; the schema columns can come with the M3 migration.
 6. **F-13, F-14, F-15, F-17** — before any public link exists.

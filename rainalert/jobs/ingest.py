@@ -266,12 +266,10 @@ def ingest_once(
             cycle = session.execute(
                 select(RadarCycle).where(RadarCycle.nominal_time == nominal)
             ).scalar_one()
-            report = evaluate_cycle(session, cycle, frames, settings, now)
+            evaluate_cycle(session, cycle, frames, settings, now)
             sent, expired = deliver_queued(session, settings, notifier, now)
             if sent or expired:
                 logger.info("delivered %d notification(s), expired %d", sent, expired)
-            if report.blast_radius_tripped:
-                logger.error("blast radius tripped for cycle %s - no mail sent", nominal)
 
         # Never-confirmed signups, deleted after `unconfirmed_purge_hours`. Run here because this is
         # the only thing that runs on a schedule often enough to honour the promise: the signup page

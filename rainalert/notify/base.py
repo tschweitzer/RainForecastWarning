@@ -29,9 +29,9 @@ class OutboundMessage:
     #: and how hard it should try to wake it (§5.3). `None` means "use the notifier's default", which
     #: is tuned for a rain warning.
     #:
-    #: Per-message because one number cannot be right for every kind. The sender-wide 30 minutes is
-    #: correct for a warning - `dispatcher.MAX_NOTIFICATION_AGE` refuses to send one older than that,
-    #: because a late rain warning is worse than none - and wrong for everything else. A confirmation
+    #: Per-message because one number cannot be right for every kind. Rain notifications set theirs
+    #: from how long they stay worth having (`dispatcher.notification_lifetime`, D-70) - a warning
+    #: until the rain it announces is due - and the sender-wide default was wrong for the rest. A confirmation
     #: is valid for `confirm_token_ttl_hours` (24 h) and was being discarded by the push service after
     #: 30 minutes: a reader who signed up and then went through a long tunnel got nothing, was told by
     #: the page that their notifications must be misconfigured, and had a perfectly good 24-hour token

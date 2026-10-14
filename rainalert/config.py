@@ -84,29 +84,39 @@ class Settings(BaseSettings):
     max_lead_minutes: int = 120
     #: The DE1200 grid is 1 km, so anything under ~500 m samples the single cell you stand in.
     max_radius_m: int = 20000
-    #: Absolute cap on how many subscriptions one cycle may warn. A cycle that would warn more is
-    #: far likelier to be broken than to be a nationwide squall, and mailing everyone also burns
-    #: the day's sending quota so the genuine alerts later never arrive.
-    blast_radius_max: int = 25
-    #: Hard ceiling on alerts one subscription may receive per rolling 24 h, whatever rule it has
-    #: set. SECURITY_REVIEW.md F-15: `threshold=0.01, lead=120, radius=20000` is within spec on
-    #: every axis and together means "close to always" in German autumn, and what it spends - a
-    #: mail provider's daily quota, a sending domain's reputation, one VAPID key's standing with
-    #: three push services - belongs to every other subscriber too.
+    #: The plausibility check that replaced the blast radius (D-70). A cycle is set aside - no state
+    #: changes, no notifications, as if its data were missing - when the share of the radar area that
+    #: is wet "now" rises by more than this many percentage points against the previous cycle, or
+    #: when any forecast frame is that much wetter than the cycle's own "now".
     #:
-    #: 12 is two an hour for six hours: more than a real day of weather needs, far less than a
-    #: pathological rule produces. 0 disables it.
-    alert_cap_per_subscription_per_day: int = 12
-    #: Ceiling on alerts across *all* subscriptions per rolling 24 h (F-2's "per-run global mail
-    #: ceiling", widened to a day because the quota it protects is a daily one).
+    #: Measured 2026-10-14 on 31 h of production frames: the largest 5-minute change was 0.69 pp and
+    #: the largest forecast-vs-now difference 1.48 pp. A radar site returning from maintenance in
+    #: rain adds up to ~5 pp; a corrupt "rain everywhere" cycle 85-95 pp. 20 sits far from both.
+    #: Judged from the data rather than from how many subscribers react, so it means the same with
+    #: five subscribers in one town as with ten thousand across the country. 0 disables it.
+    implausible_rise_pp: float = 20.0
+    #: The previous cycle only counts if it is this recent; after a longer gap the rise is not
+    #: compared (rain can genuinely spread over half an hour), only forecast against "now".
+    implausible_window_minutes: int = 15
+    #: Ceiling on rain notifications (warnings and "Es regnet jetzt") one subscription receives per
+    #: rolling 24 h, whatever rule it has set. SECURITY_REVIEW.md F-15: `threshold=0.01, lead=120,
+    #: radius=20000` is within spec on every axis and together means "close to always" in German
+    #: autumn.
     #:
-    #: 300 is the mail provider free tier §6.2 budgets for. Deliberately far above
-    #: `alert_cap_per_subscription_per_day` times any plausible subscriber count, because unlike the
-    #: per-subscription cap this one is *shared fate*: once it is reached nobody is warned, which is
-    #: the service failing at its one job. It is the backstop for the case the per-subscription cap
-    #: cannot see - many accounts, each individually reasonable - and it is loud rather than quiet
-    #: (see `evaluate_cycle`). 0 disables it.
-    global_alert_cap_per_day: int = 300
+    #: 24, raised from 12 (D-70): real weather gives at most one notification per rain event, and a
+    #: new event needs 30 dry minutes first, so 24 is out of reach of any real day - the busiest
+    #: subscription measured had 7. What is left for it to catch is a bug or an absurd rule, and
+    #: when it does, it says so in the log. 0 disables it.
+    alert_cap_per_subscription_per_day: int = 24
+    #: Ceiling on rain warnings sent *by email* across all subscriptions per rolling 24 h - the mail
+    #: provider's daily quota (§6.2's free tier is 300). Email only since D-70: push has no quota,
+    #: and the per-subscription ceiling already bounds it. Reaching it is logged at ERROR, because
+    #: then email subscribers are not warned for a reason that is not theirs. 0 disables it.
+    email_alert_cap_per_day: int = 300
+    #: How many push notifications are sent at once (D-70). Each one is a separate HTTPS request
+    #: that spends ~100 ms waiting on the push service; one after another, 3,000 of them would take
+    #: about five minutes and outrun the job. Push services are built for concurrent senders.
+    delivery_concurrency: int = 32
 
     # --- Map timeline (D-22, §11.1) -----------------------------------------------------------
     #: The furthest back the map will go for anyone who asks - the whole window DWD keeps.
@@ -239,13 +249,9 @@ class Settings(BaseSettings):
     #: they start refusing traffic. Empty makes the notifier refuse to build, `create_app` logs it and
     #: disables push, and the signup page says push is unavailable. Loud beats plausible.
     vapid_subject: str = ""
-    #: How long a push service should hold a message for a device that is offline.
-    #:
-    #: 30 minutes, matching `dispatcher.MAX_NOTIFICATION_AGE`. It was an hour, which contradicted it:
-    #: the dispatcher refuses to *send* a warning older than 30 minutes because "a late rain warning
-    #: is worse than none", and then the TTL told the push service to hold it for twice that. A phone
-    #: off-network for 50 minutes got a warning about rain that had already come and gone - the exact
-    #: case the shorter rule exists to prevent, arriving through the longer one.
+    #: How long a push service should hold a message for a device that is offline, for messages that
+    #: do not set their own. Rain notifications do (D-70): a warning stays valid until the rain it
+    #: announces is due (`dispatcher.notification_lifetime`), so this is now the default for the rest.
     webpush_ttl_seconds: int = 1800
     webpush_timeout_seconds: float = 10.0
     #: Days of silence before the liveness notification goes out (D-46). Its real job is deletion:
@@ -291,7 +297,7 @@ class Settings(BaseSettings):
     #: *different* mailboxes a single attacker can have us write to - and those mails spend the
     #: provider's daily quota and the domain's reputation that rain warnings depend on. This cap
     #: counts nothing per IP, so no header can get around it. Warnings are not counted here
-    #: (`global_alert_cap_per_day` is theirs); push messages are free and are not counted either.
+    #: (`email_alert_cap_per_day` is theirs); push messages are free and are not counted either.
     #: 50 is far above what a friends-and-family service signs up in a day. 0 disables it.
     transactional_mail_cap_per_day: int = 50
     rate_limit_retention_days: int = 7

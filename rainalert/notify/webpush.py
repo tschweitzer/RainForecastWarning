@@ -248,10 +248,10 @@ class WebPushNotifier:
             raise ValueError("vapid_subject must be a mailto: or https: URL")
         self._vapid = Vapid02.from_pem(vapid_private_key.encode())
         self._subject = vapid_subject
-        # RFC 8030: how long the push service should hold the message for a device that is offline.
-        # Kept equal to `dispatcher.MAX_NOTIFICATION_AGE`, which is the same judgement expressed on
-        # our side of the wire - a warning we would refuse to send as stale is one we should not ask
-        # anyone else to hold either.
+        # RFC 8030: how long the push service should hold the message for a device that is offline,
+        # for messages that do not set their own. Rain notifications do: the dispatcher sets each
+        # one's TTL to the rest of its useful lifetime (D-70), the same judgement on both sides of
+        # the wire - a warning we would refuse to send as stale is one nobody should hold either.
         self._ttl = ttl_seconds
         self._allowed_hosts = allowed_hosts
         self._client = httpx.Client(timeout=timeout, transport=transport, follow_redirects=False)

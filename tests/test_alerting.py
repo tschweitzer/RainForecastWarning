@@ -222,22 +222,103 @@ def test_one_broken_subscription_does_not_stop_the_others(db, settings, frames, 
         assert session.get(Subscription, good_id).status is SubscriptionStatus.ACTIVE
 
 
-def test_blast_radius_limiter_queues_nothing(db, settings, frames):
-    """A cycle that would warn everyone is likelier broken than nationwide (F-2)."""
-    settings.blast_radius_max = 1
+def wet_everywhere(base_frames, leads=(0,)):
+    """A corrupt "rain everywhere" cycle: every cell with data wet, at the given leads."""
+    out = make_frames(base_frames, wet_now=False, wet_leads=())
+    for frame in out:
+        if frame.lead_minutes in leads:
+            frame.values[~frame.missing] = 1.5
+    return out
+
+
+def test_a_cycle_that_turns_wet_everywhere_is_set_aside(db, settings, frames, caplog):
+    """D-70, which replaced the blast radius: judged from the radar data, not the subscriber count.
+
+    Set aside, the cycle changes nothing - no notification, no state moved - and says so at ERROR.
+    The next good cycle evaluates as if it had never happened.
+    """
+    import logging
+
     with db() as session:
-        for index in range(4):
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.DRY
+
+        cycle = add_cycle(session)
+        with caplog.at_level(logging.ERROR):
+            report = evaluate_cycle(session, cycle, wet_everywhere(frames), settings, now=T0)
+
+        assert report.implausible and "rose from" in report.implausible
+        assert "set aside as implausible" in caplog.text
+        assert report.alerts == 0
+        assert report.decisions == {"skipped_implausible": 1}
+        assert session.query(Notification).count() == 0
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.DRY
+        assert cycle.notes.startswith("implausible: ")
+        # Not remembered, or a second broken cycle would compare against the first and pass.
+        assert cycle.wet_share is None
+
+        # Five minutes later, real rain on the way: compared with the warm-up, not the broken one.
+        later = T0 + timedelta(minutes=5)
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(
+            session, add_cycle(session, later), approaching, settings, now=later
+        )
+        assert report.implausible is None
+        assert report.alerts == 1
+
+
+def test_two_broken_cycles_in_a_row_are_both_set_aside(db, settings, frames):
+    with db() as session:
+        active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        for minutes in (0, 5):
+            at = T0 + timedelta(minutes=minutes)
+            report = evaluate_cycle(
+                session, add_cycle(session, at), wet_everywhere(frames), settings, now=at
+            )
+            assert report.implausible, f"the cycle {minutes} minutes in was believed"
+
+
+def test_a_corrupt_forecast_frame_is_set_aside_too(db, settings, frames):
+    """The frame that would do the warning. Caught even with no recent cycle to compare t+0 to."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        report = evaluate_cycle(
+            session, add_cycle(session), wet_everywhere(frames, leads=(60,)), settings, now=T0
+        )
+        assert report.implausible and "forecast" in report.implausible
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.UNKNOWN
+
+
+def test_everyone_warned_at_once_is_not_a_reason_to_warn_nobody(db, settings, frames):
+    """What the blast radius got wrong: five subscribers in one town, one shower, all of them warned
+    at once - ordinary weather that it took for a broken cycle, and dropped for good."""
+    with db() as session:
+        for index in range(5):
             sub = active_subscription(session, settings, email=f"f{index}@example.com")
             sub.lead_time_minutes = 60
         session.commit()
         warm_up(session, settings, frames)
         approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
         report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
-        assert report.blast_radius_tripped
-        assert report.alerts == 0
-        assert session.query(Notification).count() == 0
-        # ...but the state still advanced, so the event is not re-warned forever
-        assert session.query(Evaluation).count() == 8  # 4 warm-up + 4 this cycle
+        assert report.implausible is None
+        assert report.alerts == 5
+        assert session.query(Notification).count() == 5
+
+
+def test_the_plausibility_check_can_be_turned_off(db, settings, frames):
+    with db() as session:
+        active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        off = settings.model_copy(update={"implausible_rise_pp": 0})
+        report = evaluate_cycle(session, add_cycle(session), wet_everywhere(frames), off, now=T0)
+        assert report.implausible is None
+        assert report.alerts == 1  # rain overhead, unwarned: "Es regnet jetzt"
 
 
 def test_missing_data_is_not_reported_as_dry(db, settings, frames):
@@ -539,8 +620,8 @@ def test_the_cap_can_be_turned_off(db, settings, frames):
         assert report.alerts == 1
 
 
-def test_the_global_ceiling_suppresses_and_says_so_loudly(db, settings, frames, caplog):
-    """F-2's per-run ceiling, widened to a day because the quota it protects is a daily one.
+def test_the_email_quota_suppresses_mail_and_says_so_loudly(db, settings, frames, caplog):
+    """F-2's ceiling, now on mail only (D-70): it protects the mail provider's daily quota.
 
     Logged at ERROR, and that is not decoration. Unlike the per-subscription cap - where the account
     being capped is the one that caused it - reaching this means somebody is not warned about
@@ -554,10 +635,10 @@ def test_the_global_ceiling_suppresses_and_says_so_loudly(db, settings, frames, 
         session.commit()
         warm_up(session, settings, frames)
 
-        # Under its own cap, over the global one. Attributed to this subscription only because the
-        # fixture has one; the global count does not care whose they were.
+        # Under its own cap, over the mail one. Attributed to this subscription only because the
+        # fixture has one; the quota does not care whose they were.
         tight = settings.model_copy(
-            update={"global_alert_cap_per_day": 3, "alert_cap_per_subscription_per_day": 0}
+            update={"email_alert_cap_per_day": 3, "alert_cap_per_subscription_per_day": 0}
         )
         _past_alerts(session, sub, 3, T0)
 
@@ -568,7 +649,160 @@ def test_the_global_ceiling_suppresses_and_says_so_loudly(db, settings, frames, 
         assert report.alerts == 0
         assert report.daily_cap_tripped is True
         assert report.decisions.get("suppressed_daily_cap") == 1
-        assert "daily alert cap reached" in caplog.text
+        assert "email alert cap reached" in caplog.text
+
+
+def _push_subscription(
+    session, settings, endpoint="https://fcm.googleapis.com/fcm/send/alerting-test"
+):
+    from rainalert import subscriptions as svc
+    from rainalert.db.models import Channel, Subscriber
+
+    result = svc.subscribe(
+        session,
+        settings,
+        channel=Channel.WEBPUSH,
+        address=endpoint,
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+        lat=FRANKFURT[0],
+        lon=FRANKFURT[1],
+    )
+    subscriber = session.get(Subscriber, result.subscriber_id)
+    subscriber.confirmed_at = T0 - timedelta(days=1)
+    subscription = subscriber.subscriptions[0]
+    subscription.status = SubscriptionStatus.ACTIVE
+    session.commit()
+    return subscription
+
+
+def test_push_is_not_held_to_the_email_quota(db, settings, frames):
+    """Push costs nothing per message and has no quota to protect; the per-subscription ceiling
+    already bounds it. Mail spent today must not silence it."""
+    with db() as session:
+        mail = active_subscription(session, settings)
+        push = _push_subscription(session, settings)
+        push.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+
+        tight = settings.model_copy(update={"email_alert_cap_per_day": 3})
+        _past_alerts(session, mail, 3, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        report = evaluate_cycle(session, add_cycle(session), approaching, tight, now=T0)
+        assert report.alerts == 1
+        assert session.query(Notification).filter_by(channel="webpush").count() == 1
+
+
+def test_reaching_the_per_subscription_ceiling_is_logged(db, settings, frames, caplog):
+    """24 a day is out of reach of real weather (D-70), so a hit is worth seeing."""
+    import logging
+
+    assert settings.alert_cap_per_subscription_per_day == 24
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, 24, T0)
+
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        with caplog.at_level(logging.WARNING):
+            report = evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        assert report.alerts == 0
+        assert "reached its ceiling of 24 rain notifications" in caplog.text
+
+
+# --- delivery: lifetime and concurrency (D-70) -----------------------------------------------
+
+
+def test_a_warning_is_delivered_for_as_long_as_it_is_true(db, settings, frames):
+    """Rain 60 minutes out, phone offline for 40: the 30-minute rule dropped this warning, though
+    the rain had not even started. And the push service is told to hold it only until it has."""
+    notifier = ConsoleNotifier()
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+
+        sent, expired = deliver_queued(session, settings, notifier, now=T0 + timedelta(minutes=40))
+    assert (sent, expired) == (1, 0)
+    assert notifier.sent[0].ttl_seconds == 20 * 60
+
+
+def test_es_regnet_jetzt_expires_after_a_quarter_of_an_hour(db, settings, frames):
+    notifier = ConsoleNotifier()
+    with db() as session:
+        active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        raining = make_frames(frames, wet_now=True, wet_leads=(0, 5, 10, 15))
+        report = evaluate_cycle(session, add_cycle(session), raining, settings, now=T0)
+        assert report.alerts == 1
+
+        assert deliver_queued(session, settings, notifier, now=T0 + timedelta(minutes=16)) == (
+            0,
+            1,
+        )
+    assert notifier.sent == []
+
+
+def test_push_is_sent_concurrently_and_one_failure_stays_its_own():
+    """Order kept, an exception confined to its message, mail never on a worker thread."""
+    import threading
+
+    from rainalert.alerting.dispatcher import _send_all
+    from rainalert.notify.base import DeliveryResult, OutboundMessage
+
+    settings = Settings(
+        database_url="postgresql+psycopg://unused",
+        public_base_url="https://rain.example.org",
+        secret_key="test-secret",
+        delivery_concurrency=4,
+        _env_file=None,
+    )
+    main = threading.current_thread()
+    barrier = threading.Barrier(4, timeout=5)
+    seen = []
+
+    class Recording:
+        def send(self, message):
+            if message.channel == "email":
+                assert threading.current_thread() is main, "mail was sent from a worker thread"
+                return DeliveryResult(ok=True, provider_message_id=message.to)
+            # Four pushes meet here at once, or this times out: proof they run side by side.
+            barrier.wait()
+            seen.append(threading.current_thread().name)
+            if message.to.endswith("/2"):
+                raise RuntimeError("push service exploded")
+            return DeliveryResult(ok=True, provider_message_id=message.to)
+
+    def push(n):
+        return OutboundMessage(
+            to=f"https://push.example.invalid/{n}",
+            subject="s",
+            text="t",
+            channel="webpush",
+            push_p256dh="k" * 87,
+            push_auth="a" * 22,
+        )
+
+    mail = OutboundMessage(to="friend@example.com", subject="s", text="t", channel="email")
+    messages = [push(0), mail, push(1), push(2), push(3)]
+    outcomes = _send_all(Recording(), messages, settings)
+
+    assert [getattr(o, "provider_message_id", None) for o in outcomes] == [
+        "https://push.example.invalid/0",
+        "friend@example.com",
+        "https://push.example.invalid/1",
+        None,
+        "https://push.example.invalid/3",
+    ]
+    assert isinstance(outcomes[3], RuntimeError)
+    assert all(name.startswith("push") for name in seen)
 
 
 # --- one unreadable subscriber must not cost everyone their warning (F-3, 2026-10-05) -----------
@@ -593,9 +827,8 @@ def test_an_unloadable_subscriber_does_not_take_the_cycle_down(db, settings, fra
     with db() as session:
         healthy = active_subscription(session, settings, email="healthy@example.com")
         broken = active_subscription(session, settings, email="broken@example.com")
-        # Two more, dry and far away. Without them the cycle warns 2 of 2 subscribers, which is
-        # over the blast-radius limit of half - so nothing reaches the alert path at all, and the
-        # test would pass for the wrong reason. Real rain is local; this makes it look local.
+        # Two more, dry and far away. Kept from when a cycle warning 2 of 2 subscribers tripped the
+        # blast radius (gone since D-70): real rain is local, and this makes it look local.
         for i, place in enumerate(((53.5511, 9.9937), (48.1351, 11.5820))):
             active_subscription(session, settings, email=f"dry{i}@example.com", at=place)
         for sub in (healthy, broken):

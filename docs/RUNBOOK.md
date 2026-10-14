@@ -190,7 +190,9 @@ Two more things about that build:
   europe-west3 --wait`, by hand, after the apply.
 - **When the new code needs its migration** - the release that adds device keys (D-64, migration
   `b6e2f0a4c813`) is one: the new code reads `subscribers.last_seen_at` and fails on every
-  subscriber query until it exists - migrate *between* updating the job and updating the service:
+  subscriber query until it exists. So is the plausibility check (D-70, migration `c7d1e5a9b2f4`):
+  the ingest job writes `radar_cycles.wet_share` and fails every cycle until it exists. Migrate
+  *between* updating the job and updating the rest:
 
 ```sh
 cd infra && terraform apply -target=google_cloud_run_v2_job.migrate   # the job gets the new image
@@ -239,10 +241,13 @@ Work down this list; each step rules out one cause.
    open. Both are deliberate refusals to keep talking to DWD, and both mean nobody is being warned.
    The hourly budget exists so this costs an hour rather than a day. Check whether DWD is actually
    down before raising either limit.
-3. **`blast radius` in the logs?** One cycle would have warned more than half the subscribers, so
-   it queued nothing and asked for a human. Look at the map for that cycle. A genuine national
-   squall line is real; a cycle that reads as rain over the whole country is likelier to be a
-   broken cycle. If it is genuine, re-run the job for that cycle.
+3. **`set aside as implausible` in the logs?** A cycle's radar data jumped too far - the wet
+   share rose more than `IMPLAUSIBLE_RISE_PP` (20) points in five minutes, or a forecast frame was
+   that much wetter than t+0 (D-70). It changed nothing and sent nothing; the next good cycle
+   evaluates normally, so one of these costs five minutes. The reason is in the line and in
+   `radar_cycles.notes`. Several in a row mean the product itself is broken - compare with DWD's
+   own app. Only if real weather ever trips it (it measures under one point per cycle) raise
+   `implausible_rise_pp` in `terraform.tfvars`.
 4. **`skipped_missing` for everyone?** The radar composite has no data at the subscribers'
    locations. Compare with DWD's own app. This is the correct behaviour — missing data must never
    be reported as dry — but if it persists for hours, DWD has a problem and so do we.
@@ -251,8 +256,12 @@ Work down this list; each step rules out one cause.
 
 ### Warnings go out but arrive late or not at all
 
-Delivery, not evaluation. A notification older than 30 minutes is deliberately **expired rather
-than sent** — a late rain warning is worse than none. Look for `expired` in the metrics.
+Delivery, not evaluation. A notification that is no longer true is deliberately **expired rather
+than sent** — a warning once its predicted start has passed (at least 10, at most 120 minutes after
+it was queued), "Es regnet jetzt" after 15 minutes (D-70). The push service is told the same, so a
+phone that was offline longer gets nothing rather than old news. Look for `expired` in the metrics.
+`subscription … reached its ceiling of 24` in the logs is the per-subscription cap, and `email alert
+cap reached` the mail quota.
 
 ### The map is empty or frozen
 
@@ -459,7 +468,7 @@ group by 1 order by 1;
 ```
 
 A steady trickle that just reached the cap is real demand: raise
-`TRANSACTIONAL_MAIL_CAP_PER_DAY`, keeping it plus `global_alert_cap_per_day` within the mail
+`TRANSACTIONAL_MAIL_CAP_PER_DAY`, keeping it plus `email_alert_cap_per_day` within the mail
 provider's daily quota. A burst is abuse: leave the cap alone, because it is doing its job. The
 burst ends on its own, since nothing past the cap is sent.
 

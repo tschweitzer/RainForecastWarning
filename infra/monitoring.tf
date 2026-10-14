@@ -7,8 +7,8 @@ resource "google_monitoring_notification_channel" "operator" {
   labels       = { email_address = var.alert_email }
 }
 
-# The log lines the application emits when it has stopped talking to DWD, or when a cycle was
-# refused. Both mean warnings are not going out.
+# The log lines the application emits when it has stopped talking to DWD, or when a cycle was set
+# aside as implausible data (D-70). Both mean warnings are not going out.
 resource "google_logging_metric" "ingestion_halted" {
   name   = "rainalert_ingestion_halted"
   filter = <<-EOT
@@ -16,7 +16,7 @@ resource "google_logging_metric" "ingestion_halted" {
     resource.labels.job_name="${google_cloud_run_v2_job.ingest.name}"
     (textPayload:"ingestion halted" OR jsonPayload.msg:"ingestion halted"
      OR textPayload:"circuit breaker opened" OR jsonPayload.msg:"circuit breaker opened"
-     OR textPayload:"blast radius" OR jsonPayload.msg:"blast radius")
+     OR textPayload:"set aside as implausible" OR jsonPayload.msg:"set aside as implausible")
   EOT
   metric_descriptor {
     metric_kind = "DELTA"
@@ -62,7 +62,7 @@ resource "time_sleep" "metric_descriptors" {
 }
 
 resource "google_monitoring_alert_policy" "ingestion_halted" {
-  display_name = "RainAlert: ingestion halted or blast radius tripped"
+  display_name = "RainAlert: ingestion halted or radar cycle set aside"
   combiner     = "OR"
   depends_on   = [time_sleep.metric_descriptors]
 

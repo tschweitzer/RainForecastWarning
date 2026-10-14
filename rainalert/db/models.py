@@ -75,6 +75,8 @@ class RadarCycle(Base):
     archive_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Why a cycle is partial/rejected, so a gap in the timeline has an explanation (§4.3 rule 7).
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Percent of the radar area wet at t+0 (D-70), for the next cycle's plausibility check.
+    wet_share: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class SubscriptionStatus(enum.StrEnum):

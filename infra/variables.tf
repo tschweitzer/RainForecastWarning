@@ -143,6 +143,17 @@ variable "transactional_mail_cap_per_day" {
   }
 }
 
+variable "implausible_rise_pp" {
+  description = "Percentage points the wet share of the radar area may rise in one cycle (t+0 against the previous cycle), or any forecast frame may exceed t+0, before the cycle is set aside as corrupt data (DESIGN.md D-70). Real weather moves well under 1 pp per cycle; a corrupt 'rain everywhere' frame jumps 85 to 95. 0 disables the check."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.implausible_rise_pp >= 0 && var.implausible_rise_pp <= 100
+    error_message = "implausible_rise_pp must be between 0 (off) and 100."
+  }
+}
+
 variable "map_tile_attribution" {
   description = "Required by every provider worth using, and by their licence. Shown in the map's corner. Change it whenever you change map_tile_url - an attribution that credits the wrong service is worse than none."
   type        = string

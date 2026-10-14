@@ -12,18 +12,21 @@ Two structural rules here, both from things that have gone wrong in similar syst
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from rainalert.alerting.plausibility import implausible, wet_share
 from rainalert.alerting.rules import AlertRule, evaluate
 from rainalert.alerting.sampler import SLOTS, MaskCache, sample
-from rainalert.alerting.state_machine import Policy, StateView, advance, suppress
+from rainalert.alerting.state_machine import Policy, StateView, Transition, advance, suppress
 from rainalert.config import Settings
 from rainalert.db.models import (
     AlertState,
+    Channel,
     Evaluation,
     Notification,
     RadarCycle,
@@ -37,8 +40,24 @@ from rainalert.radar.decoder import RVFrame
 
 logger = logging.getLogger(__name__)
 
-#: A warning older than this is not worth sending. Late rain warnings are worse than none.
-MAX_NOTIFICATION_AGE = timedelta(minutes=30)
+#: How long a rain notification stays worth delivering (D-70). A warning is worth it until the rain
+#: it announces is due - a 60-minute warning delivered 40 minutes late still says something true -
+#: but never less than MIN_LIFETIME, so a short one survives a slow network, and never more than
+#: MAX_LIFETIME. "Es regnet jetzt" is about the present: RAIN_NOW_LIFETIME.
+MIN_LIFETIME = timedelta(minutes=10)
+MAX_LIFETIME = timedelta(minutes=120)
+RAIN_NOW_LIFETIME = timedelta(minutes=15)
+
+
+def notification_lifetime(payload: dict, queued_at: datetime) -> timedelta:
+    """How long after `queued_at` this rain notification is still worth delivering."""
+    if payload.get("kind") == "rain_now":
+        return RAIN_NOW_LIFETIME
+    try:
+        until = datetime.fromisoformat(payload["predicted_start_at"]) - queued_at
+    except (KeyError, TypeError, ValueError):
+        return MIN_LIFETIME
+    return min(max(until, MIN_LIFETIME), MAX_LIFETIME)
 
 
 @dataclass
@@ -47,7 +66,8 @@ class CycleReport:
     alerts: int = 0
     skipped_missing: int = 0
     errors: int = 0
-    blast_radius_tripped: bool = False
+    #: Why the cycle was set aside as implausible (D-70), or None.
+    implausible: str | None = None
     daily_cap_tripped: bool = False
     decisions: dict[str, int] = field(default_factory=dict)
 
@@ -91,50 +111,45 @@ def evaluate_cycle(
         pending.append(outcome)
         report.evaluated += 1
 
-    alerting = [p for p in pending if p[3].alert]
-    limit = min(max(1, len(subscriptions) // 2), settings.blast_radius_max)
-    if len(alerting) > limit:
-        # A cycle that reads as rain everywhere is far more likely to be a broken cycle than a
-        # nationwide squall, and mailing the whole list also burns the day's sending quota so the
-        # genuine alerts later are never delivered. Queue nothing; page a human.
-        report.blast_radius_tripped = True
+    # Is the cycle believable at all (D-70)? Judged from the radar data, not from how many
+    # subscribers it would notify - see alerting/plausibility.py. Set aside, it changes nothing:
+    # every state stays where it was, exactly as for missing data, and the next good cycle
+    # evaluates normally. Real rain costs five minutes; a broken cycle costs nothing.
+    report.implausible = _check_plausibility(session, cycle, frames, settings)
+    if report.implausible:
         logger.error(
-            "blast radius tripped: %d of %d subscriptions would be warned in one cycle; "
-            "queueing nothing",
-            len(alerting),
-            len(subscriptions),
+            "cycle %s set aside as implausible: %s - no state changes, nothing sent",
+            cycle.nominal_time,
+            report.implausible,
         )
-        cycle.notes = f"blast radius: {len(alerting)}/{len(subscriptions)} would alert"
-        session.commit()
+        cycle.notes = f"implausible: {report.implausible}"[:2000]
+        pending = [
+            (
+                subscription,
+                state_row,
+                reading,
+                Transition(
+                    state_row.state,
+                    state_row.dry_since,
+                    state_row.no_hit_cycles,
+                    False,
+                    "skipped_implausible",
+                ),
+            )
+            for subscription, state_row, reading, _ in pending
+        ]
 
-    # The global ceiling (F-2, F-15). Counted once before the loop and then carried forward, so the
-    # alerts this cycle is about to queue count against it too - re-querying per subscription would
-    # not see them, since nothing is committed until the end.
+    # The email quota (F-2, D-70). Counted once before the loop and then carried forward, so the
+    # mails this cycle is about to queue count against it too. Email only: push has no quota, and
+    # the per-subscription ceiling bounds it already.
     day_ago = now - timedelta(hours=24)
-    queued_today = alerts_since(session, day_ago) if settings.global_alert_cap_per_day else 0
+    emailed_today = (
+        alerts_since(session, day_ago, channel=Channel.EMAIL.value)
+        if settings.email_alert_cap_per_day
+        else 0
+    )
 
     for subscription, state_row, reading, transition in pending:
-        alert = transition.alert and not report.blast_radius_tripped
-        if (
-            alert
-            and settings.global_alert_cap_per_day
-            and queued_today >= settings.global_alert_cap_per_day
-        ):
-            # Shared fate, and that is why it is an error rather than a counter. Unlike the
-            # per-subscription cap - where the account being capped is the one that caused it -
-            # reaching this means somebody is not warned about weather that is happening, for a
-            # reason that is not theirs. If this ever fires, the right response is to find out
-            # whether it is real traffic or a bug, not to raise the number.
-            alert = False
-            transition = replace(transition, alert=False, decision="suppressed_daily_cap")
-            if not report.daily_cap_tripped:
-                report.daily_cap_tripped = True
-                logger.error(
-                    "daily alert cap reached: %d alerts in 24 h at the %d ceiling; "
-                    "further warnings are being suppressed for everyone",
-                    queued_today,
-                    settings.global_alert_cap_per_day,
-                )
         # Isolated per subscription, and in a SAVEPOINT rather than a bare try.
         #
         # F-3 already said one bad row must not take the cycle down for everyone, and the loop
@@ -152,6 +167,29 @@ def evaluate_cycle(
         # it, everything persisted for *other* subscriptions in this loop survives.
         try:
             with session.begin_nested():
+                # Inside the SAVEPOINT: reading the channel lazy-loads the subscriber, which is
+                # exactly what raised for the unloadable row described above.
+                alert = transition.alert
+                by_email = subscription.subscriber.channel is Channel.EMAIL
+                if (
+                    alert
+                    and by_email
+                    and settings.email_alert_cap_per_day
+                    and emailed_today >= settings.email_alert_cap_per_day
+                ):
+                    # Shared fate, and that is why it is an error rather than a counter: email
+                    # subscribers are not warned about weather that is happening, for a reason
+                    # that is not theirs.
+                    alert = False
+                    transition = replace(transition, alert=False, decision="suppressed_daily_cap")
+                    if not report.daily_cap_tripped:
+                        report.daily_cap_tripped = True
+                        logger.error(
+                            "email alert cap reached: %d warning mails in 24 h at the %d "
+                            "ceiling; further mail warnings are suppressed",
+                            emailed_today,
+                            settings.email_alert_cap_per_day,
+                        )
                 _persist(session, subscription, state_row, cycle, reading, transition, alert, now)
         except Exception:
             report.errors += 1
@@ -163,8 +201,16 @@ def evaluate_cycle(
             continue
         # Counted only once the alert is actually queued. Counting before the savepoint would let a
         # row that failed to persist consume the shared daily ceiling without warning anyone.
-        if alert:
-            queued_today += 1
+        if alert and by_email:
+            emailed_today += 1
+        if transition.decision == "suppressed_cap":
+            # Out of reach of real weather at 24 a day (D-70), so a hit is a bug or an absurd
+            # rule - either way worth seeing, which it was not while it was silent.
+            logger.warning(
+                "subscription %s reached its ceiling of %d rain notifications in 24 h",
+                subscription.id,
+                settings.alert_cap_per_subscription_per_day,
+            )
         report.decisions[transition.decision] = report.decisions.get(transition.decision, 0) + 1
         if transition.decision == "skipped_missing":
             report.skipped_missing += 1
@@ -182,7 +228,43 @@ def evaluate_cycle(
     return report
 
 
-def alerts_since(session, since: datetime, subscription_id=None) -> int:
+def _check_plausibility(session, cycle, frames, settings) -> str | None:
+    """Why `cycle` cannot be believed, or None - and remember its wet share for the next one."""
+    if not settings.implausible_rise_pp:
+        return None
+    shares = {
+        frame.lead_minutes: (
+            wet_share(frame.values, frame.missing)
+            if frame.values is not None and frame.missing is not None
+            else None
+        )
+        for frame in frames
+    }
+    now_share = shares.get(0)
+    previous = session.execute(
+        select(RadarCycle.wet_share)
+        .where(
+            RadarCycle.nominal_time < cycle.nominal_time,
+            RadarCycle.nominal_time
+            >= cycle.nominal_time - timedelta(minutes=settings.implausible_window_minutes),
+            RadarCycle.wet_share.is_not(None),
+        )
+        .order_by(RadarCycle.nominal_time.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    reason = implausible(
+        now_share,
+        [share for lead, share in shares.items() if lead > 0],
+        previous,
+        settings.implausible_rise_pp,
+    )
+    # Stored only for a believable cycle. Two broken cycles in a row would otherwise pass: the
+    # second compared against the first, and found no rise.
+    cycle.wet_share = None if reason else now_share
+    return reason
+
+
+def alerts_since(session, since: datetime, subscription_id=None, channel: str | None = None) -> int:
     """How many *alerts* have been queued since `since`, for one subscription or for all of them.
 
     `event_id IS NOT NULL` is what makes it alerts rather than notifications: the liveness ping
@@ -201,6 +283,8 @@ def alerts_since(session, since: datetime, subscription_id=None) -> int:
     )
     if subscription_id is not None:
         stmt = stmt.where(Notification.subscription_id == subscription_id)
+    if channel is not None:
+        stmt = stmt.where(Notification.channel == channel)
     return session.execute(stmt).scalar_one()
 
 
@@ -287,7 +371,7 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
         return
 
     # "Es regnet jetzt" (D-69): rain began here without a warning. Same event, same notification
-    # row - so it counts against the caps and the blast radius like any warning - but there was no
+    # row - so it counts against the caps like any warning - but there was no
     # forecast to judge: the event is born with its observed start set, which is what keeps
     # `jobs/verify.py` from scoring it as a forecast that came true.
     started_now = transition.decision == "rain_started_unwarned"
@@ -339,6 +423,36 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
     )
 
 
+def _send_all(notifier, messages: list, settings: Settings) -> list:
+    """Send every message; return a DeliveryResult or the exception it raised, in order.
+
+    Push concurrently, `delivery_concurrency` at a time: the web push transport keeps one HTTP
+    client with a connection pool, and each send is independent. Everything else - mail, and the
+    development sinks - one after another, because an SMTP connection is not something two threads
+    may share.
+    """
+
+    def attempt(message):
+        try:
+            return notifier.send(message)
+        except Exception as exc:
+            # Reported per message, never for the whole batch.
+            logger.exception("delivery raised for a %s notification", message.channel)
+            return exc
+
+    outcomes: list = [None] * len(messages)
+    concurrent = [i for i, m in enumerate(messages) if m.channel == Channel.WEBPUSH.value]
+    serial = [i for i, m in enumerate(messages) if m.channel != Channel.WEBPUSH.value]
+    for i in serial:
+        outcomes[i] = attempt(messages[i])
+    if concurrent:
+        workers = max(1, min(settings.delivery_concurrency, len(concurrent)))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="push") as pool:
+            for i, outcome in zip(concurrent, pool.map(attempt, [messages[i] for i in concurrent])):
+                outcomes[i] = outcome
+    return outcomes
+
+
 def deliver_queued(
     session: Session, settings: Settings, notifier, now: datetime | None = None
 ) -> tuple[int, int]:
@@ -385,10 +499,18 @@ def deliver_queued(
     # notification rows being iterated, and mutating a collection while walking it is how this
     # would become an intermittent bug instead of an obvious one.
     gone: set = set()
+
+    # Three passes (D-70): prepare each message here, where the database is; send them - push
+    # concurrently - with nothing touching the session; then write every outcome back here.
+    # The database session is not thread-safe, and the sends are where the time goes: each is an
+    # HTTPS request that spends ~100 ms waiting on the push service, so one after another a few
+    # thousand of them outran the job.
+    prepared: list[tuple[Notification, Subscriber, object]] = []
     for row in rows:
-        if now - row.queued_at > MAX_NOTIFICATION_AGE:
+        valid_until = row.queued_at + notification_lifetime(row.payload, row.queued_at)
+        if now >= valid_until:
             row.status = "expired"
-            row.error = "older than the useful lifetime of a rain warning"
+            row.error = "older than the useful lifetime of this rain notification"
             expired += 1
             continue
         subscription = session.get(Subscription, row.subscription_id)
@@ -403,11 +525,25 @@ def deliver_queued(
             # subscriber, and either can be wrong in a way one row does not get to impose on every
             # other row in the batch - which is what happened when it sat outside.
             message = alert_message(session, settings, subscriber, subscription, row.payload)
-            result = notifier.send(message)
+            # The push service holds it for an offline phone exactly as long as it is still worth
+            # having - and no longer, or a phone back online would show rain that came and went.
+            message = replace(
+                message, ttl_seconds=max(60, int((valid_until - now).total_seconds()))
+            )
         except Exception as exc:
             row.error = f"{type(exc).__name__}: {exc}"
-            logger.exception("delivery raised for notification %s", row.id)
+            logger.exception("building notification %s failed", row.id)
             continue
+        prepared.append((row, subscriber, message))
+
+    outcomes = _send_all(notifier, [message for _, _, message in prepared], settings)
+
+    for (row, subscriber, _), outcome in zip(prepared, outcomes, strict=True):
+        if isinstance(outcome, Exception):
+            # Left queued: the next run tries again while the notification is still worth having.
+            row.error = f"{type(outcome).__name__}: {outcome}"
+            continue
+        result = outcome
         if result.ok:
             row.status = "sent"
             row.sent_at = now

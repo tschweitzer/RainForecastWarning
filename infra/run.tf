@@ -27,6 +27,10 @@ locals {
     # Confirmation and settings-link mails per rolling day, across all requests (D-63).
     TRANSACTIONAL_MAIL_CAP_PER_DAY = tostring(var.transactional_mail_cap_per_day)
 
+    # How far the wet share of the radar area may rise before a cycle is set aside as corrupt
+    # instead of alerting anyone (D-70). 0 turns the check off.
+    IMPLAUSIBLE_RISE_PP = tostring(var.implausible_rise_pp)
+
     # Device keys for the settings page (D-64). The kill switch: false falls back to the push link
     # and the cookie session for everyone, losing nothing - see RUNBOOK before turning it back on.
     DEVICE_KEY_LOGIN_ENABLED = tostring(var.device_key_login_enabled)

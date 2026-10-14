@@ -170,13 +170,22 @@ def test_the_headers_are_rfc_8292_and_carry_no_crypto_key(vapid, browser):
     # Vapid01's "WebPush <jwt>" plus Crypto-Key is the older draft, and some services reject it
     # when sent alongside aes128gcm.
     assert "crypto-key" not in captured
-    # Equal to dispatcher.MAX_NOTIFICATION_AGE. It was 3600, which contradicted it: the dispatcher
-    # refuses to send a warning older than 30 minutes as stale, then asked the push service to hold
-    # it for twice that - so a phone off-network for 50 minutes got a warning about rain that had
-    # already passed, which is the case the shorter rule exists to prevent.
-    from rainalert.alerting.dispatcher import MAX_NOTIFICATION_AGE
+    # The transport's default, for messages that do not say. Rain notifications always do (D-70):
+    # see the next test.
+    assert captured["ttl"] == "1800"
 
-    assert captured["ttl"] == str(int(MAX_NOTIFICATION_AGE.total_seconds()))
+
+def test_a_message_s_own_lifetime_is_what_the_push_service_is_told(vapid, browser):
+    """A warning for rain 90 minutes out is worth holding for an offline phone for 90 minutes; "Es
+    regnet jetzt" for 15. One fixed TTL was too long for the second and dropped the first (D-70)."""
+    captured = {}
+
+    def handler(request):
+        captured.update(request.headers)
+        return httpx.Response(201)
+
+    notifier_for(vapid, handler).send(message_for(browser, ttl_seconds=5400))
+    assert captured["ttl"] == "5400"
 
 
 def test_the_application_server_key_is_derived_from_the_private_one(vapid):
