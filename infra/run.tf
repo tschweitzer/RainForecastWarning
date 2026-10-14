@@ -86,6 +86,13 @@ resource "google_cloud_run_v2_service" "api" {
         # for those seconds - not free, but a few dozen cold starts a day stays inside the free
         # tier (D-51).
         startup_cpu_boost = true
+
+        # Request-based billing: CPU only while a request is being handled (D-71). The provider
+        # treats a missing cpu_idle as false once `resources` is set, which silently meant
+        # instance-based billing - every instance billed for its whole life, including the ~15
+        # idle minutes after each visit, ~4 h a day and ~9 EUR a month. Nothing here runs between
+        # requests, and cold starts are unaffected: startup gets full CPU (and the boost) either way.
+        cpu_idle = true
       }
 
       volume_mounts {
