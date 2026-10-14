@@ -42,7 +42,8 @@ def state(s, **kw):
             "unknown + dry + rain coming",
         ),
         (AlertState.DRY, reading(first_hit=20), AlertState.WARNED, True, "dry + rain coming"),
-        (AlertState.DRY, reading(now_wet=True), AlertState.RAINING, False, "dry + rain overhead"),
+        # "Es regnet jetzt" (D-69): rain that began without a warning is now said.
+        (AlertState.DRY, reading(now_wet=True), AlertState.RAINING, True, "dry + rain overhead"),
         (AlertState.DRY, reading(), AlertState.DRY, False, "dry + nothing"),
         (AlertState.WARNED, reading(now_wet=True), AlertState.RAINING, False, "warned + arrived"),
         (
@@ -289,4 +290,40 @@ def test_a_reading_exactly_at_the_threshold_counts(raw):
     series = sample([frame], 50.1109, 8.6821, 2000)
     assert evaluate(series, AlertRule(threshold_mm_5min=threshold)).now_wet, (
         f"a reading of exactly {threshold} mm/5min did not reach a threshold of {threshold}"
+    )
+
+
+# --- "Es regnet jetzt" (D-69) ----------------------------------------------------------------
+
+
+def test_rain_that_starts_unwarned_is_said_once_per_event():
+    """DRY -> RAINING sends; staying RAINING does not, and a short dry spell does not re-arm it."""
+    started = advance(state(AlertState.DRY), reading(now_wet=True), POLICY, T0)
+    assert (started.next_state, started.alert, started.decision) == (
+        AlertState.RAINING,
+        True,
+        "rain_started_unwarned",
+    )
+    again = advance(state(AlertState.RAINING), reading(now_wet=True), POLICY, T0)
+    assert again.alert is False
+    # Dry for less than `dry_clear_minutes`, then wet again: still the same event.
+    dry_briefly = StateView(AlertState.RAINING, dry_since=T0 - timedelta(minutes=10))
+    back = advance(dry_briefly, reading(now_wet=True), POLICY, T0)
+    assert (back.next_state, back.alert) == (AlertState.RAINING, False)
+
+
+def test_rain_found_by_a_fresh_subscription_is_not_announced():
+    """UNKNOWN cannot tell whether the rain began a minute or an hour ago."""
+    result = advance(state(AlertState.UNKNOWN), reading(now_wet=True), POLICY, T0)
+    assert (result.next_state, result.alert) == (AlertState.RAINING, False)
+
+
+def test_rain_now_goes_through_the_same_throttles_as_a_warning():
+    capped = Policy(alert_cap_per_day=2)
+    started = advance(state(AlertState.DRY), reading(now_wet=True), capped, T0)
+    result = suppress(started, state(AlertState.DRY), capped, T0, alerts_last_day=2)
+    assert (result.next_state, result.alert, result.decision) == (
+        AlertState.RAINING,
+        False,
+        "suppressed_cap",
     )

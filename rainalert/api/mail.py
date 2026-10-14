@@ -287,9 +287,26 @@ def alert_message(
     # The way out is printed only where it can be taken. See unsubscribe_line: on push this body
     # is plain text nothing linkifies, and the exit is in the settings on the start page (D-67).
     exit_line = "" if is_push else f"\n{unsubscribe_line(settings, subscriber.id)}\n"
+    # "Es regnet jetzt" (D-69): rain began here without a warning before it. Says what is happening
+    # and why there was no warning, so it does not read as the service having slept through it.
+    rain_now = payload.get("kind") == "rain_now"
     # A push body also has no room for the provenance paragraph - a notification shows two or
     # three lines before it truncates, and the attribution is on every page of the site.
-    if is_push:
+    if rain_now and is_push:
+        text = f"""Bei dir hat gerade {_intensity(peak)} eingesetzt. Die Vorhersage hatte ihn nicht angekündigt.
+
+Radarbild von {observed:%H:%M} Uhr, DWD.
+"""
+    elif rain_now:
+        text = f"""Bei dir hat gerade {_intensity(peak)} eingesetzt.
+
+Die Radarvorhersage hatte ihn nicht angekuendigt - er ist zu schnell gekommen oder direkt bei
+dir entstanden. Grundlage: Radarbild des DWD von {observed:%H:%M} Uhr.
+{exit_line}
+--
+{ATTRIBUTION}
+"""
+    elif is_push:
         text = f"""Voraussichtlich ab {start:%H:%M} Uhr (in etwa {lead} Minuten), {_intensity(peak)}.
 
 Radarbild von {observed:%H:%M} Uhr, DWD-Vorhersage. Je kürzer die Vorwarnzeit, desto sicherer.
@@ -322,7 +339,8 @@ Vorhersagen aendern sich - je kuerzer die Vorwarnzeit, desto sicherer.
         to=subscriber.address,
         channel=str(subscriber.channel),
         **push_keys(subscriber),
-        subject=f"Regen in etwa {lead} Minuten",
+        subject="Es regnet jetzt" if rain_now else f"Regen in etwa {lead} Minuten",
+        # The same slot as a warning: one rain message on screen at a time.
         push_tag=ALERT_TAG,
         text=text,
         # On push this is where the reader lands when they tap the warning. The map, so the

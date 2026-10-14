@@ -45,6 +45,10 @@ def verify_events(
         session.execute(
             select(RainEvent).where(
                 RainEvent.verified.is_(None),
+                # An event born with its observed start is "Es regnet jetzt" (D-69): rain that came
+                # without a forecast. There is nothing to score - counting it as a hit would flatter
+                # the hit rate with exactly the rain the forecast missed - so it stays unjudged.
+                RainEvent.observed_start_at.is_(None),
                 RainEvent.predicted_start_at < now - tolerance,
             )
         )

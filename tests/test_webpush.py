@@ -1336,3 +1336,24 @@ def test_the_shard_pattern_does_not_open_google_generally(endpoint):
 
     with pytest.raises(EndpointRefused):
         check_endpoint(endpoint)
+
+
+def test_rain_now_on_push_is_short_and_takes_the_warning_slot(settings):
+    """D-69: title and body fit a notification shade; the same tag, so it replaces a warning
+    rather than stacking under it, and no unsubscribe URL nothing on push could open."""
+    import json
+    from types import SimpleNamespace
+
+    from rainalert.api.mail import ALERT_TAG, alert_message
+    from tests.test_channels import ALERT_PAYLOAD, push_subscriber
+
+    payload = {**ALERT_PAYLOAD, "kind": "rain_now", "lead_minutes": 0, "peak_mm_5min": 0.02}
+    message = alert_message(
+        None, settings, push_subscriber(), SimpleNamespace(timezone="Europe/Berlin"), payload
+    )
+    assert message.subject == "Es regnet jetzt"
+    assert message.text.startswith("Bei dir hat gerade leichter Regen eingesetzt.")
+    assert "nicht angekündigt" in message.text
+    assert "Abmelden" not in message.text and "unsubscribe" not in message.text
+    assert message.push_tag == ALERT_TAG
+    assert json.loads(payload_for(message))["title"] == "Es regnet jetzt"

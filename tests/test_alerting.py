@@ -631,3 +631,100 @@ def test_an_unloadable_subscriber_does_not_take_the_cycle_down(db, settings, fra
         assert not session.query(RainEvent).filter_by(subscription_id=broken_id).all(), (
             "the broken subscriber was committed half-written - that is what the SAVEPOINT is for"
         )
+
+
+# --- "Es regnet jetzt" (D-69) ----------------------------------------------------------------
+
+
+def test_rain_that_starts_without_a_warning_says_es_regnet_jetzt(db, settings, frames):
+    """Drizzle forming overhead, a shower faster than the nowcast: it used to pass in silence."""
+    notifier = ConsoleNotifier()
+    with db() as session:
+        sub = active_subscription(session, settings)
+        warm_up(session, settings, frames)  # now DRY
+        overhead = make_frames(frames, wet_now=True, wet_leads=())
+        report = evaluate_cycle(session, add_cycle(session), overhead, settings, now=T0)
+        assert report.alerts == 1
+        assert report.decisions.get("rain_started_unwarned") == 1
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.RAINING
+        note = session.query(Notification).one()
+        assert note.payload["kind"] == "rain_now"
+        assert note.payload["lead_minutes"] == 0
+        # Born with its observed start: there was no forecast to judge.
+        event = session.query(RainEvent).one()
+        assert event.observed_start_at == T0 and event.verified is None
+
+        assert deliver_queued(session, settings, notifier, now=T0) == (1, 0)
+
+    message = notifier.sent[0]
+    assert message.subject == "Es regnet jetzt"
+    assert "eingesetzt" in message.text and "nicht angekuendigt" in message.text
+    # Same exit and same map link as a warning.
+    assert "/unsubscribe#t=" in message.text
+    assert "#l=" in message.click_url
+
+
+def test_rain_now_is_said_once_per_rain_event(db, settings, frames):
+    with db() as session:
+        active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        overhead = make_frames(frames, wet_now=True, wet_leads=())
+        dry = make_frames(frames, wet_now=False, wet_leads=())
+        timeline = [overhead, overhead, dry, overhead]  # a ten-minute break is the same event
+        for i, cycle_frames in enumerate(timeline):
+            at = T0 + timedelta(minutes=5 * i)
+            evaluate_cycle(session, add_cycle(session, at), cycle_frames, settings, now=at)
+        assert session.query(Notification).count() == 1
+
+
+def test_rain_that_was_warned_about_is_not_announced_again(db, settings, frames):
+    """WARNED -> RAINING stays silent: the reader was told already."""
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        evaluate_cycle(
+            session,
+            add_cycle(session, T0),
+            make_frames(frames, wet_now=False, wet_leads=(60,)),
+            settings,
+            now=T0,
+        )
+        later = T0 + timedelta(minutes=5)
+        evaluate_cycle(
+            session,
+            add_cycle(session, later),
+            make_frames(frames, wet_now=True, wet_leads=()),
+            settings,
+            now=later,
+        )
+        kinds = [n.payload["kind"] for n in session.query(Notification).all()]
+        assert kinds == ["warning"]
+
+
+def test_rain_now_counts_against_the_daily_cap(db, settings, frames):
+    settings.alert_cap_per_subscription_per_day = 2
+    with db() as session:
+        sub = active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        _past_alerts(session, sub, 2, T0)
+        overhead = make_frames(frames, wet_now=True, wet_leads=())
+        report = evaluate_cycle(session, add_cycle(session), overhead, settings, now=T0)
+        assert report.alerts == 0
+        assert report.decisions.get("suppressed_cap") == 1
+        assert session.get(SubscriptionAlertState, sub.id).state is AlertState.RAINING
+
+
+def test_verification_does_not_score_rain_that_was_never_forecast(db, settings, frames):
+    """Scoring it would count, as a forecast hit, exactly the rain the forecast missed."""
+    from rainalert.jobs.verify import verify_events
+
+    with db() as session:
+        active_subscription(session, settings)
+        warm_up(session, settings, frames)
+        overhead = make_frames(frames, wet_now=True, wet_leads=())
+        evaluate_cycle(session, add_cycle(session), overhead, settings, now=T0)
+        report = verify_events(session, now=T0 + timedelta(hours=2))
+        assert report.judged == 0
+        assert session.query(RainEvent).one().verified is None

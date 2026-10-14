@@ -101,7 +101,15 @@ def advance(current: StateView, reading: Reading, policy: Policy, now: datetime)
 
     if state is AlertState.DRY:
         if reading.now_wet:
-            return Transition(AlertState.RAINING, None, 0, False, "rain_started_unwarned")
+            # Rain began here without the forecast having seen it coming - drizzle forming
+            # overhead, a shower faster than the nowcast. It used to pass in silence, which read to
+            # a subscriber as the service missing the rain altogether. Now it says "Es regnet
+            # jetzt" (D-69): once per event, because RAINING only returns to DRY after
+            # `dry_clear_minutes`, and through the same throttles and caps as a warning.
+            #
+            # Not from UNKNOWN (above): a fresh or just-moved subscription that finds rain falling
+            # cannot tell whether it began a minute ago or an hour ago.
+            return Transition(AlertState.RAINING, None, 0, True, "rain_started_unwarned")
         if reading.first_hit_lead_minutes is not None:
             return Transition(AlertState.WARNED, dry_since, 0, True, "alert")
         return Transition(AlertState.DRY, dry_since, 0, False, "no_rain")

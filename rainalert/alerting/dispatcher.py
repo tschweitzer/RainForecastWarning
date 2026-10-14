@@ -286,9 +286,20 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
     if not alert:
         return
 
-    predicted = cycle.nominal_time + timedelta(minutes=reading.first_hit_lead_minutes or 0)
+    # "Es regnet jetzt" (D-69): rain began here without a warning. Same event, same notification
+    # row - so it counts against the caps and the blast radius like any warning - but there was no
+    # forecast to judge: the event is born with its observed start set, which is what keeps
+    # `jobs/verify.py` from scoring it as a forecast that came true.
+    started_now = transition.decision == "rain_started_unwarned"
+    if started_now:
+        predicted = cycle.nominal_time
+    else:
+        predicted = cycle.nominal_time + timedelta(minutes=reading.first_hit_lead_minutes or 0)
     event = RainEvent(
-        subscription_id=subscription.id, predicted_start_at=predicted, first_alert_at=now
+        subscription_id=subscription.id,
+        predicted_start_at=predicted,
+        first_alert_at=now,
+        observed_start_at=cycle.nominal_time if started_now else None,
     )
     session.add(event)
     session.flush()
@@ -306,13 +317,21 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
             status="queued",
             queued_at=now,
             payload={
+                # Which message: a warning ("Regen in etwa N Minuten") or "Es regnet jetzt".
+                "kind": "rain_now" if started_now else "warning",
                 "predicted_start_at": predicted.isoformat(),
                 # The cycle this was decided from, so the mail can state how fresh the data is
                 # rather than when the mail happened to be rendered.
                 "cycle_time": cycle.nominal_time.isoformat(),
-                "lead_minutes": reading.first_hit_lead_minutes,
-                "peak_mm_5min": max(
-                    (r for r in series.max_rate_by_lead[:SLOTS] if r is not None), default=0.0
+                "lead_minutes": 0 if started_now else reading.first_hit_lead_minutes,
+                # For rain that has started, how hard it is falling now - not the worst of the
+                # next two hours, which a warning reports as what is coming.
+                "peak_mm_5min": (
+                    (series.max_rate_by_lead[0] or 0.0)
+                    if started_now
+                    else max(
+                        (r for r in series.max_rate_by_lead[:SLOTS] if r is not None), default=0.0
+                    )
                 ),
                 "timezone": subscription.timezone,
             },

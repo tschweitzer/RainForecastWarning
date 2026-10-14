@@ -942,6 +942,13 @@ def _every_message(settings):
         "confirmation": (confirmation_message(settings, "a@b.example", "T"), False),
         "manage link": (manage_link_message(settings, "a@b.example", "T", who), True),
         "alert": (alert_message(None, settings, subscriber, subscription, payload), True),
+        # "Es regnet jetzt" (D-69) is the same kind of message and keeps the same way out.
+        "rain now": (
+            alert_message(
+                None, settings, subscriber, subscription, {**payload, "kind": "rain_now"}
+            ),
+            True,
+        ),
         "deletion receipt": (deletion_receipt(settings, "a@b.example"), False),
     }
 
