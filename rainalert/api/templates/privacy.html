@@ -1,37 +1,125 @@
 {% extends "base.html" %}
 {% block body %}
+{# The full statement GDPR Art. 13 asks for, rewritten 2026-10-18 after an audit against the code
+   (DESIGN.md D-72). Every number below comes from `settings` where the code has one, so the page
+   cannot drift from what the service does; the two that are infrastructure facts (log and backup
+   retention) say where they come from. When behaviour changes, this page changes with it. #}
 <h1>Datenschutz</h1>
-<p class="lede">Kurzfassung: so wenig wie möglich, nur zum Warnen, jederzeit löschbar.</p>
+<p class="lede">Kurzfassung: Wir speichern, was wir zum Warnen brauchen – deinen Standort und wie wir
+dich erreichen – und sonst so wenig wie möglich. Keine Werbung, kein Tracking. Abmelden löscht deine
+Daten sofort.</p>
 
-<h2>Was gespeichert wird</h2>
+{# Art. 13(1)(a). Name and postal address are configuration (PRIVACY_CONTROLLER), never hard-coded:
+   they are the operator's, and a repository is the wrong place for them. #}
+<h2>Verantwortlich</h2>
+<p>{% if settings.privacy_controller %}{{ settings.privacy_controller }}{% else %}Der Betreiber
+dieser Website{% endif %}{% if settings.contact_email %}, erreichbar unter
+<a href="mailto:{{ settings.contact_email }}">{{ settings.contact_email }}</a>{% endif %}. Für
+Fragen zu deinen Daten und für die Rechte, die unten stehen, genügt eine formlose Nachricht.</p>
+
+<h2>Was wir speichern</h2>
+<p>Für die Warnungen:</p>
 <ul>
   <li>Je nach Kanal deine E-Mail-Adresse oder die Push-Adresse deines Browsers. Diese Adresse
       stellt dein Browser aus, wenn du Benachrichtigungen erlaubst; sie gilt nur für diesen einen
-      Browser. Wir kennen darüber keine Gerätekennung, keine Telefonnummer und keinen Namen.</li>
+      Browser; bei Push kommen zwei Schlüssel dazu, die dein Browser mitliefert und mit denen wir
+      jede Nachricht für ihn verschlüsseln. Eine Gerätekennung, Telefonnummer oder deinen Namen kennen
+      wir nicht.</li>
   <li>Dein Standort (Koordinaten) – nur der aktuelle, kein Verlauf.</li>
-  <li>Deine Einstellungen und die Warnungen, die verschickt wurden.</li>
+  <li>Deine Einstellungen, etwa ab welcher Regenstärke, wie früh und in welchem Umkreis du gewarnt
+      werden willst.</li>
+  <li>Die Warnungen, die wir dir geschickt haben, und ob es danach an deinem Ort tatsächlich
+      geregnet hat. Daran sehen wir, wie zuverlässig die Warnungen sind.</li>
+  <li>{{ settings.evaluation_retention_hours }} Stunden lang ein Protokoll der Auswertungen: alle
+      fünf Minuten, was das Radar an deinem Ort zeigte und ob wir gewarnt haben. Damit lässt sich
+      nachvollziehen, warum eine Warnung kam oder ausblieb.</li>
   {# D-64. Stated because the browser stores something for us, which § 25 TDDDG asks to be named;
      deliberately not a feature with a name - to the reader they are simply subscribed. #}
   <li>Bei Push: der öffentliche Teil eines Schlüssels, den dein Browser beim Bestätigen erzeugt.
       Den privaten Teil behält dein Browser; damit erkennen wir ihn als den angemeldeten Browser,
-      wenn du diese Website öffnest, und zeigen dir deine Einstellungen. Dafür ist er erforderlich (§ 25 Abs. 2 Nr. 2 TDDDG), und
-      er verschwindet, wenn du dich abmeldest oder die Websitedaten löschst.</li>
-  <li>Zeitpunkt der Bestätigung sowie ein gesalzener Hash deiner IP-Adresse als Nachweis
-      der Einwilligung.</li>
+      wenn du diese Website öffnest, und zeigen dir deine Einstellungen.</li>
+  {# Subscriber.last_seen_at: written at most once a day, and only ever read as a count. #}
+  <li>Wann du zuletzt eine Warnung angetippt oder deine Einstellungen geöffnet hast, höchstens
+      einmal am Tag aktualisiert. Ausgewertet wird das nur als Zahl: wie viele Angemeldete unsere
+      Nachrichten überhaupt sehen.</li>
 </ul>
+<p>Als Nachweis deiner Einwilligung: wann du dich angemeldet und wann du bestätigt hast, ein
+gesalzener Hash deiner IP-Adresse (ohne unseren geheimen Schlüssel lässt sich die Adresse daraus
+nicht zurückrechnen), die Kennung deines Browsers (der „User-Agent“: Browser und Betriebssystem mit ihren Versionen) und
+welche Fassung des Einwilligungstexts du gesehen hast.</p>
+{# The rate-limit buckets in api/app.py: `<action>:ip:<address>` in plain text, plus a hash of the
+   mailbox or endpoint for signups and link requests. Not cascaded from subscribers (F-5). #}
+<p>Zum Schutz vor Missbrauch: Wenn du dich anmeldest, Einstellungen änderst, einen Link anforderst
+oder eine Warnung öffnest, zählen wir das mit Zeitpunkt und IP-Adresse, bei Anmeldungen und
+Link-Anforderungen auch mit einem Hash deiner E-Mail- oder Push-Adresse. So kann niemand den Dienst
+in Massen benutzen. Die Codes in unseren Links speichern wir nur als Hash.</p>
 
-<h2>Wofür</h2>
-<p>Ausschließlich, um dir Regenwarnungen zu schicken. Keine Werbung, keine Weitergabe,
-kein Tracking.</p>
+{# Inventory taken from the code (2026-10-18): app.py set_session_cookie; devicekey.js;
+   pendingconfirm.js and sw.js (one IndexedDB); signup.js WINDOW_KEY and the 'rainalert.deleted'
+   flag. A new browser store means a new line here. #}
+<h2>Was dein Browser speichert</h2>
+<ul>
+  <li>Bei Push: die Erlaubnis für Benachrichtigungen und die Push-Anmeldung selbst, dazu ein kleines
+      Hintergrundprogramm dieser Website (ein „Service Worker“), das die Benachrichtigungen empfängt
+      und anzeigt. Beides entsteht erst, wenn du dich anmeldest.</li>
+  <li>Bei Push: den privaten Teil des Schlüssels von oben. Er lässt sich nicht aus dem Browser
+      herauskopieren, auch nicht von uns.</li>
+  <li>Bei Push, während der Anmeldung: den Bestätigungslink aus der Benachrichtigung, bis du ihn
+      benutzt hast – höchstens {{ settings.confirm_token_ttl_hours }} Stunden.</li>
+  <li>Ein Cookie namens <code>__session</code>, wenn du die Einstellungen über einen Link öffnest –
+      bei E-Mail immer, bei Push nur, wenn dein Browser keinen Schlüssel hat. Es hält dich
+      {{ settings.manage_session_ttl_minutes }} Minuten angemeldet, verlängerbar auf höchstens
+      {{ settings.manage_session_max_minutes }} Minuten.</li>
+  <li>Den Zeitraum, den du auf der Karte zuletzt gewählt hast, damit sie beim nächsten Mal wieder
+      so öffnet.</li>
+  <li>Nach dem Abmelden für einen Augenblick den Hinweis, dass die Löschung geklappt hat.</li>
+</ul>
+<p>Mehr nicht. Jeder Eintrag ist für den Dienst erforderlich, den du aufrufst (§ 25 Abs. 2 Nr. 2
+TDDDG), keiner dient Werbung oder Statistik, und keiner stammt von einem fremden Anbieter – deshalb
+gibt es hier kein Cookie-Banner. Du kannst alles über die Websitedaten deines Browsers löschen; bei Push endet damit
+auch die Anmeldung (siehe unten).</p>
 
-{# The one place a stored location becomes visible again from outside the settings page, so it
-   belongs here rather than only in the design notes (DESIGN.md D-38). #}
-<h2>Der Link in einer Warnung</h2>
-<p>Tippst du eine Warnung an, öffnet sich die Karte an dem Ort, um den es ging. Der Link enthält
-deinen Standort nicht – er enthält einen signierten Verweis, den wir auflösen. Nach
-{{ settings.locate_link_ttl_minutes }} Minuten gilt er nicht mehr und dieselbe Warnung öffnet
-nur noch die normale Karte. Eine alte Benachrichtigung verrät also auch dann nichts über deinen
-Ort, wenn jemand anders sie zu sehen bekommt.</p>
+<h2>Wofür und auf welcher Grundlage</h2>
+<ul>
+  <li>Regenwarnungen und was dazugehört – die Bestätigung, der Link zu deinen Einstellungen, die
+      gelegentliche Meldung, dass die Warnung noch läuft: auf Grundlage deiner Einwilligung
+      (Art. 6 Abs. 1 lit. a DSGVO). Du erteilst sie über den Kanal, den du gewählt hast: mit dem Link
+      in der Bestätigungsmail oder mit der Benachrichtigung „Regenwarnung bestätigen“. Widerrufen
+      kannst du sie jederzeit, indem du dich abmeldest; was bis dahin geschah, bleibt
+      rechtmäßig.</li>
+  <li>Der Nachweis der Einwilligung: weil wir ihn erbringen müssen (Art. 6 Abs. 1 lit. c in
+      Verbindung mit Art. 7 Abs. 1 DSGVO).</li>
+  <li>Der Schutz vor Missbrauch, die Server-Protokolle, die Prüfung, wie zuverlässig die Warnungen
+      sind, und die Karte: auf Grundlage unseres berechtigten Interesses an einem sicheren,
+      zuverlässigen Dienst mit einer lesbaren Karte (Art. 6 Abs. 1 lit. f DSGVO).</li>
+</ul>
+<p>Werbung, Tracking und Profile gibt es nicht, und wir verkaufen oder überlassen deine Daten
+niemandem für dessen eigene Zwecke. Ohne Standort und einen Weg, dich zu erreichen, können wir dich
+nicht warnen – zu mehr bist du nicht verpflichtet.</p>
+
+{# Every processor and recipient this deployment has. The mail server only when email is on:
+   without it no address is ever sent anywhere. #}
+<h2>Wer außer uns beteiligt ist</h2>
+<p><strong>Google Cloud</strong> betreibt für uns Server und Datenbank, in Frankfurt am Main; die
+Sicherungskopien bleiben in der EU. Google verarbeitet die Daten dabei nur in unserem Auftrag
+(Art. 28 DSGVO). Ausgeliefert wird die Website über Firebase Hosting, ein weltweites Netz von
+Google, die Regenbilder über Google Cloud Storage. Deine Verbindung kann dabei über Server außerhalb der
+EU laufen; Google LLC ist nach dem EU-US Data Privacy Framework zertifiziert. Google führt für uns
+Server-Protokolle: deine IP-Adresse, den Zeitpunkt, die aufgerufene Adresse und die Kennung deines
+Browsers.</p>
+<p><strong>Der Push-Dienst deines Browsers</strong> stellt Push-Benachrichtigungen zu – bei Chrome
+ist das Google, bei Firefox Mozilla, bei Safari Apple, bei Edge Microsoft. Welcher Dienst zuständig
+ist, entscheidet dein Browser, nicht wir. Den <strong>Inhalt</strong> einer Nachricht kann der
+Dienst nicht lesen: er wird verschlüsselt, und nur dein Browser kann ihn entschlüsseln (RFC 8291).
+Sichtbar sind für den Dienst der Zeitpunkt, die Größe der Nachricht und die Push-Adresse deines
+Browsers. Aus dem Zeitpunkt lässt sich grundsätzlich etwas über das Wetter an deinem Ort schließen
+– der Ort selbst wird nicht übertragen. Diese Dienste können die Daten auch außerhalb der EU
+verarbeiten, etwa in den USA.</p>
+{% if settings.email_channel_enabled %}
+<p><strong>E-Mails</strong> verschicken wir über den Mailserver
+<code>{{ settings.smtp_host }}</code>. Er sieht deine Adresse und den Inhalt der Mail, wie jeder
+Mailserver auf dem Weg zu dir.</p>
+{% endif %}
 
 {# Every visitor's browser fetches the map from a third party, and on the settings page the map is
    centred on the subscriber's warning location - so the tile server learns roughly where they
@@ -46,49 +134,67 @@ endif %} (<code>{{ vector_tile_host or raster_tile_host }}</code>){% if vector_t
 raster_tile_host %}, und nur wenn dein Browser diese Karte nicht darstellen kann, stattdessen von
 <code>{{ raster_tile_host }}</code>{% endif %}. Dabei sieht der Kartenserver deine IP-Adresse und
 welchen Kartenausschnitt du ansiehst – ist dieser Browser angemeldet, zeigt die Startseite die
-Gegend um deinen Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber nicht von welcher
-Seite und nichts aus einem Link. Wir selbst geben ihm keine Daten weiter, und es werden dafür
-keine Cookies gesetzt.{% if vector_tile_host == 'vector.openstreetmap.org' %} Für diesen Server gilt die
-<a href="https://wiki.osmfoundation.org/wiki/Privacy_Policy">Datenschutzerklärung der OpenStreetMap
-Foundation</a>.{% endif %}</p>
-<p>Die Regenbilder und alles andere auf dieser Seite kommen von uns.</p>
+Gegend um deinen Warnort. Er erfährt außerdem, dass die Anfrage von dieser Website kommt, aber
+nicht von welcher Seite und nichts aus einem Link. Wir selbst geben ihm keine Daten weiter, und es
+werden dafür keine Cookies gesetzt.{% if vector_tile_host == 'vector.openstreetmap.org' %} Für
+diesen Server gilt die <a href="https://wiki.osmfoundation.org/wiki/Privacy_Policy">Datenschutzerklärung
+der OpenStreetMap Foundation</a>.{% endif %}</p>
+<p>Die Regenbilder und alles andere auf dieser Website liefern wir selbst aus, über Google Cloud
+wie oben beschrieben.</p>
 {% endif %}
 
-<h2>Wie lange</h2>
-<p>Bis du dich abmeldest. Nicht bestätigte Anmeldungen werden nach
-{{ settings.unconfirmed_purge_hours }} Stunden gelöscht.</p>
+{# The one place a stored location becomes visible again from outside the settings page, so it
+   belongs here rather than only in the design notes (DESIGN.md D-38). #}
+<h2>Der Link in einer Warnung</h2>
+<p>Tippst du eine Warnung an, öffnet sich die Karte an dem Ort, um den es ging. Der Link enthält
+deinen Standort nicht – er enthält einen signierten Verweis, den wir auflösen. Nach
+{{ settings.locate_link_ttl_minutes }} Minuten gilt er nicht mehr, und dieselbe Warnung öffnet
+nur noch die normale Karte. Eine alte Benachrichtigung verrät also auch dann nichts über deinen
+Ort, wenn jemand anders sie zu sehen bekommt.</p>
 
-<h2>Löschen</h2>
+{# The 30 days are the default retention of Cloud Logging's _Default bucket, which infra/ does not
+   change; the 7 are Cloud SQL's defaults for automated backups and point-in-time recovery
+   (infra/main.tf backup_configuration). Change either there, change it here. #}
+<h2>Wie lange</h2>
+<ul>
+  <li>Adresse, Standort, Einstellungen und Warnungen: bis du dich abmeldest. Nicht bestätigte
+      Anmeldungen löschen wir nach {{ settings.unconfirmed_purge_hours }} Stunden.</li>
+  <li>Das Protokoll der Auswertungen: {{ settings.evaluation_retention_hours }} Stunden.</li>
+  <li>Die Zähler gegen Missbrauch: {{ settings.rate_limit_retention_days }} Tage, auch nach dem
+      Abmelden – sonst ließe sich jede Grenze durch Abmelden und neu Anmelden umgehen.</li>
+  <li>Server-Protokolle: 30 Tage.</li>
+  <li>Sicherungskopien der Datenbank: 7 Tage. So lange kann eine gelöschte Anmeldung noch in einer
+      Sicherung stehen; zurückgespielt wird sie nur, wenn die Datenbank selbst wiederhergestellt
+      werden muss.</li>
+</ul>
+
+<h2>Wenn du die Websitedaten löschst</h2>
+{# "die Anmeldung", not "das Abo" - the word appeared nowhere else on the site. And it is the push
+   service that reports the dead endpoint, not the browser: as written it implied a channel from the
+   reader's browser back to us, which is the opposite of what this section exists to explain. #}
+<p>Bei Push lebt die Anmeldung in diesem Browser. Löschst du die Websitedaten oder blockierst du
+Benachrichtigungen, endet sie – der Push-Dienst weist den nächsten Versand als ungültig zurück, und
+wir löschen dann Adresse, Standort und Einstellungen. Damit das auch passiert, wenn es lange nicht
+regnet, schicken wir nach {{ settings.webpush_liveness_days }} Tagen ohne Nachricht eine kurze
+Meldung, die nur bestätigt, dass die Warnung noch läuft. Bleibt sie unzustellbar, löschen wir deine
+Daten. Geprüft wird das wöchentlich, es kann also einige Tage länger dauern.</p>
+
+<h2>Löschen und deine Rechte</h2>
 {# Named both routes. Saying only "in jeder Warnung" made the deletion right look like it opens
    only when it rains, which on the page that documents that right is the worst place for it: in a
    dry spell there is no warning. Since D-67 the settings are on the start page of a subscribed
    browser, so that is where this points. #}
-<p>Bei Push: öffne diese Website in dem Browser, mit dem du angemeldet bist – unter der Karte stehen
-deine Einstellungen – und wähle dort „Abmelden und meine Daten löschen“. Bei E-Mail: über den Abmeldelink in jeder Mail.
-Beides löscht sofort und vollständig.</p>
+<p>Standort und Einstellungen kannst du jederzeit selbst ändern, und genauso kannst du dich
+abmelden. Bei Push: öffne diese Website in dem Browser, mit dem
+du angemeldet bist – unter der Karte stehen deine Einstellungen – und wähle dort „Abmelden und meine
+Daten löschen“. Bei E-Mail: über den Abmeldelink in jeder Mail oder in deinen Einstellungen. Beides
+löscht sofort alles, was zu deiner Anmeldung gehört; was danach noch eine Weile besteht, steht unter
+„Wie lange“.</p>
+<p>Außerdem hast du das Recht auf Auskunft über deine Daten (Art. 15 DSGVO), auf Berichtigung
+(Art. 16), Löschung (Art. 17), Einschränkung der Verarbeitung (Art. 18) und Datenübertragbarkeit
+(Art. 20), und du kannst der Verarbeitung aus berechtigtem Interesse widersprechen (Art. 21).
+Schreib dafür an die Adresse unter „Verantwortlich“. Und du kannst dich bei einer
+Datenschutz-Aufsichtsbehörde beschweren (Art. 77), zum Beispiel bei der deines Bundeslandes.</p>
 
-<h2>Rechtsgrundlage</h2>
-<p>Einwilligung (Art. 6 Abs. 1 lit. a DSGVO), erteilt durch die Bestätigung über den Kanal,
-den du gewählt hast: den Link in der Bestätigungsmail oder das Antippen der Benachrichtigung
-„Regenwarnung bestätigen“.</p>
-
-<h2>Bei Push-Benachrichtigungen</h2>
-<p>Push-Benachrichtigungen gehen über den Push-Dienst deines Browsers – bei Chrome ist das Google,
-bei Firefox Mozilla, bei Safari Apple. Wir kommen daran nicht vorbei: welcher Dienst zuständig ist,
-entscheidet dein Browser, nicht wir.</p>
-<p>Der <strong>Inhalt</strong> der Warnung ist für diesen Dienst nicht lesbar: er wird verschlüsselt
-und nur dein Browser kann ihn entschlüsseln (RFC 8291). Sichtbar sind für den Dienst der Zeitpunkt,
-die Größe der Nachricht und die Push-Adresse deines Browsers. Aus dem Zeitpunkt lässt sich
-grundsätzlich etwas über das Wetter an deinem Ort schließen – der Ort selbst wird nicht übertragen.</p>
-
-<h2>Wenn du die Websitedaten löschst</h2>
-<p>Die Anmeldung lebt in diesem Browser. Löschst du die Websitedaten oder blockierst du
-{# "die Anmeldung", not "das Abo" - the word appeared nowhere else on the site. And it is the push
-   service that reports the dead endpoint, not the browser: as written it implied a channel from the
-   reader's browser back to us, which is the opposite of what this section exists to explain. #}
-Benachrichtigungen, endet die Anmeldung – der Push-Dienst deines Browsers weist den nächsten Versand
-als ungültig zurück, und wir löschen dann Adresse, Standort und Einstellungen. Damit das auch passiert, wenn es lange nicht
-regnet, schicken wir nach {{ settings.webpush_liveness_days }} Tagen ohne Nachricht eine kurze
-Meldung, die nur bestätigt, dass die Warnung noch läuft. Bleibt sie unzustellbar, werden deine Daten
-gelöscht. Geprüft wird das wöchentlich, es kann also einige Tage länger dauern.</p>
+<p class="hint">Stand: Oktober 2026</p>
 {% endblock %}

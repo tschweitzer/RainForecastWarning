@@ -23,6 +23,7 @@ locals {
     MAP_TILE_ATTRIBUTION    = var.map_tile_attribution
     VECTOR_TILE_URL         = var.vector_tile_url
     CONTACT_EMAIL           = var.contact_email
+    PRIVACY_CONTROLLER      = var.privacy_controller
 
     # Confirmation and settings-link mails per rolling day, across all requests (D-63).
     TRANSACTIONAL_MAIL_CAP_PER_DAY = tostring(var.transactional_mail_cap_per_day)

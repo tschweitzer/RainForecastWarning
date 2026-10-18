@@ -209,6 +209,11 @@ class Settings(BaseSettings):
     #: recommends one, so they can reach the site's operator rather than block it. Published to
     #: everyone, so it should be an address meant for that.
     contact_email: str = ""
+    #: Who is responsible for the data, as the privacy page names them (GDPR Art. 13(1)(a)): name
+    #: and postal address, e.g. "Erika Muster, Musterweg 1, 12345 Musterstadt". Configuration, not
+    #: code, because it is the operator's and does not belong in a repository. Empty shows "Der
+    #: Betreiber dieser Website", which is not enough for a public site.
+    privacy_controller: str = ""
 
     # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
     #: console | file | smtp | webpush | push | auto. SMTP reaches every provider worth using, so

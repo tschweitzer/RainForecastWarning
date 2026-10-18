@@ -126,6 +126,12 @@ variable "contact_email" {
   }
 }
 
+variable "privacy_controller" {
+  description = "Who is responsible for the subscribers' data, as the privacy page names them (GDPR Art. 13(1)(a)): name and postal address on one line, e.g. \"Erika Muster, Musterweg 1, 12345 Musterstadt\". Published to everyone who opens the site. Empty shows \"Der Betreiber dieser Website\", which is not enough once the site is public."
+  type        = string
+  default     = ""
+}
+
 variable "device_key_login_enabled" {
   description = "Push subscribers' browsers sign their settings requests with a device key, so the settings open without a push round trip (DESIGN.md D-64). The kill switch: false falls back to the push link and the cookie session for everyone, and nothing is lost. If it was turned off because of a verification bug, empty device_keys before turning it back on (RUNBOOK)."
   type        = bool
