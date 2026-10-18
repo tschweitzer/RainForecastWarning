@@ -20,11 +20,13 @@ import numpy as np
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from rainalert.alerting.dispatcher import deliver_queued, evaluate_cycle
+from rainalert.alerting.dispatcher import deliver_queued, evaluate_cycle, purge_evaluations
 from rainalert.api.metrics import raw_cycle_age_seconds
+from rainalert.api.ratelimit import purge_old_hits
 from rainalert.config import Settings
 from rainalert.db.models import CycleStatus, RadarCycle
 from rainalert.db.session import pipeline_lock
+from rainalert.jobs.verify import verify_events
 from rainalert.radar.client import BreakerOpen, BudgetExhausted, DWDClient, FetchError
 from rainalert.radar.decoder import RVFormatError, RVFrame, read_frames
 from rainalert.radar.overlay import DRAWN_FROM_MM_5MIN, build_projection, render_frame
@@ -271,19 +273,7 @@ def ingest_once(
             if sent or expired:
                 logger.info("delivered %d notification(s), expired %d", sent, expired)
 
-        # Never-confirmed signups, deleted after `unconfirmed_purge_hours`. Run here because this is
-        # the only thing that runs on a schedule often enough to honour the promise: the signup page
-        # and the privacy page both say 24 hours, and until now `purge_unconfirmed` had no production
-        # caller at all - one reference, from a test. Cheap enough to run every cycle (an indexed
-        # scan of `confirmed_at IS NULL`), and it must not wait for the weekly liveness job, which
-        # would make "24 hours" mean "up to 30 days".
-        purged = purge_unconfirmed(session, settings, now)
-        if purged:
-            logger.info(
-                "purged %d unconfirmed signup(s) older than %d h",
-                purged,
-                settings.unconfirmed_purge_hours,
-            )
+        housekeeping(session, settings, now)
 
         # How wet the analysis frame was, on the same line as the rest. Without it a cycle that
         # decoded to almost nothing and a cycle full of rain log identically, and the only way
@@ -354,6 +344,48 @@ def _record_rejected(
 def prune_archives(store: ArchiveStore, settings: Settings, now: datetime | None = None) -> int:
     now = now or datetime.now(UTC)
     return store.prune(now - timedelta(hours=settings.raw_retention_hours))
+
+
+def housekeeping(session: Session, settings: Settings, now: datetime) -> None:
+    """Every retention promise the privacy page makes, kept on the one schedule that runs.
+
+    Here because this job is the only thing that runs often enough. Each of these had the same
+    history: a function, tested, and no production caller. `purge_unconfirmed` was the first to be
+    found (the signup page and the privacy page both say 24 hours). The other three were found by
+    the privacy audit of 2026-10-18 (DESIGN.md D-73): `verify_events` and `purge_evaluations` ran
+    only from `rainalert verify`, which nothing schedules, so the 48-hour evaluation log was kept
+    for good and no warning was ever scored; and `purge_old_hits` had no caller at all, so the
+    7-day rate-limit counters - with client IPs in them - were never deleted either.
+
+    All indexed and cheap enough for every cycle. Verification runs before the evaluation purge
+    because it reads those rows: an event is judged once its time has passed, within minutes,
+    long before its evaluations are 48 hours old.
+    """
+    purged = purge_unconfirmed(session, settings, now)
+    if purged:
+        logger.info(
+            "purged %d unconfirmed signup(s) older than %d h",
+            purged,
+            settings.unconfirmed_purge_hours,
+        )
+    report = verify_events(session, now)
+    if report.judged:
+        logger.info(
+            "verified %d warning(s): %d came true, %d did not",
+            report.judged,
+            report.hits,
+            report.misses,
+        )
+    purged = purge_evaluations(session, settings, now)
+    if purged:
+        logger.info(
+            "purged %d evaluation row(s) older than %d h",
+            purged,
+            settings.evaluation_retention_hours,
+        )
+    purged = purge_old_hits(session, settings.rate_limit_retention_days, now)
+    if purged:
+        logger.info("purged %d rate-limit row(s)", purged)
 
 
 def prune_overlays(overlays: OverlayStore, settings: Settings, now: datetime | None = None) -> int:

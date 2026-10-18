@@ -374,6 +374,40 @@ def test_evaluations_are_purged_but_events_are_not(db, settings, frames):
         assert session.query(Notification).count() == 1
 
 
+def test_the_ingest_job_keeps_every_retention_promise(db, settings, frames):
+    """D-73: verification and both purges ran from nowhere in production. Now every cycle."""
+    from rainalert.api.ratelimit import ip_bucket
+    from rainalert.db.models import RateLimitHit
+    from rainalert.jobs.ingest import housekeeping
+
+    with db() as session:
+        sub = active_subscription(session, settings)
+        sub.lead_time_minutes = 60
+        session.commit()
+        warm_up(session, settings, frames)
+        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
+        evaluate_cycle(session, add_cycle(session), approaching, settings, now=T0)
+        session.add(
+            RateLimitHit(
+                bucket=ip_bucket("subscribe:ip", "203.0.113.7", settings.secret_key),
+                occurred_at=T0,
+            )
+        )
+        session.commit()
+
+        # Two hours on: the warning is due for judging, nothing is old enough to purge yet.
+        housekeeping(session, settings, T0 + timedelta(hours=2))
+        event = session.query(RainEvent).one()
+        assert event.verified is not None, "the warning was never scored"
+        assert session.query(Evaluation).count() == 2
+
+        # Eight days on: the evaluation log and the counters are past their retention.
+        housekeeping(session, settings, T0 + timedelta(days=8))
+        assert session.query(Evaluation).count() == 0
+        assert session.query(RateLimitHit).count() == 0
+        assert session.query(RainEvent).count() == 1, "the durable record stays"
+
+
 # --- verification ----------------------------------------------------------------------------
 
 

@@ -271,6 +271,56 @@ def test_deleting_an_account_does_not_erase_the_abuse_record(client, notifier, d
         assert session.query(RateLimitHit).count() > 0
 
 
+def test_no_rate_limit_row_holds_a_client_address(db, settings, notifier):
+    """Hashed with the app secret since D-73: the limits only need "same address as before"."""
+    from rainalert.api.ratelimit import ip_bucket
+
+    behind_proxy = settings.model_copy(update={"trusted_proxy_hops": 1})
+    client = TestClient(create_app(behind_proxy, session_factory=db, notifier=notifier))
+    response = client.post(
+        "/api/v1/subscriptions",
+        json={"email": "friend@example.com", "lat": FRANKFURT[0], "lon": FRANKFURT[1]},
+        headers={"X-Forwarded-For": "203.0.113.7"},
+    )
+    assert response.status_code == 202
+    with db() as session:
+        buckets = {row.bucket for row in session.query(RateLimitHit)}
+    assert not [b for b in buckets if "203.0.113.7" in b], buckets
+    assert ip_bucket("subscribe:ip", "203.0.113.7", settings.secret_key) in buckets
+
+
+def test_no_bucket_is_built_from_a_plain_address():
+    """The regression this guards: one new endpoint writing `f"...:{ip}"` again."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "rainalert" / "api" / "app.py").read_text()
+    assert "{ip}" not in source
+
+
+def test_the_purge_removes_expired_rows_and_every_plain_ip(db, settings):
+    from datetime import UTC, datetime, timedelta
+
+    from rainalert.api.ratelimit import ip_bucket, purge_old_hits
+
+    now = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+    hashed = ip_bucket("subscribe:ip", "203.0.113.7", settings.secret_key)
+    keep = {
+        hashed,
+        "subscribe:email:" + "ab" * 32,
+        "mail:transactional",
+    }
+    legacy = {"subscribe:ip:203.0.113.7", "locate:ip:2001:db8::1", "devicekey:fail:unknown"}
+    with db() as session:
+        for bucket in keep | legacy:
+            session.add(RateLimitHit(bucket=bucket, occurred_at=now - timedelta(minutes=5)))
+        expired = ip_bucket("settings:ip", "198.51.100.1", settings.secret_key)
+        session.add(RateLimitHit(bucket=expired, occurred_at=now - timedelta(days=8)))
+        session.commit()
+
+        assert purge_old_hits(session, settings.rate_limit_retention_days, now) == 4
+        assert {row.bucket for row in session.query(RateLimitHit)} == keep
+
+
 # --- hygiene ---------------------------------------------------------------------------------
 
 

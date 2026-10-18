@@ -366,7 +366,9 @@ What that buys an attacker, and what bounds it:
   "Transactional mail cap reached"). Rain warnings have their own cap (`email_alert_cap_per_day`)
   and are not counted. This is the global cap the fix list above asked for.
 - *Still open:* the per-IP limits on settings writes and location updates (authenticated anyway),
-  and rows in `rate_limit_hits` (purged after `rate_limit_retention_days`). The real fix - making
+  and rows in `rate_limit_hits` (purged after `rate_limit_retention_days` - which, it turned out
+  in 2026-10, nothing did until D-73 wired the purge into the ingest job; the rows hold a salted
+  hash of the IP since then, not the IP). The real fix - making
   the run.app address unusable, or recognising Hosting's traffic by something a client cannot
   forge - needs a check of what Firebase Hosting supports first and is not done.
 

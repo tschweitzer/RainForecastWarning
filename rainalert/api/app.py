@@ -49,7 +49,7 @@ from rainalert.api.mail import (
     push_keys,
 )
 from rainalert.api.metrics import render as render_metrics
-from rainalert.api.ratelimit import client_ip, hit_and_check
+from rainalert.api.ratelimit import client_ip, hit_and_check, ip_bucket
 from rainalert.attribution import ATTRIBUTION_HTML
 from rainalert.config import Settings, get_settings
 from rainalert.db.models import (
@@ -642,7 +642,10 @@ def create_app(
 
         ip = client_ip(request, settings.trusted_proxy_hops)
         within_ip = hit_and_check(
-            session, f"subscribe:ip:{ip}", settings.subscribe_limit_per_hour, timedelta(hours=1)
+            session,
+            ip_bucket("subscribe:ip", ip, settings.secret_key),
+            settings.subscribe_limit_per_hour,
+            timedelta(hours=1),
         )
         # Per-address as well as per-IP. For email this is what stops one mailbox being mailed
         # repeatedly from many IPs. For web push the endpoint plays the same role: a browser
@@ -894,7 +897,7 @@ def create_app(
             ip = client_ip(request, settings.trusted_proxy_hops)
             if not hit_and_check(
                 session,
-                f"devicekey:fail:{ip}",
+                ip_bucket("devicekey:fail", ip, settings.secret_key),
                 settings.device_key_failure_limit_per_hour,
                 timedelta(hours=1),
             ):
@@ -1000,7 +1003,10 @@ def create_app(
         subscriber, session = current
         ip = client_ip(request, settings.trusted_proxy_hops)
         if not hit_and_check(
-            session, f"settings:ip:{ip}", settings.settings_limit_per_hour, timedelta(hours=1)
+            session,
+            ip_bucket("settings:ip", ip, settings.secret_key),
+            settings.settings_limit_per_hour,
+            timedelta(hours=1),
         ):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many updates")
         try:
@@ -1023,7 +1029,10 @@ def create_app(
         subscriber, session = current
         ip = client_ip(request, settings.trusted_proxy_hops)
         if not hit_and_check(
-            session, f"location:ip:{ip}", settings.location_limit_per_hour, timedelta(hours=1)
+            session,
+            ip_bucket("location:ip", ip, settings.secret_key),
+            settings.location_limit_per_hour,
+            timedelta(hours=1),
         ):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many updates")
         try:
@@ -1112,7 +1121,10 @@ def create_app(
         """
         ip = client_ip(request, settings.trusted_proxy_hops)
         within_ip = hit_and_check(
-            session, f"manage:ip:{ip}", settings.manage_link_limit_per_hour, timedelta(hours=1)
+            session,
+            ip_bucket("manage:ip", ip, settings.secret_key),
+            settings.manage_link_limit_per_hour,
+            timedelta(hours=1),
         )
         # Per-address as well as per-IP, exactly as POST /subscriptions does it.
         #
@@ -1178,7 +1190,10 @@ def create_app(
         """
         ip = client_ip(request, settings.trusted_proxy_hops)
         if not hit_and_check(
-            session, f"locate:ip:{ip}", settings.settings_limit_per_hour, timedelta(hours=1)
+            session,
+            ip_bucket("locate:ip", ip, settings.secret_key),
+            settings.settings_limit_per_hour,
+            timedelta(hours=1),
         ):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
 

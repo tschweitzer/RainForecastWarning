@@ -45,14 +45,16 @@ Fragen zu deinen Daten und für die Rechte, die unten stehen, genügt eine forml
 </ul>
 <p>Als Nachweis deiner Einwilligung: wann du dich angemeldet und wann du bestätigt hast, ein
 gesalzener Hash deiner IP-Adresse (ohne unseren geheimen Schlüssel lässt sich die Adresse daraus
-nicht zurückrechnen), die Kennung deines Browsers (der „User-Agent“: Browser und Betriebssystem mit ihren Versionen) und
-welche Fassung des Einwilligungstexts du gesehen hast.</p>
-{# The rate-limit buckets in api/app.py: `<action>:ip:<address>` in plain text, plus a hash of the
-   mailbox or endpoint for signups and link requests. Not cascaded from subscribers (F-5). #}
+nicht zurückrechnen), die Kennung deines Browsers (der „User-Agent“: Browser und Betriebssystem
+mit ihren Versionen) und welche Fassung des Einwilligungstexts du gesehen hast.</p>
+{# The rate-limit buckets in api/app.py: `<action>:<hash_ip(ip)>` via ratelimit.ip_bucket since
+   D-73 (plain IPs before), plus a hash of the mailbox or endpoint for signups and link requests.
+   Not cascaded from subscribers (F-5); purged by jobs/ingest.housekeeping. #}
 <p>Zum Schutz vor Missbrauch: Wenn du dich anmeldest, Einstellungen änderst, einen Link anforderst
-oder eine Warnung öffnest, zählen wir das mit Zeitpunkt und IP-Adresse, bei Anmeldungen und
-Link-Anforderungen auch mit einem Hash deiner E-Mail- oder Push-Adresse. So kann niemand den Dienst
-in Massen benutzen. Die Codes in unseren Links speichern wir nur als Hash.</p>
+oder eine Warnung öffnest – und wenn sich ein Browser mit einem ungültigen Schlüssel meldet –,
+zählen wir das mit dem Zeitpunkt und demselben gesalzenen Hash deiner IP-Adresse wie oben, bei
+Anmeldungen und Link-Anforderungen auch mit einem Hash deiner E-Mail- oder Push-Adresse. Die
+IP-Adresse selbst speichern wir dafür nicht. So kann niemand den Dienst in Massen benutzen. Die Codes in unseren Links speichern wir nur als Hash.</p>
 
 {# Inventory taken from the code (2026-10-18): app.py set_session_cookie; devicekey.js;
    pendingconfirm.js and sw.js (one IndexedDB); signup.js WINDOW_KEY and the 'rainalert.deleted'

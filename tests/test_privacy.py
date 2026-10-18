@@ -82,10 +82,11 @@ def test_retention_periods_follow_the_settings(db, tmp_path):
 
 
 def test_the_abuse_counters_are_disclosed_with_the_ip_address(db, tmp_path):
-    """They hold the client IP in plain text and outlive the account (api/app.py, F-5)."""
+    """They hold a salted hash of the client IP (D-73) and outlive the account (F-5)."""
     page = privacy(db, tmp_path)
     assert "Zum Schutz vor Missbrauch" in page
-    assert "Zeitpunkt und IP-Adresse" in page
+    assert "gesalzenen Hash deiner IP-Adresse wie oben" in page
+    assert "IP-Adresse selbst speichern wir dafür nicht" in page
     assert "auch nach dem\n      Abmelden" in page
 
 

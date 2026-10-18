@@ -553,9 +553,16 @@ Both are easy to miss because nothing fails loudly.
        SELECT DISTINCT bucket FROM rate_limit_hits
        WHERE bucket LIKE 'subscribe:ip:%' ORDER BY 1;
 
-   Compare the address in the bucket against `curl -s https://ifconfig.me` from the machine that
-   signed up. The same address means the hop count is right. A Google-owned address means every
-   visitor is being recorded as the CDN and they all share one bucket.
+   Since D-73 the bucket holds a salted hash of the address, not the address, so compute the
+   bucket your own address should have produced, on the machine that signed up:
+
+       IP=$(curl -s https://ifconfig.me)
+       KEY=$(gcloud secrets versions access latest --secret=rainalert-secret-key)
+       printf '%s' "$IP" | openssl dgst -sha256 -hmac "$KEY" | awk '{print "subscribe:ip:" $NF}'
+
+   The same value in the table means the hop count is right. A bucket that matches nothing you
+   compute, shared by every signup from every network, means every visitor is being recorded as
+   the CDN.
 
    Two things that look like this check and are not:
 
