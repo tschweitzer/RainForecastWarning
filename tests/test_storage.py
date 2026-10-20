@@ -20,8 +20,8 @@ def test_a_relative_archive_dir_yields_a_usable_uri(tmp_path, monkeypatch):
     uri = store.put(NOMINAL, b"payload")
 
     assert uri.startswith("file://")
-    assert uri.endswith("/DE1200_RV2609161355.tar.bz2")
-    assert (tmp_path / "var/raw/DE1200_RV2609161355.tar.bz2").read_bytes() == b"payload"
+    assert uri.endswith("/composite_rv_20260916_1355.tar")
+    assert (tmp_path / "var/raw/composite_rv_20260916_1355.tar").read_bytes() == b"payload"
 
 
 def test_archives_stay_put_when_the_process_changes_directory(tmp_path, monkeypatch):
@@ -34,7 +34,7 @@ def test_archives_stay_put_when_the_process_changes_directory(tmp_path, monkeypa
     monkeypatch.chdir(elsewhere)
     store.put(NOMINAL, b"payload")
 
-    assert (tmp_path / "var/raw/DE1200_RV2609161355.tar.bz2").exists()
+    assert (tmp_path / "var/raw/composite_rv_20260916_1355.tar").exists()
     assert not (elsewhere / "var/raw").exists()
 
 

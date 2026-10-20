@@ -27,6 +27,18 @@ def wet_cycle() -> Path:
 
 
 @pytest.fixture(scope="session")
+def hdf5_cycle() -> Path:
+    """2026-10-18 17:40 UTC, a wet cycle, in DWD's HDF5 edition (D-74): members _000/_060/_120."""
+    return FIXTURES / "composite_rv_20261018_1740_trimmed.tar"
+
+
+@pytest.fixture(scope="session")
+def hdf5_twin() -> Path:
+    """The same cycle and members in the retired binary edition, the reference for the above."""
+    return FIXTURES / "DE1200_RV2610181740_trimmed.tar.bz2"
+
+
+@pytest.fixture(scope="session")
 def outage_cycles() -> Path:
     """2026-09-15 16:15-16:30 - the Borkum radar dropout, frames _000/_005/_060 of four cycles."""
     return FIXTURES / "DE1200_RV_outage_20260915_1615-1630.tar.bz2"

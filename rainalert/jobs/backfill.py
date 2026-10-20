@@ -43,7 +43,7 @@ from rainalert.radar.decoder import (
     read_frames,
 )
 from rainalert.radar.overlay import build_projection, render_frame
-from rainalert.storage import ArchiveStore, OverlayStore
+from rainalert.storage import ArchiveStore, OverlayStore, archive_paths
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ def rerender_observed(
     """
     report = BackfillReport()
     projection = build_projection()
-    paths = sorted(Path(archive_dir).glob("DE1200_RV*.tar.bz2"), reverse=True)
+    paths = archive_paths(archive_dir)
     if limit:
         paths = paths[:limit]
 

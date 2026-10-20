@@ -173,7 +173,7 @@ def test_prune_removes_only_old_archives(store, settings):
     store.put(datetime(2026, 9, 14, 0, 0, tzinfo=UTC), b"old")
     store.put(datetime(2026, 9, 16, 13, 55, tzinfo=UTC), b"new")
     assert prune_archives(store, settings, now=NOW) == 1
-    assert len(list(store.root.glob("*.tar.bz2"))) == 1
+    assert len(list(store.root.glob("*.tar*"))) == 1
 
 
 def test_the_cycle_log_says_how_wet_it_was(db, settings, store, wet_cycle, caplog):
@@ -200,3 +200,23 @@ def test_the_cycle_log_says_how_wet_it_was(db, settings, store, wet_cycle, caplo
     wet = int(line.rsplit(", ", 1)[1].split(" ")[0])
     assert peak >= DRAWN_FROM_MM_5MIN, line
     assert wet > 0, line
+
+
+def test_the_hdf5_edition_goes_through_the_whole_pipeline(db, settings, store, hdf5_cycle):
+    """D-74: what DWD publishes now. Fetched, decoded, validated, stored and archived as such."""
+    body = hdf5_cycle.read_bytes()
+    client, _ = _client(body)
+    with db() as session:
+        outcome = ingest_once(
+            session, client, store, settings, now=datetime(2026, 10, 18, 17, 44, tzinfo=UTC)
+        )
+        assert outcome.status == "ok"
+        assert outcome.nominal_time == datetime(2026, 10, 18, 17, 40, tzinfo=UTC)
+        row = session.query(RadarCycle).one()
+        assert row.status is CycleStatus.OK
+        assert row.frame_count == 3
+        assert row.archive_uri.endswith("/composite_rv_20261018_1740.tar")
+
+
+def test_the_default_source_is_the_hdf5_edition():
+    assert Settings(database_url="x", _env_file=None).dwd_latest_name == "composite_rv_LATEST.tar"

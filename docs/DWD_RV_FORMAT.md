@@ -276,7 +276,39 @@ The projection's scale factor at German latitudes is ≈ 1.09 (the standard para
 ones. Selecting a subscriber's radius in projected units would quietly inflate every radius by that
 much, so `radius_mask` measures true geodesic distance (WGS84) from the point to each cell centre.
 
+## 11a. The HDF5 edition (product B), the only one since 2026-10-20
+
+**The binary edition (A) stopped after the 2026-10-20 07:55 UTC cycle**: `DE1200_RV2610200755.tar.bz2`
+and `DE1200_RV_LATEST.tar.bz2` both stayed at 07:58:50, while `composite_rv_LATEST.tar` kept
+updating. DWD had announced moving the radar composites to HDF5 and switching off the older
+formats. The service now reads B (DESIGN.md D-74). Observed on twin cycles 2026-10-18 17:40 (wet)
+and 2026-10-20 07:55:
+
+- **Archive**: an uncompressed ustar tar, `composite_rv_<YYYYMMDD>_<HHMM>.tar`, 25 members
+  `composite_rv_<YYYYMMDD>_<HHMM>_<LLL>-hd5`, LLL = 000 ... 120. Each member ~100-200 KB: the data
+  is gzip-compressed (level 6) *inside* the HDF5 file, which settles the §1 note - B is not A's
+  bytes in another wrapper. 0.75-5.4 MB per cycle, about 4x A.
+- **Conventions** `ODIM_H5/V2_3`, `what/object` `COMP`, software `POLARA_hydrus_4.2.001`.
+- **Data**: `dataset1/data1/data`, uint32, (1200, 1100), **row 0 at the north** (ODIM's upper-left
+  origin; `where/UL_lat` 55.86). A has row 0 at the south, so the decoder flips the rows. Without the
+  flip the no-data masks of the twins differ in ~170,000 cells; with it they are identical.
+- **Scaling**: `dataset1/data1/what`: `quantity` `ACRR`, `gain` 0.001 (float32), `offset` -0.001,
+  `undetect` 0 (no rain), `nodata` 4294967295 (no measurement). So raw 1 is a *detected* 0.000 mm.
+- **Times**: `what/date` + `what/time` = the cycle's nominal time. `dataset1/what/enddate`+`endtime`
+  = the time the frame is valid for, `start*` five minutes earlier; lead = end - nominal, and the
+  member name's LLL says the same.
+- **Radar sites**: `how/nodes`, quoted and comma-separated (`'deasb','deboo',...`) - the same 16 names
+  as A's `MS` field. `how/missing_nodes` names the ones that are down.
+- **A versus B, cell by cell**: A = B floored to 0.01 mm, with every detected cell at least 0.01
+  (B's 0.000-0.019 all read 0.01 in A). Reproduced that way, the only cells that differ sit exactly
+  on a 0.01 step - 0.2-0.6 % of them, by 0.01 mm - because both were rounded independently from a
+  finer value. The decoder reports A's values on purpose; B's 0.001 mm resolution is unused so far.
+
 ## 12. Fixtures
+
+`composite_rv_20261018_1740_trimmed.tar` and `DE1200_RV2610181740_trimmed.tar.bz2` are a twin pair
+- one wet cycle in both editions, members 000/060/120 - and `tests/test_odim.py` holds the HDF5
+decoder to the binary one with them (§11a).
 
 | file | size | contents |
 |---|---|---|

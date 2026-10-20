@@ -28,16 +28,18 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-#: `DE1200_RV2609181435.tar.bz2` and nothing else - no separators, no escapes, no traversal.
-_SAFE_NAME = re.compile(r"[A-Za-z0-9_]+\.tar\.bz2")
+#: `composite_rv_20261020_0755.tar` (or the retired `DE1200_RV2609181435.tar.bz2`) and nothing
+#: else - no separators, no escapes, no traversal.
+_SAFE_NAME = re.compile(r"[A-Za-z0-9_]+\.tar(\.bz2)?")
 
 
 def archive_name(nominal_time: datetime) -> str:
-    """The timestamped file name DWD publishes for a cycle (DWD_RV_FORMAT.md 1).
+    """The timestamped file name DWD publishes for a cycle (DWD_RV_FORMAT.md 1, 11).
 
-    Note the two-digit year: the directory listing uses `YYMMDDHHMM`, not `YYYY`.
+    The HDF5 edition, the only one since 2026-10-20 (D-74). Four-digit year and an underscore,
+    unlike the binary edition's `DE1200_RV<YYMMDDHHMM>.tar.bz2`.
     """
-    return f"DE1200_RV{nominal_time.astimezone(UTC):%y%m%d%H%M}.tar.bz2"
+    return f"composite_rv_{nominal_time.astimezone(UTC):%Y%m%d_%H%M}.tar"
 
 
 class FetchError(RuntimeError):
@@ -142,7 +144,8 @@ class DWDClient:
         self._client = httpx.Client(
             headers={
                 "User-Agent": user_agent,
-                # A .tar.bz2 is already compressed. httpx asks for `gzip, deflate` by default,
+                # The archive is already compressed - bz2 for the old edition, gzip inside every
+                # HDF5 member for the new one. httpx asks for `gzip, deflate` by default,
                 # which invites the server to spend CPU re-compressing incompressible bytes into
                 # a payload the same size or larger - 576 times over in a backfill, on a service
                 # DWD provides for free (§4.3: do not make them work for nothing). `identity`

@@ -18,6 +18,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "alembic>=1.13",
     "pillow>=10.0",
+    # DWD's HDF5 (ODIM_H5) edition of RV, the only one published since 2026-10-20 (D-74).
+    "h5py>=3.10",
     # Web push (D-45). Deliberately not `pywebpush`, which is the usual choice: it brings both
     # `requests` and `aiohttp`, neither of which this project uses, and it owns the HTTP call - so
     # the injectable `httpx.BaseTransport` every other transport here is tested through would not

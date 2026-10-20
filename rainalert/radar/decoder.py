@@ -1,5 +1,10 @@
 """Decoder for DWD RADOLAN/RADVOR RV composite files.
 
+Two editions, recognised from the bytes rather than the name: the binary ``DE1200_RV*.tar.bz2``
+described below, which DWD stopped publishing after 2026-10-20 07:55 UTC, and the HDF5
+``composite_rv_*.tar`` that replaced it (``rainalert/radar/odim.py``, DESIGN.md D-74). Both give
+the same ``RVFrame``s, so nothing past this module knows which one it was.
+
 The format is documented from observation in ``docs/DWD_RV_FORMAT.md``: a 195-byte ASCII header
 terminated by ETX, followed by ``rows * cols`` little-endian uint16 values, row-major, with row 0
 at the *southern* edge.
@@ -235,6 +240,8 @@ def read_frames(archive: Path | str | bytes, *, analysis_only: bool = False) -> 
     """
     frames: list[RVFrame] = []
     compressed = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
+    if not _is_bz2(compressed):
+        return _read_plain(compressed, analysis_only=analysis_only)
     # Decompressed once, up front, rather than letting tarfile read through the bz2 stream.
     # tarfile scans the archive for headers and then seeks back to each member's data, and a
     # seek backwards in a bz2 stream is a re-decompression from the beginning - so the
@@ -275,6 +282,59 @@ def read_frames(archive: Path | str | bytes, *, analysis_only: bool = False) -> 
         raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
     except EOFError as exc:
         raise RVArchiveRejected(f"archive ends mid-stream: {exc}") from exc
+    frames.sort(key=lambda f: (f.nominal_time, f.lead_minutes))
+    return frames
+
+
+def _is_bz2(data: bytes) -> bool:
+    return data[:3] == b"BZh"
+
+
+def _bounded(data: bytes) -> bytes:
+    """An uncompressed archive: the only bound left to check is its own size."""
+    if len(data) > MAX_TOTAL_BYTES:
+        raise RVArchiveRejected(f"archive is {len(data)} bytes, limit is {MAX_TOTAL_BYTES}")
+    return data
+
+
+def _decode_member(name: str, blob: bytes, *, header_only: bool = False) -> RVFrame:
+    """One tar member, in whichever edition it is. The name decides; the decoder then checks."""
+    from rainalert.radar import odim  # lazy: odim imports from here
+
+    if odim.is_member_name(name):
+        return odim.decode_member(blob, name, header_only=header_only)
+    return decode_frame(blob, header_only=header_only)
+
+
+def _read_plain(data: bytes, *, analysis_only: bool) -> list[RVFrame]:
+    """``read_frames`` for an uncompressed tar - the HDF5 edition. Same limits, same contract."""
+    frames: list[RVFrame] = []
+    try:
+        with tarfile.open(mode="r:", fileobj=io.BytesIO(_bounded(data))) as tar:
+            members = [m for m in tar.getmembers() if m.isfile()]
+            _check_limits(members)
+            if not members:
+                raise RVArchiveRejected("archive holds no files")
+            for member in members:
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                blob = handle.read(member.size + 1)
+                if len(blob) != member.size:
+                    raise RVArchiveRejected(
+                        f"member {member.name!r} declared {member.size} bytes, "
+                        f"delivered {len(blob)}"
+                    )
+                if analysis_only:
+                    # Reading the attributes is cheap; inflating a grid is what costs.
+                    head = _decode_member(member.name, blob, header_only=True)
+                    frames.append(
+                        _decode_member(member.name, blob) if head.lead_minutes == 0 else head
+                    )
+                else:
+                    frames.append(_decode_member(member.name, blob))
+    except tarfile.TarError as exc:
+        raise RVArchiveRejected(f"not a readable archive: {exc}") from exc
     frames.sort(key=lambda f: (f.nominal_time, f.lead_minutes))
     return frames
 
@@ -419,7 +479,9 @@ def read_analysis_frame(archive: Path | str | bytes) -> RVFrame:
     and the caller can fall back to ``read_frames``.
     """
     compressed = archive if isinstance(archive, bytes) else Path(archive).read_bytes()
-    plain = _decompress_first_member(compressed)
+    # The HDF5 edition is an uncompressed tar: there is nothing to stop unpacking early, so the
+    # first member is simply read from it.
+    plain = _decompress_first_member(compressed) if _is_bz2(compressed) else _bounded(compressed)
     try:
         with tarfile.open(mode="r:", fileobj=io.BytesIO(plain)) as tar:
             members = [m for m in tar.getmembers() if m.isfile()]
@@ -435,7 +497,7 @@ def read_analysis_frame(archive: Path | str | bytes) -> RVFrame:
         raise RVArchiveRejected(
             f"member {members[0].name!r} declared {members[0].size} bytes, delivered {len(blob)}"
         )
-    frame = decode_frame(blob)
+    frame = _decode_member(members[0].name, blob)
     if frame.lead_minutes != 0:
         raise RVArchiveRejected(
             f"first member is lead +{frame.lead_minutes}, not the analysis frame"

@@ -37,8 +37,10 @@ def settings(tmp_path):
 
 
 def test_archive_name_matches_the_published_format():
-    """DWD_RV_FORMAT.md 1: two-digit year, no separators."""
-    assert archive_name(datetime(2026, 9, 18, 14, 35, tzinfo=UTC)) == "DE1200_RV2609181435.tar.bz2"
+    """DWD_RV_FORMAT.md 11: the HDF5 edition, four-digit year, underscores (D-74)."""
+    assert (
+        archive_name(datetime(2026, 9, 18, 14, 35, tzinfo=UTC)) == "composite_rv_20260918_1435.tar"
+    )
 
 
 def test_the_window_lands_on_the_five_minute_grid(db):

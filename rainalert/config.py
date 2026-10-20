@@ -30,7 +30,8 @@ class Settings(BaseSettings):
 
     # --- DWD source and politeness (§4.3) -------------------------------------------------
     dwd_base_url: str = "https://opendata.dwd.de/weather/radar/composite/rv/"
-    dwd_latest_name: str = "DE1200_RV_LATEST.tar.bz2"
+    #: The HDF5 edition (D-74). The binary `DE1200_RV_LATEST.tar.bz2` stopped at 2026-10-20 07:55.
+    dwd_latest_name: str = "composite_rv_LATEST.tar"
     #: Must identify us and carry a contact address we control. Not a personal address.
     dwd_user_agent: str = "RainAlert/0.1 (+https://example.invalid; contact: ops@example.invalid)"
     dwd_max_attempts: int = 5

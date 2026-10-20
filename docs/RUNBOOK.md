@@ -332,8 +332,21 @@ stopping publishing looks like from here.
 
     gcloud run jobs logs read rainalert-ingest --region europe-west3 --limit 50
 
-* Repeated `no new cycle (304)` - DWD has stopped publishing. Nothing to fix on this side; it
-  resolves itself and the alert auto-closes after an hour.
+* Repeated `no new cycle (304)` - the file we poll (`composite_rv_LATEST.tar`) has not changed.
+  Look at the directory listing (`https://opendata.dwd.de/weather/radar/composite/rv/`) before
+  concluding anything:
+  - **No file in it is newer** - DWD has stopped publishing. Nothing to fix on this side; it
+    resolves itself and the alert auto-closes after an hour.
+  - **Other files are newer than the one we poll** - DWD has moved the product, and waiting fixes
+    nothing. This is what happened on 2026-10-20: the binary `DE1200_RV_LATEST.tar.bz2` stopped at
+    07:55 UTC while the HDF5 `composite_rv_LATEST.tar` carried on, and warnings stopped until the
+    decoder learned the new edition (DESIGN.md D-74). Compare the server's validators with ours to
+    be sure - the same ETag means the file really has not changed:
+
+        curl -sI https://opendata.dwd.de/weather/radar/composite/rv/composite_rv_LATEST.tar \
+          | grep -iE 'last-modified|etag'
+        -- and in Cloud SQL Studio:
+        SELECT nominal_time, etag, last_modified FROM radar_cycles ORDER BY nominal_time DESC LIMIT 1;
 * `cycle timestamp is in the future` - their clock or their filename is wrong. This is alerted
   separately on purpose: a future stamp reads as "the freshest data we ever had", so an alert on age
   alone would stay silent until real time caught up (SECURITY_REVIEW.md F-7).

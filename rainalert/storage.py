@@ -6,7 +6,8 @@ not carry the google-cloud-storage dependency when running locally.
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -19,8 +20,54 @@ class ArchiveStore(Protocol):
         """Delete archives older than the cutoff; return how many were removed."""
 
 
-def _name(nominal_time: datetime) -> str:
-    return f"DE1200_RV{nominal_time:%y%m%d%H%M}.tar.bz2"
+def _name(nominal_time: datetime, blob: bytes = b"") -> str:
+    """DWD's own file name for the cycle, in the edition the bytes are in (D-74).
+
+    Named after the content rather than after today's default, because archives from before the
+    switch are still being read back (re-rendering, backfill) and a `.tar.bz2` that holds a plain
+    tar - or the other way round - is a misleading thing to leave in a bucket.
+    """
+    if blob[:3] == b"BZh":
+        return f"DE1200_RV{nominal_time:%y%m%d%H%M}.tar.bz2"
+    return f"composite_rv_{nominal_time:%Y%m%d_%H%M}.tar"
+
+
+def _content_type(blob: bytes) -> str:
+    return "application/x-bzip2" if blob[:3] == b"BZh" else "application/x-tar"
+
+
+#: Both editions' names, with the nominal time in them.
+_ARCHIVE_NAMES = (
+    (re.compile(r"DE1200_RV(\d{10})\.tar\.bz2$"), "%y%m%d%H%M"),
+    (re.compile(r"composite_rv_(\d{8}_\d{4})\.tar$"), "%Y%m%d_%H%M"),
+)
+
+
+def _is_archive_name(name: str) -> bool:
+    return any(pattern.fullmatch(name) for pattern, _ in _ARCHIVE_NAMES)
+
+
+def archive_time(name: str) -> datetime | None:
+    """The nominal time in an archive's file name, for either edition; None if there is none."""
+    for pattern, layout in _ARCHIVE_NAMES:
+        match = pattern.fullmatch(name)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), layout).replace(tzinfo=UTC)
+            except ValueError:
+                return None  # shaped like one, but not a real time - e.g. minute 99
+    return None
+
+
+def archive_paths(root: str | Path) -> list[Path]:
+    """Every archive under ``root``, newest first, whichever edition it is in.
+
+    A file named like an archive but with an impossible time is kept, at the end: the caller
+    tries to read it and reports it, rather than this quietly deciding it does not exist.
+    """
+    oldest = datetime.min.replace(tzinfo=UTC)
+    found = [p for p in Path(root).iterdir() if p.is_file() and _is_archive_name(p.name)]
+    return sorted(found, key=lambda p: (archive_time(p.name) or oldest, p.name), reverse=True)
 
 
 class LocalArchiveStore:
@@ -36,15 +83,15 @@ class LocalArchiveStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def put(self, nominal_time: datetime, blob: bytes) -> str:
-        path = self.root / _name(nominal_time)
+        path = self.root / _name(nominal_time, blob)
         path.write_bytes(blob)
         return path.as_uri()
 
     def prune(self, older_than: datetime) -> int:
-        cutoff = _name(older_than)
         removed = 0
-        for path in self.root.glob("DE1200_RV*.tar.bz2"):
-            if path.name < cutoff:
+        for path in archive_paths(self.root):
+            stamp = archive_time(path.name)
+            if stamp is not None and stamp < older_than:
                 path.unlink()
                 removed += 1
         return removed
@@ -132,8 +179,8 @@ class GCSArchiveStore:
         self._prefix = prefix
 
     def put(self, nominal_time: datetime, blob: bytes) -> str:
-        name = f"{self._prefix}{_name(nominal_time)}"
-        self._bucket.blob(name).upload_from_string(blob, content_type="application/x-bzip2")
+        name = f"{self._prefix}{_name(nominal_time, blob)}"
+        self._bucket.blob(name).upload_from_string(blob, content_type=_content_type(blob))
         return f"gs://{self._bucket.name}/{name}"
 
     def prune(self, older_than: datetime) -> int:
