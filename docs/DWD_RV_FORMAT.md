@@ -239,17 +239,27 @@ runtime dependency.
 
 ## 11. Georeferencing
 
-Projection, exactly as DWD defines it — a sphere, not an ellipsoid:
+Projection, as DWD defines it for DE1200 — polar stereographic on the **WGS84 ellipsoid**:
 
 ```
-+proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 +x_0=0 +y_0=0 +R=6370040 +units=km +no_defs
++proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 +x_0=0 +y_0=0 +a=6378137 +b=6356752.3142451802 +units=km +no_defs
 ```
 
 DE1200 ties to the reference point 9.0 E / 51.0 N at grid offsets `j_0 = 470`, `i_0 = 600`, with
 1 km cells. `rainalert/radar/grid.py` pins these constants and the test suite compares the resulting
-lon/lat against `wradlib.georef.get_radolan_grid(1200, 1100, wgs84=True)` over **all 1 320 000
-cells** (max deviation < 1e-9°), not at a handful of points — a systematic offset of a few cells is
-invisible everywhere else and warns the wrong village.
+lon/lat against wradlib's `dwd-radolan-wgs84-de1200` grid over **all 1 320 000 cells** (max
+deviation 2e-14°), and against the corners stated in a real HDF5 file (under a metre) — a
+systematic offset of a few cells is invisible everywhere else and warns the wrong village.
+
+**Corrected 2026-10-20 (D-75).** Until then this section, and the code, said *sphere*
+(`+R=6370040`) - the RADOLAN sphere of DWD's older national grids. DE1200 is RADOLAN format
+version 5 (every binary header we decoded said `VS 5`), and version 5 grids are on the ellipsoid:
+DWD's "Radarkomposits - Projektionen und Gitter" v1.01 (2022), wradlib's RADOLAN reader (sphere
+below version 5, ellipsoid from 5), and now every HDF5 file's own `where/projdef` and corner
+coordinates. The September check passed because it compared against `get_radolan_grid`'s default,
+which is the same sphere. With it, a cell centre sat 80 m (Frankfurt) to 1.3 km (Görlitz) from
+where DWD puts it, growing towards the east; corners were 1.2-2.3 km out. The HDF5 edition is
+checked against this grid on every cycle (§11a).
 
 Two conventions that are easy to get wrong:
 
@@ -263,9 +273,11 @@ Spot check, using cell centres, against the decoded field:
 
 | | row | col | cell centre | value |
 |---|---|---|---|---|
-| Frankfurt 50.1109 N 8.6821 E | 496 | 444 | 50.1116, 8.6853 | 0.00 mm/5min |
-| Hamburg 53.5511 N 9.9937 E | 894 | 543 | 53.5477, 10.0006 | 0.00 mm/5min |
-| Munich 48.1351 N 11.5820 E | 263 | 668 | 48.1345, 11.5758 | 0.23 mm/5min |
+| Frankfurt 50.1109 N 8.6821 E | 496 | 444 | 50.1120, 8.6863 | 0.00 mm/5min |
+| Hamburg 53.5511 N 9.9937 E | 895 | 543 | 53.5545, 9.9971 | 0.00 mm/5min |
+| Munich 48.1351 N 11.5820 E | 263 | 669 | 48.1351, 11.5808 | 0.19 mm/5min |
+
+(Recomputed on the ellipsoid. On the sphere Hamburg was row 894 and Munich column 668.)
 
 Centres land within half a cell of the true coordinates, as they must.
 
@@ -298,7 +310,13 @@ and 2026-10-20 07:55:
   = the time the frame is valid for, `start*` five minutes earlier; lead = end - nominal, and the
   member name's LLL says the same.
 - **Radar sites**: `how/nodes`, quoted and comma-separated (`'deasb','deboo',...`) - the same 16 names
-  as A's `MS` field. `how/missing_nodes` names the ones that are down.
+  as A's `MS` field. `how/missing_nodes` names the ones that are down (`'dehnr'` at 07:55 on
+  2026-10-20); it is stored per cycle and explains a gap on the settings page (D-75).
+- **Grid**: `where/projdef` is the DE1200 ellipsoid projection with false easting/northing
+  (`x_0=543196.835`, `y_0=3622588.862` m, so (0, 0) is the centre of the north-western cell);
+  `where/LL_lat` ... `UR_lon` are the outer corners, `xsize`/`ysize` 1100/1200, `xscale`/`yscale`
+  1000 m. Every member is checked against `radar/grid.py` - projection parameters, size, scale,
+  and the four corners within 50 m - and a mismatch rejects the cycle as "radar grid changed".
 - **A versus B, cell by cell**: A = B floored to 0.01 mm, with every detected cell at least 0.01
   (B's 0.000-0.019 all read 0.01 in A). Reproduced that way, the only cells that differ sit exactly
   on a 0.01 step - 0.2-0.6 % of them, by 0.01 mm - because both were rounded independently from a

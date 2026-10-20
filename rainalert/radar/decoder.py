@@ -93,6 +93,9 @@ class RVFrame:
     precision: float
     radar_sites: tuple[str, ...]
     raw_header: str
+    #: Radars DWD reports as missing from this composite (HDF5 ``how/missing_nodes``), e.g.
+    #: ``("dehnr",)``. Always empty from the binary edition, which only listed the ones present.
+    missing_sites: tuple[str, ...] = ()
 
     @property
     def valid_time(self) -> datetime:

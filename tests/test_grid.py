@@ -19,8 +19,17 @@ from rainalert.radar.grid import (
 
 @pytest.mark.golden
 def test_whole_grid_matches_wradlib():
+    """Against wradlib's DE1200 on the WGS84 ellipsoid (D-75), the CRS its own RADOLAN reader picks
+    for format version 5. The default `get_radolan_grid` is the sphere of the older national
+    grids, and this test passed against it from September until 2026-10-20 - comparing a wrong
+    definition with the same wrong definition, 80 m to 1.3 km from where DWD puts the cells."""
     wradlib = pytest.importorskip("wradlib")
-    reference = wradlib.georef.get_radolan_grid(DE1200.rows, DE1200.cols, wgs84=True)
+    reference = wradlib.georef.get_radolan_grid(
+        DE1200.rows,
+        DE1200.cols,
+        wgs84=True,
+        crs=wradlib.georef.create_crs("dwd-radolan-wgs84-de1200"),
+    )
 
     from pyproj import CRS, Transformer
 
@@ -125,3 +134,24 @@ def test_non_finite_and_out_of_range_coordinates_raise_outside_grid(lat, lon, la
         cell_of(lat, lon)
     with pytest.raises(OutsideGrid):
         radius_mask(lat, lon, 2000)
+
+
+def test_the_grid_is_where_dwd_says_it_is(hdf5_cycle):
+    """The corners DWD states in every HDF5 file, against ours: the check `radar/odim.py` runs on
+    every cycle, here with a margin of a metre rather than the decoder's 50."""
+    import io
+    import tarfile
+
+    import h5py
+    from pyproj import Geod
+
+    from rainalert.radar.grid import outer_corners
+
+    with tarfile.open(hdf5_cycle, "r:") as tar:
+        blob = tar.extractfile(tar.getmembers()[0]).read()
+    with h5py.File(io.BytesIO(blob), "r") as h5:
+        where = {key: float(value) for key, value in h5["where"].attrs.items() if "_l" in key}
+    geod = Geod(ellps="WGS84")
+    for corner, (lat, lon) in outer_corners().items():
+        _, _, distance = geod.inv(lon, lat, where[f"{corner}_lon"], where[f"{corner}_lat"])
+        assert distance < 1.0, (corner, distance)

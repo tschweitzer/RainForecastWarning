@@ -52,6 +52,7 @@ from rainalert.api.metrics import render as render_metrics
 from rainalert.api.ratelimit import client_ip, hit_and_check, ip_bucket
 from rainalert.attribution import ATTRIBUTION_HTML
 from rainalert.config import Settings, get_settings
+from rainalert.coverage import coverage_note
 from rainalert.db.models import (
     PUSH_AUTH_MAX_LENGTH,
     PUSH_P256DH_MAX_LENGTH,
@@ -992,6 +993,8 @@ def create_app(
             "lead_time_minutes": sub.lead_time_minutes,
             "timezone": sub.timezone,
             "health_note": sub.health_note,
+            # Not stored: about the last cycle only, so computed when asked (D-75).
+            "coverage_note": coverage_note(session, sub),
             "bounds": rule_bounds(),
         }
 

@@ -1,9 +1,10 @@
 """Georeferencing for the DE1200 RADOLAN grid.
 
-DE1200 is a polar-stereographic grid on a sphere (R = 6370040 m), 1200 rows x 1100 columns of
-nominally 1 km cells. Its definition is pinned here as constants and verified against
-``wradlib.georef.get_radolan_grid`` in the tests - wradlib is the oracle, not a runtime dependency
-(D-21).
+DE1200 is a polar-stereographic grid on the WGS84 ellipsoid, 1200 rows x 1100 columns of nominally
+1 km cells (see `RADOLAN_PROJ` for why not the sphere this said until D-75). Its definition is
+pinned here as constants and verified against ``wradlib.georef.get_radolan_grid`` in the tests -
+wradlib is the oracle, not a runtime dependency (D-21) - and, since D-75, against the corners DWD
+states in every HDF5 file, on every cycle.
 
 Two conventions that are easy to get wrong, and are the reason the tests compare the whole grid
 rather than a few points:
@@ -22,9 +23,18 @@ from functools import lru_cache
 import numpy as np
 from pyproj import CRS, Geod, Transformer
 
-#: The RADOLAN projection. Sphere, not an ellipsoid - this is DWD's definition, not a choice.
+#: The projection DE1200 is defined on: polar stereographic on the **WGS84 ellipsoid** (D-75).
+#:
+#: It was the RADOLAN sphere (R = 6370040 m) until 2026-10-20, and that was wrong for this grid.
+#: The sphere is the definition of DWD's older national grids; DE1200 - RADOLAN format version 5,
+#: which every binary header we decoded said (`VS 5`) - is on the ellipsoid ("Radarkomposits -
+#: Projektionen und Gitter" v1.01, 2022; wradlib switches the same way for VS >= 5). The HDF5
+#: edition now states it in every file, with the grid's corner coordinates, and those corners are
+#: reproduced to well under a metre by this string with the reference point below. With the
+#: sphere, a cell's centre was 80 m (Frankfurt) to 1.3 km (Görlitz) from where DWD puts it.
 RADOLAN_PROJ = (
-    "+proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 +x_0=0 +y_0=0 +R=6370040 +units=km +no_defs"
+    "+proj=stere +lat_0=90 +lat_ts=60 +lon_0=10 +x_0=0 +y_0=0 "
+    "+a=6378137 +b=6356752.3142451802 +units=km +no_defs"
 )
 
 #: Reference point DWD ties the grid to.
@@ -82,6 +92,22 @@ def cell_corners(spec: GridSpec = DE1200) -> tuple[np.ndarray, np.ndarray]:
     x = x0 + np.arange(spec.cols) * spec.res_km
     y = y0 + np.arange(spec.rows) * spec.res_km
     return x, y
+
+
+@lru_cache(maxsize=2)
+def outer_corners(spec: GridSpec = DE1200) -> dict[str, tuple[float, float]]:
+    """WGS84 ``(lat, lon)`` of the grid's four outer corners, named as ODIM names them.
+
+    What the HDF5 edition's ``where/LL_lat`` ... ``UR_lon`` state, so each cycle can be checked
+    against the grid this module assumes (``radar/odim.py``).
+    """
+    x0, y0 = _origin(spec)
+    x1, y1 = x0 + spec.cols * spec.res_km, y0 + spec.rows * spec.res_km
+    out = {}
+    for name, (x, y) in {"LL": (x0, y0), "LR": (x1, y0), "UL": (x0, y1), "UR": (x1, y1)}.items():
+        lon, lat = _to_wgs84().transform(x, y)
+        out[name] = (lat, lon)
+    return out
 
 
 def cell_of(lat: float, lon: float, spec: GridSpec = DE1200) -> tuple[int, int]:

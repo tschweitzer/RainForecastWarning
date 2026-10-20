@@ -320,6 +320,9 @@
         + 'verschickt.');
     }
     if (current.health_note) { notices.push(current.health_note); }
+    // No radar data here last cycle, and which radar is down when one is (D-75). Without it the
+    // page looked fine while nothing could warn this location.
+    if (current.coverage_note) { notices.push(current.coverage_note); }
     var banner = $('settings-banner');
     banner.hidden = notices.length === 0;
     banner.textContent = notices.join(' ');

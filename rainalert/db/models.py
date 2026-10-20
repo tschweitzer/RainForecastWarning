@@ -77,6 +77,9 @@ class RadarCycle(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: Percent of the radar area wet at t+0 (D-70), for the next cycle's plausibility check.
     wet_share: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Radars DWD reported as missing from this cycle, e.g. ["dehnr"] (D-75). NULL when the
+    #: edition did not say - the binary one never did.
+    missing_sites: Mapped[list[str] | None] = mapped_column(ARRAY(String(16)), nullable=True)
 
 
 class SubscriptionStatus(enum.StrEnum):

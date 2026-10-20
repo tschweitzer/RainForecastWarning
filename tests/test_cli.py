@@ -7,7 +7,7 @@ def test_probe_reports_a_cycle(wet_cycle, capsys):
     assert main(["probe", str(wet_cycle), "--lat", "48.1351", "--lon", "11.5820"]) == 0
     out = capsys.readouterr().out
     assert "2026-09-16 13:55 UTC" in out
-    assert "row 263, col 668" in out
+    assert "row 263, col 669" in out  # the WGS84 grid (D-75); 668 on the old sphere
 
 
 def test_probe_never_reports_missing_data_as_dry(outage_cycles, capsys):

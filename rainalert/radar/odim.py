@@ -39,6 +39,7 @@ from rainalert.radar.decoder import (
     RVFormatError,
     RVFrame,
 )
+from rainalert.radar.grid import DE1200, outer_corners
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,20 @@ logger = logging.getLogger(__name__)
 PRECISION = 0.01
 #: Accepted gains. DWD's is 0.001, stored as the float32 nearest to it.
 VALID_GAINS = (1e-3,)
+#: How far a stated grid corner may be from ours before the cycle is refused (D-75). They agree to
+#: well under a metre; a real change of grid moves them by hundreds of metres or more.
+CORNER_TOLERANCE_M = 50.0
+#: The projection DWD states, as parameters. `x_0`/`y_0` are left out: they only move the origin,
+#: which the corner check covers.
+EXPECTED_PROJECTION = {
+    "proj": "stere",
+    "lat_0": 90.0,
+    "lat_ts": 60.0,
+    "lon_0": 10.0,
+    "a": 6378137.0,
+    "b": 6356752.3142451802,
+    "units": "m",
+}
 #: `composite_rv_20261020_0755_060-hd5` - the lead is cross-checked against the attributes.
 MEMBER_NAME = re.compile(r"composite_rv_(\d{8})_(\d{4})_(\d{3})-hd5$")
 
@@ -145,8 +160,9 @@ def _fields(h5) -> dict:
     if (rows, cols) != EXPECTED_SHAPE:
         logger.warning("RV grid is %dx%d, expected %dx%d", rows, cols, *EXPECTED_SHAPE)
 
-    nodes = _attr(h5["how"], "nodes") if "nodes" in h5["how"].attrs else ""
-    sites = tuple(s.strip().strip("'") for s in nodes.split(",") if s.strip().strip("'"))
+    _check_grid(h5["where"], rows, cols)
+    sites = _sites(h5["how"], "nodes")
+    missing_sites = _sites(h5["how"], "missing_nodes")
     software = _attr(h5["how"], "sw_version") if "sw_version" in h5["how"].attrs else ""
     return {
         "nominal_time": nominal,
@@ -159,6 +175,7 @@ def _fields(h5) -> dict:
         "nodata": int(_number(data_what, "nodata")),
         "undetect": int(_number(data_what, "undetect")),
         "radar_sites": sites,
+        "missing_sites": missing_sites,
         # Stands in for the binary header: what a log line or `rainalert probe` needs to identify
         # the file, not a format anyone parses.
         "raw_header": (
@@ -166,6 +183,60 @@ def _fields(h5) -> dict:
             f"nodes <{','.join(sites)}>"
         ),
     }
+
+
+def _sites(how, key: str) -> tuple[str, ...]:
+    """`'deasb','deboo'` -> ("deasb", "deboo"); absent or empty -> ()."""
+    if key not in how.attrs:
+        return ()
+    return tuple(s.strip().strip("'") for s in _attr(how, key).split(",") if s.strip().strip("'"))
+
+
+def _check_grid(where, rows: int, cols: int) -> None:
+    """Refuse a cycle whose stated grid is not the one `radar/grid.py` assumes (D-75).
+
+    Every location, radius and map pixel in the service is computed from that grid, and a change on
+    DWD's side would not fail anything: the data would decode fine and every warning would be for
+    a place up to some kilometres away. So the grid DWD states in the file is compared with ours on
+    every member, and a difference stops the cycle with its own log line - an alert, not a gap.
+    """
+    from pyproj import Geod
+
+    problems = []
+    if (rows, cols) != (DE1200.rows, DE1200.cols):
+        problems.append(f"{rows}x{cols} cells, expected {DE1200.rows}x{DE1200.cols}")
+    try:
+        size = (int(_number(where, "ysize")), int(_number(where, "xsize")))
+        scale = (_number(where, "yscale"), _number(where, "xscale"))
+    except KeyError as exc:
+        raise RVFormatError(f"radar grid changed: no {exc} in where/") from exc
+    if size != (rows, cols):
+        problems.append(f"where/ says {size[0]}x{size[1]} cells, the data is {rows}x{cols}")
+    if scale != (DE1200.res_km * 1000, DE1200.res_km * 1000):
+        problems.append(f"cells are {scale[1]:g} x {scale[0]:g} m, expected 1000 x 1000")
+    params = {}
+    for token in _attr(where, "projdef").split():
+        key, _, value = token.lstrip("+").partition("=")
+        params[key] = value
+    for key, expected in EXPECTED_PROJECTION.items():
+        value = params.get(key)
+        if isinstance(expected, float):
+            try:
+                same = value is not None and abs(float(value) - expected) <= 1e-6 * max(1, expected)
+            except ValueError:
+                same = False
+        else:
+            same = value == expected
+        if not same:
+            problems.append(f"projection {key}={value!r}, expected {expected!r}")
+    geod = Geod(ellps="WGS84")
+    for corner, (lat, lon) in outer_corners().items():
+        stated = (_number(where, f"{corner}_lat"), _number(where, f"{corner}_lon"))
+        _, _, distance = geod.inv(lon, lat, stated[1], stated[0])
+        if distance > CORNER_TOLERANCE_M:
+            problems.append(f"{corner} corner is {distance:.0f} m from ours")
+    if problems:
+        raise RVFormatError("radar grid changed: " + "; ".join(problems))
 
 
 def _check_name(name: str, fields: dict) -> None:
@@ -193,4 +264,5 @@ def _frame(values, missing, fields: dict) -> RVFrame:
         precision=PRECISION,
         radar_sites=fields["radar_sites"],
         raw_header=fields["raw_header"],
+        missing_sites=fields["missing_sites"],
     )

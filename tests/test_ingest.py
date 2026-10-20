@@ -197,7 +197,7 @@ def test_the_cycle_log_says_how_wet_it_was(db, settings, store, wet_cycle, caplo
     # line that always said "peak 0.00, 0 wet cells" would pass a substring check and tell
     # nobody anything.
     peak = float(line.split("peak ")[1].split(" mm")[0])
-    wet = int(line.rsplit(", ", 1)[1].split(" ")[0])
+    wet = int(line.split(" mm/5min, ")[1].split(" ")[0])
     assert peak >= DRAWN_FROM_MM_5MIN, line
     assert wet > 0, line
 

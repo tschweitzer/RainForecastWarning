@@ -191,7 +191,8 @@ Two more things about that build:
 - **When the new code needs its migration** - the release that adds device keys (D-64, migration
   `b6e2f0a4c813`) is one: the new code reads `subscribers.last_seen_at` and fails on every
   subscriber query until it exists. So is the plausibility check (D-70, migration `c7d1e5a9b2f4`):
-  the ingest job writes `radar_cycles.wet_share` and fails every cycle until it exists. Migrate
+  the ingest job writes `radar_cycles.wet_share` and fails every cycle until it exists. So is
+  the radar-down note (D-75, migration `d9a3f6b1c2e7`, `radar_cycles.missing_sites`). Migrate
   *between* updating the job and updating the rest:
 
 ```sh
@@ -347,6 +348,11 @@ stopping publishing looks like from here.
           | grep -iE 'last-modified|etag'
         -- and in Cloud SQL Studio:
         SELECT nominal_time, etag, last_modified FROM radar_cycles ORDER BY nominal_time DESC LIMIT 1;
+* `cycle rejected: radar grid changed: ...` - DWD's file states a different grid from the one
+  every location and map pixel here is computed on (D-75). It pages through the ingestion alert,
+  and nothing is stored or sent until it is resolved: decoding it anyway would warn places up to
+  kilometres from where the rain is. The line says what differs. Read DWD's announcements, then
+  update `radar/grid.py` (and its tests) to the new definition - do not loosen the check.
 * `cycle timestamp is in the future` - their clock or their filename is wrong. This is alerted
   separately on purpose: a future stamp reads as "the freshest data we ever had", so an alert on age
   alone would stay silent until real time caught up (SECURITY_REVIEW.md F-7).

@@ -251,6 +251,9 @@ def ingest_once(
                 notes=None
                 if complete
                 else f"{len(frames)} frames, expected {settings.expected_frame_count}",
+                # From t+0, the frame the settings page explains (D-75). None when the edition
+                # does not say, rather than an empty list that would claim "all radars up".
+                missing_sites=list(frames[0].missing_sites) if frames[0].missing_sites else None,
             )
         )
         session.commit()
@@ -288,13 +291,15 @@ def ingest_once(
         peak = float(finite.max()) if finite.size else 0.0
         wet = int((finite >= DRAWN_FROM_MM_5MIN).sum())
         logger.info(
-            "stored cycle %s: %d frames, %d bytes, %d attempt(s), peak %.2f mm/5min, %d wet cells",
+            "stored cycle %s: %d frames, %d bytes, %d attempt(s), peak %.2f mm/5min, %d wet cells, "
+            "radars missing: %s",
             nominal,
             len(frames),
             len(blob),
             result.attempts,
             peak,
             wet,
+            ", ".join(frames[0].missing_sites) or "none",
         )
         return IngestOutcome(
             "ok" if complete else "partial",
