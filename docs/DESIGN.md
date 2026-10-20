@@ -346,12 +346,14 @@ Cloud Scheduler (cron 4-59/5 * * * *, UTC)
 Cloud Run Job: ingest ────────────────────────────────────────────┐
   1. conditional GET composite_rv_LATEST.tar    (≤5 tries, backoff) │
   2. dedupe by nominal_time (unique) ─────────────► Postgres       │
-  3. archive raw .tar.bz2 ───────────────────────► GCS  (48 h TTL) │
-  4. decode 25 frames (numpy, in memory)                           │
+  3. archive the raw .tar ───────────────────────► GCS  (48 h TTL) │
+  4. decode 25 HDF5 frames, check DWD's grid (D-74/75, in memory)  │
   5. sample per distinct radius mask (deduped) ► fan out to subs    │
   6. evaluate state machine ► enqueue alerts ─────► Postgres       │
   7. render overlays: 1 observed + 24 forecast ──► GCS (14 h / 1 h)│
-  8. deliver queued alerts via Notifier ─────────► mail provider   │
+  8. deliver queued alerts via Notifier ─────────► push / mail     │
+  9. housekeeping (D-73): purge unconfirmed, verify, purge evaluations│
+     and rate-limit rows ──────────────────────────► Postgres       │
 └──────────────────────────────────────────────────────────────────┘
 
 Cloud Run Service: api  (scale to zero, min-instances 0)
@@ -404,7 +406,7 @@ with reserved connections, and never let the web tier be able to take alerting d
 
 | Item | Calculation | ≈ |
 |---|---|---|
-| Ingest compute | 288 runs/day × ~30 s × 1 vCPU / 2 GiB ≈ 72 vCPU-h/month, partly free-tier | 1–3 |
+| Ingest compute | 288 runs/day × ~30 s × 1 vCPU / 2 GiB ≈ 72 vCPU-h/month, partly free-tier. **Measured October 2026: ~61 s billed per run, ~€12/month at list price before the free tier** - startup and network waits, not the ~10 s of decoding and rendering | 1–3 (measured ~10) |
 | API service | scale-to-zero, request-based billing (`cpu_idle = true`, D-71), a few requests/day | ~0 |
 | GCS raw archives | ~5 MB/cycle × 288/day ≈ 1.4 GB/day, 48 h retention ≈ 3 GB | <0.1 |
 | GCS overlays | observed: 144 × ~150 KB rolling ≈ 22 MB; forecast: 24/cycle × 1 h ≈ 43 MB | <0.1 |
@@ -1286,8 +1288,12 @@ a private project this is personal data under GDPR.
 - **Purpose limitation:** the stored evaluation rows contain coordinates-derived samples only, never
   raw identifying data beyond the subscription id.
 - **Deletion:** `DELETE /api/v1/subscriptions/me` and the unsubscribe link both hard-delete
-  (cascade). Unconfirmed subscriptions are purged after 24 h; subscriptions with no location update
-  and no login for 12 months are purged after a warning mail.
+  (cascade). Unconfirmed subscriptions are purged after 24 h. A push subscription that its browser
+  has revoked is deleted on the first send the push service refuses, and the liveness ping
+  (D-46) makes sure there is such a send within `webpush_liveness_days` even in a dry spell.
+  *Corrected 2026-10-20:* this said subscriptions without a location update or login for 12 months
+  were purged after a warning mail. Nothing implements that, and the privacy page never promised
+  it; an email subscriber stays until they unsubscribe.
 - **Transport:** HTTPS only, HSTS, secure cookies (`SameSite=Lax`), CSP without inline scripts except
   a nonce for the map bootstrap.
 - **Tokens:** 32 bytes from `secrets.token_urlsafe`, stored only as SHA-256; confirm tokens single-use
@@ -1323,6 +1329,7 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 | `DATABASE_URL` | — | Postgres DSN |
 | `GCS_BUCKET` | — | archives + overlays |
 | `DWD_BASE_URL` | `https://opendata.dwd.de/weather/radar/composite/rv/` | product directory |
+| `DWD_LATEST_NAME` | `composite_rv_LATEST.tar` | the file polled every cycle; the HDF5 edition since D-74 |
 | `DWD_USER_AGENT` | — | must include contact URL/mailbox (§4.3) |
 | `DWD_MAX_ATTEMPTS` | `5` | per cycle |
 | `DWD_DAILY_BYTE_BUDGET` | `8589934592` | 8 GiB guard; halting pages the operator (§4.3 rule 7) |
@@ -1450,24 +1457,30 @@ RainForecastWarning/
     db/                     # models, session, repositories
     radar/
       client.py             # politeness-enforcing DWD HTTP client (§4.3)
-      decoder.py            # header + payload → arrays (§5)
-      grid.py               # DE1200 ↔ WGS84, radius masks (§5)
+      decoder.py            # archive limits, edition dispatch, binary RV frames (§5)
+      odim.py               # HDF5 (ODIM_H5) RV members, grid check (D-74, D-75)
+      grid.py               # DE1200 (WGS84 ellipsoid) ↔ lat/lon, radius masks (§5, D-75)
+      sites.py              # DWD's 17 radars, which one covers a point (D-75)
       overlay.py            # reprojection + PNG rendering, obs/fc split (§11.1)
     alerting/
       sampler.py            # §8
       rules.py              # threshold/lead evaluation
       state_machine.py      # §9 — pure functions, no I/O
-      dispatcher.py         # queue + deliver
+      plausibility.py       # wet-share check on each cycle (D-70)
+      dispatcher.py         # queue + deliver, caps, push concurrency
     notify/
-      base.py console.py smtp.py brevo.py push.py   # §12
+      base.py console.py smtp.py webpush.py routing.py ...   # §12
     api/
-      main.py routes_*.py templates/ static/
+      app.py ratelimit.py mail.py metrics.py templates/ static/
     jobs/
-      ingest.py             # the Cloud Run job entrypoint (§6)
-      retention.py          # purge job (GCS lifecycle + evaluations TTL)
+      ingest.py             # the Cloud Run job entrypoint (§6), incl. housekeeping (D-73)
+      liveness.py           # weekly push liveness ping and the deletions it triggers (D-46)
       backfill.py           # past cycles from DWD / re-render from raw archives (§11.1)
-      verify.py             # prediction vs observation (§9)
-    cli.py                  # probe / backfill / render-backfill / send-test-mail
+      verify.py             # prediction vs observation (§9), run by ingest every cycle
+      reset.py              # clearing a test database
+    coverage.py             # "no radar data here" note for the settings page (D-75)
+    storage.py              # raw archives and overlays, local or GCS; both editions' names
+    cli.py                  # probe / ingest / verify / backfill / rerender / liveness / ...
   tests/
     fixtures/ unit/ integration/
 ```

@@ -177,12 +177,14 @@ make probe LAT=50.1109 LON=8.6821       # your own coordinates
 
 That probes the newest cycle `make run-ingest` stored, and prints which one. `probe` takes a
 single archive - a shell glob would hand it several and it would refuse - so to check an older
-cycle name it: `make probe LAT=... LON=... ARCHIVE=var/raw/DE1200_RV2609180745.tar.bz2`.
+cycle name it: `make probe LAT=... LON=... ARCHIVE=var/raw/composite_rv_20261020_1010.tar`.
+(Archives fetched before 2026-10-20 are `DE1200_RV<YYMMDDHHMM>.tar.bz2`, the retired binary
+edition; `probe` reads both - D-74.)
 
 The long form, if you would rather not go through make:
 
 ```sh
-.venv/bin/python -m rainalert.cli probe "$(ls -t var/raw/*.tar.bz2 | head -1)" \
+.venv/bin/python -m rainalert.cli probe "$(ls -t var/raw/*.tar* | head -1)" \
     --lat 50.1109 --lon 8.6821
 ```
 

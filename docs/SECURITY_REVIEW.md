@@ -128,6 +128,15 @@ headroom than the design thinks.
   writes members to disk, use `filter="data"` (3.12+) or validate each name is a bare basename.
 - Re-size the job from the measured 165 MB + renderer, not from 66 MB.
 
+**Status (2026-10-20, D-74): the limits above are built and carried over to the HDF5 edition.**
+DWD's archive is now an uncompressed tar of 25 HDF5 files, each gzip-compressed inside. The same
+member-count, per-member and total limits apply before anything is read, the archive itself is
+capped at the total, and inside each HDF5 file the grid's shape is checked before its data is
+read, so the gzip layer cannot allocate past 1200 x 1100. What is new is the parser: libhdf5 (via
+`h5py`) now reads third-party bytes, a larger attack surface than the hand-written binary decoder.
+It sits behind TLS to `opendata.dwd.de`, the response cap and the limits above; keep `h5py`
+current, since its wheels bundle libhdf5.
+
 ---
 
 ### F-2 — Nothing sanity-checks the decoded field, and no cap bounds the mails one cycle can send
@@ -488,7 +497,8 @@ platform.
 Uniform bucket-level access is the right call, but it is exactly what makes the ambiguity dangerous:
 the natural way to make overlay PNGs public with uniform access is
 `gsutil iam ch allUsers:objectViewer gs://rainalert-data`, which is **bucket-wide**. That publishes
-`raw/` too, and the object names are deterministic (`raw/DE1200_RV<YYMMDDHHMM>.tar.bz2`), so no
+`raw/` too, and the object names are deterministic (`raw/DE1200_RV<YYMMDDHHMM>.tar.bz2`, since
+D-74 `raw/composite_rv_<YYYYMMDD>_<HHMM>.tar`), so no
 listing permission is needed to enumerate 576 archives.
 
 Consequences: (a) it is a public mirror of DWD bulk data, contradicting the document's own

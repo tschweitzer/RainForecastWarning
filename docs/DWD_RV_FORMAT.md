@@ -19,6 +19,9 @@ Same 5-minute cadence, same retention window, published within seconds of each o
 consistently ~4× smaller for what appears to be the same cycle, which matters for the politeness
 budget (§4.3).
 
+> **Superseded 2026-10-20:** A stopped after the 07:55 UTC cycle and the service reads B (§11a,
+> DESIGN.md D-74). §2 and §6-10 describe A and stay as the record of what it was.
+
 Note on B: its sizes are exact multiples of 10240 (tar blocking factor 20 × 512 B) *and* vary with the
 weather. A tar of fixed-size raw grids would be constant-size, so B's members must already be
 compressed — i.e. A and B are probably not the same bytes in different wrappers. Settle with a real

@@ -1,29 +1,31 @@
 # RainForecastWarning
 
-A cloud service that warns you by email shortly before it starts raining at your location,
-using DWD radar nowcast data (Germany).
+A cloud service that warns you by push notification or email shortly before it starts raining at
+your location, using DWD radar nowcast data (Germany).
 
-**Status:** M0–M5 code complete; M6 deployment artifacts written but never applied. The service
-works end to end locally: it ingests DWD radar, evaluates each subscriber's location, emails a
-warning before rain arrives, and shows a rain map with a −12 h … +2 h timeline slider.
+**Status:** in production on Google Cloud (Cloud Run, Cloud SQL, Firebase Hosting). It ingests
+DWD's radar composite every five minutes, evaluates each subscriber's location, sends a warning
+before rain arrives ("Es regnet jetzt" when it starts unannounced), and shows a rain map with a
+48 h … +2 h timeline slider.
 
-Deploying needs a domain, a mail provider with SPF/DKIM/DMARC, and its DPA accepted — see
-[docs/RUNBOOK.md](docs/RUNBOOK.md).
+Push needs nothing beyond the deployment; email additionally needs a mail provider with
+SPF/DKIM/DMARC and its DPA accepted — see [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 - **[docs/DESIGN.md](docs/DESIGN.md)** — requirements, decisions log, architecture, data model,
   alert state machine, API, privacy, testing strategy and milestones.
-- **[docs/DWD_RV_FORMAT.md](docs/DWD_RV_FORMAT.md)** — the RV format as observed, not as documented:
-  header fields, the no-data sentinel and the trap it sets, publication timing, retention.
+- **[docs/DWD_RV_FORMAT.md](docs/DWD_RV_FORMAT.md)** — the RV product as observed, not as documented:
+  the HDF5 edition read since 2026-10-20 (§11a), the retired binary one, the grid and its
+  georeference (§11), publication timing, retention.
 
 ## Quick start
 
 ```sh
 make dev     # virtualenv + dependencies
-make test    # 169 tests, including a golden comparison against wradlib
+make test    # needs TEST_DATABASE_URL; includes golden comparisons against wradlib and DWD twin cycles
 make lint
 
 .venv/bin/python -m rainalert.cli probe \
-    tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2 --lat 50.1109 --lon 8.6821
+    tests/fixtures/composite_rv_20261018_1740_trimmed.tar --lat 50.1109 --lon 8.6821
 ```
 
 `probe` prints what the service would see at one location for every forecast step of a cycle — the
@@ -61,10 +63,11 @@ open instead of being sent — which is how the whole double opt-in flow can be 
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | any provider — they all speak SMTP |
 | `SECRET_KEY` | salts the consent IP hashes; must be set in production |
 | `TRUSTED_PROXY_HOPS` | how many proxies in front of us are ours (0 ignores `X-Forwarded-For`) |
+| `CONTACT_EMAIL` / `PRIVACY_CONTROLLER` | footer contact, and the controller's name and address the privacy page must name (D-72) |
 
 ```sh
 make run-ingest        # fetch a cycle, evaluate every subscriber, send what is due
-make verify            # score past warnings against what the radar then saw
+make verify            # score past warnings now (the ingest job also does it every cycle, D-73)
 ```
 
 Set `OVERLAY_DIR` as well and the ingest job renders map frames; `/` then shows the timeline.

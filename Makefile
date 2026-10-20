@@ -37,10 +37,13 @@ fmt:
 # nothing has been ingested yet. Probing the fixture by default was worse than useless: it is a
 # trimmed three-frame archive from one fixed day, so it answers a question nobody asked.
 #   make probe LAT=48.15 LON=11.56
-#   make probe LAT=48.15 LON=11.56 ARCHIVE=var/raw/DE1200_RV2609180745.tar.bz2
+#   make probe LAT=48.15 LON=11.56 ARCHIVE=var/raw/composite_rv_20261020_1010.tar
+# Both editions (D-74): the HDF5 `composite_rv_*.tar` since 2026-10-20, the binary `*.tar.bz2`
+# before. Globbing only the old one would probe the last binary archive and answer about a cycle
+# days old - the very thing this default exists to avoid.
 ARCHIVE_DIR ?= var/raw
-ARCHIVE ?= $(firstword $(shell ls -t $(ARCHIVE_DIR)/*.tar.bz2 2>/dev/null) \
-	tests/fixtures/DE1200_RV2609161355_trimmed.tar.bz2)
+ARCHIVE ?= $(firstword $(shell ls -t $(ARCHIVE_DIR)/composite_rv_*.tar $(ARCHIVE_DIR)/*.tar.bz2 \
+	2>/dev/null) tests/fixtures/composite_rv_20261018_1740_trimmed.tar)
 # A path written after the target is a *make goal*, not an argument: make tries to build it,
 # says "Nothing to be done", and probe reads ARCHIVE instead - answering about a different
 # archive than the one named, without saying so.
