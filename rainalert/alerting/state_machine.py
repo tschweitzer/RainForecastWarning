@@ -4,8 +4,8 @@ Pure functions, with time passed in. That is what makes the table in §9 testabl
 than by standing outside in the rain.
 
 The shape of the thing: a fixed cooldown either spams during showers or misses the second front.
-Tying suppression to the physical event - it must go dry again for a while - gives exactly one mail
-per rain event, which is what "not too many notifications" means in practice.
+Tying suppression to the physical event - it must go dry again for a while - gives exactly one
+notification per rain event, which is what "not too many notifications" means in practice.
 """
 
 from __future__ import annotations
@@ -43,9 +43,8 @@ class Policy:
     #: "always". Nothing else bounds that, because such a rule widens the definition of *event*
     #: rather than defeating a throttle (SECURITY_REVIEW.md F-15).
     #:
-    #: What it protects is shared: a mail provider's daily quota and a sending domain's reputation,
-    #: or - on push - the standing of one VAPID key with Google, Apple and Mozilla. One account's
-    #: taste in thresholds should not cost everyone else their warnings.
+    #: What it protects is shared: the standing of one VAPID key with Google, Apple, Mozilla and
+    #: Microsoft. One account's taste in thresholds should not cost everyone else their warnings.
     #:
     #: 0 disables it.
     alert_cap_per_day: int = 0

@@ -43,7 +43,7 @@ def _env(monkeypatch, tmp_path, dsn: str) -> None:
     monkeypatch.setenv("SECRET_KEY", "test")
     monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "raw"))
     monkeypatch.setenv("NOTIFIER", "file")
-    monkeypatch.setenv("MAIL_OUTBOX_DIR", str(tmp_path / "outbox"))
+    monkeypatch.setenv("OUTBOX_DIR", str(tmp_path / "outbox"))
 
 
 def test_unreachable_database_is_explained_not_dumped(monkeypatch, tmp_path, capsys):
@@ -123,30 +123,27 @@ class _ParserStub:
         return argparse.Namespace(func=self.func)
 
 
-def test_outbox_prints_a_link_that_can_actually_be_opened(tmp_path, monkeypatch, capsys):
-    """A .eml is quoted-printable: the raw text shows `token=3D...=` split across lines.
+def test_outbox_prints_the_link_a_tap_would_open(tmp_path, monkeypatch, capsys):
+    """On a headless box there is no notification to tap, so the printed link is the tap. Written
+    by the real `FileNotifier`, so the two cannot drift apart."""
+    from rainalert.notify import FileNotifier, OutboundMessage
 
-    Copying that - which is all a headless box offers - produces a token wrong in two ways at
-    once, and the failure reads as "invalid token" rather than "you mistranscribed it".
-    """
     outbox = tmp_path / "outbox"
-    outbox.mkdir()
-    (outbox / "one.eml").write_text(
-        "To: me@example.com\n"
-        "Subject: Regenwarnung bestaetigen\n"
-        'Content-Type: text/plain; charset="utf-8"\n'
-        "Content-Transfer-Encoding: quoted-printable\n"
-        "MIME-Version: 1.0\n"
-        "\n"
-        "Zum Bestaetigen:\n"
-        "http://localhost:8000/confirm#t=3DabcDEF123456789012345678901234567890=\n"
-        "TAIL\n"
+    FileNotifier(outbox).send(
+        OutboundMessage(
+            to="https://fcm.googleapis.com/fcm/send/local",
+            subject="Regenwarnung bestätigen",
+            text="Zum Aktivieren antippen.\n",
+            click_url="http://localhost:8000/confirm#a=abcDEF123456789012345678901234567890",
+            push_p256dh="k" * 87,
+            push_auth="a" * 22,
+        )
     )
-    monkeypatch.setenv("MAIL_OUTBOX_DIR", str(outbox))
+    monkeypatch.setenv("OUTBOX_DIR", str(outbox))
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://unused@/unused")
     monkeypatch.setenv("SECRET_KEY", "test")
 
     assert main(["outbox"]) == 0
     out = capsys.readouterr().out
-    assert "#t=abcDEF123456789012345678901234567890TAIL" in out
-    assert "=3D" not in out  # the encoding is decoded, not echoed
+    assert "Link: http://localhost:8000/confirm#a=abcDEF123456789012345678901234567890" in out
+    assert "Regenwarnung bestätigen" in out

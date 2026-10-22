@@ -18,8 +18,8 @@ ATTRIBUTION = (
 )
 
 #: The same thing for the web footer, where the licence can be a link and umlauts are safe.
-#: Messages stay ASCII: the mail path has been plain text throughout and a bare umlaut in a
-#: header or a non-UTF-8 client is a bug nobody notices until somebody reports mojibake.
+#: The plain one above is ASCII because it was written for mail headers, which no longer exist
+#: (D-76); it is kept as it is because the timeline API publishes it verbatim.
 ATTRIBUTION_HTML = (
     "Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, "
     '<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> '

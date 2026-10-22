@@ -152,7 +152,15 @@ def test_the_real_grid_passes(hdf5_cycle):
 def _subscription(session, settings, at=HANNOVER):
     from rainalert import subscriptions as svc
 
-    result = svc.subscribe(session, settings, address="friend@example.com", lat=at[0], lon=at[1])
+    result = svc.subscribe(
+        session,
+        settings,
+        endpoint="https://fcm.googleapis.com/fcm/send/friend",
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+        lat=at[0],
+        lon=at[1],
+    )
     confirmed = svc.confirm(session, settings, token=result.confirm_token)
     return session.query(Subscription).filter_by(subscriber_id=confirmed.subscriber_id).one()
 
@@ -225,18 +233,27 @@ def test_the_settings_endpoint_carries_it(db, settings):
     from rainalert.notify import ConsoleNotifier
 
     notifier = ConsoleNotifier()
-    client = TestClient(create_app(settings, session_factory=db, notifier=notifier))
+    # https like `public_base_url`, so the Secure session cookie that confirming opens comes back.
+    client = TestClient(
+        create_app(settings, session_factory=db, notifier=notifier),
+        base_url=settings.public_base_url,
+    )
     client.post(
         "/api/v1/subscriptions",
-        json={"email": "friend@example.com", "lat": HANNOVER[0], "lon": HANNOVER[1]},
+        json={
+            "lat": HANNOVER[0],
+            "lon": HANNOVER[1],
+            "endpoint": "https://fcm.googleapis.com/fcm/send/friend",
+            "p256dh": "k" * 87,
+            "auth": "a" * 22,
+        },
     )
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
-    page = client.post("/confirm", data={"token": token})
-    api_token = page.text.split("<code>")[1].split("</code>")[0].strip()
+    token = notifier.sent[-1].click_url.split("/confirm#a=")[1]
+    client.post("/confirm", data={"token": token})
     with db() as session:
         sub = session.query(Subscription).one()
         _evaluated(session, sub, "skipped_missing", ["dehnr"], at=datetime.now(UTC))
-    me = client.get("/api/v1/subscriptions/me", headers={"Authorization": f"Bearer {api_token}"})
+    me = client.get("/api/v1/subscriptions/me")
     assert "Radar Hannover" in me.json()["coverage_note"]
 
 

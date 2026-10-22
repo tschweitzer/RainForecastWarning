@@ -178,8 +178,8 @@ Two independent pieces of evidence:
    is the image DWD displays as **15:55 CEST**. 13:55 UTC + 2 h = 15:55 CEST. Confirmed.
 
 The code tags the decoded time `UTC` and every user-facing surface converts explicitly — the alert
-mail and `probe` to the subscriber's timezone, the map page to the browser's, the timeline manifest
-to ISO 8601 with an offset. Nothing displays a bare unlabelled time, which is what made this worth
+notification and `probe` to the subscriber's timezone, the map page to the browser's, the timeline
+manifest to ISO 8601 with an offset. Nothing displays a bare unlabelled time, which is what made this worth
 pinning down rather than assuming.
 
 Everything the decoder needs — dimensions, precision, interval, lead, nominal time — is in the header.

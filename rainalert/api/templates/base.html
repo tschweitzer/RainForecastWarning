@@ -43,7 +43,7 @@
   h1 { font-size:1.5rem; margin:0 0 .25rem; }
   p.lede { color:var(--muted); margin-top:0; }
   label { display:block; margin:1rem 0 .25rem; font-weight:600; }
-  input[type=text],input[type=email],input[type=number] {
+  input[type=text],input[type=number] {
     width:100%; padding:.6rem .7rem; font-size:1rem; border:1px solid var(--line);
     border-radius:8px; background:var(--bg); color:var(--fg); }
   .row { display:flex; gap:.75rem; } .row > div { flex:1; }
@@ -132,7 +132,7 @@
    One link, and none on the start page itself (D-67). There used to be more: `Regenradar` (the
    radar is the start page now) and `Einstellungen` (the settings are on it too). With one page
    left to go to, a navigation on that page would only name where the reader already is; the
-   other pages - reached from a mail, a notification or the footer - still need the way back. #}
+   other pages - reached from a notification or the footer - still need the way back. #}
 {% if request.url.path != '/' %}
 <nav class="site" aria-label="Seiten">
   <a href="/">Start</a>

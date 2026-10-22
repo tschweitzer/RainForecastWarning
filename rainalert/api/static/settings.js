@@ -5,7 +5,7 @@
  * as what the browser is handed. Configuration arrives as data attributes on <body>.
  *
  * It owns the settings section and the requests behind it - opening (a device key, a settings link
- * in `#t=`, or an email session), saving, deleting, and asking for a link. It does not own the map
+ * in `#t=`, or the cookie session from confirming), saving, deleting, and asking for a link. It does not own the map
  * or decide what the page shows: signup.js does both, and hands this file the few things it needs
  * from them as `page` in `begin(page)`:
  *
@@ -28,8 +28,8 @@
   if (window.RainKey) { window.RainKey.syncFromPage(parseInt(data.serverTime, 10)); }
 
   /* With a device key (D-64) every request is signed and there is no session at all: no cookie,
-     no CSRF value, no countdown. Without one - email, or a browser that cannot keep a key - the
-     cookie session as before. */
+     no CSRF value, no countdown. Without one - a browser that cannot keep a key - the cookie
+     session as before. */
   var keyMode = false;
   var csrf = null;               // set when a session opens; required on every write
   var expiresAt = null;          // epoch ms; the page counts down to it
@@ -43,11 +43,11 @@
 
   // ---- asking for a link ------------------------------------------------------------------
   /* The answer goes to the status line next to the button that was pressed, and the button is
-     disabled for the duration: `/api/v1/manage/link` limits per address as well as per IP, so an
+     disabled for the duration: `/api/v1/manage/link` limits per endpoint as well as per IP, so an
      impatient double-tap spends two of this subscriber's links for the hour. Re-enabled on every
      branch, because a button stuck disabled on the only route into someone's settings is worse
      than the double-tap. */
-  async function sendLink(channelName, address, button, out) {
+  async function sendLink(endpoint, button, out) {
     function answer(message) {
       out.textContent = message;
       if (button) { button.disabled = false; }
@@ -59,14 +59,14 @@
       response = await fetch('/api/v1/manage/link', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({channel: channelName, address: address})
+        body: JSON.stringify({address: endpoint})
       });
     } catch (error) {
       answer('Keine Verbindung. Bitte versuch es noch einmal.');
       return;
     }
     if (response.status === 429) {
-      /* The cause is deliberately not named: the per-address half of the limit can fire for
+      /* The cause is deliberately not named: the per-endpoint half of the limit can fire for
          requests that did not come from this connection at all, and telling the reader which half
          tripped would tell a stranger the same thing. */
       answer('Zu viele Anfragen in der letzten Stunde. Bitte in etwa einer '
@@ -77,18 +77,11 @@
       answer('Bei uns ist gerade etwas schiefgegangen. Bitte später noch einmal.');
       return;
     }
-    if (channelName === 'webpush') {
-      /* No hedge on this route, and it says where to look: nobody can type a push endpoint, so
-         there is nothing to hide, and the link arrives as a notification, not on this page. */
-      answer('Die Benachrichtigung mit dem Link ist unterwegs – schau in deine '
-        + 'Benachrichtigungen. Der Link gilt ' + LINK_TTL + ' Minuten und kann nur einmal '
-        + 'benutzt werden.');
-      return;
-    }
-    // Email: the same answer whether or not the address is known, because the server answers the
-    // same way. Anything else here would tell a stranger who has signed up.
-    answer('Wenn dieser Kanal angemeldet ist, ist der Link unterwegs. '
-      + 'Er gilt ' + LINK_TTL + ' Minuten und nur einmal.');
+    /* No hedge, and it says where to look: nobody can type a push endpoint, so there is nothing
+       to hide, and the link arrives as a notification, not on this page. */
+    answer('Die Benachrichtigung mit dem Link ist unterwegs – schau in deine '
+      + 'Benachrichtigungen. Der Link gilt ' + LINK_TTL + ' Minuten und kann nur einmal '
+      + 'benutzt werden.');
   }
 
   // State B: a push subscription this browser cannot prove yet. One link registers a key.
@@ -102,16 +95,7 @@
           + 'Lade die Seite neu und melde dich neu an.';
         return;
       }
-      sendLink('webpush', subscription.endpoint, toBrowser, out);
-    });
-  }
-
-  var emailForm = $('link-form');
-  if (emailForm) {
-    emailForm.addEventListener('submit', function (event) {
-      event.preventDefault();
-      sendLink('email', $('link-address').value, emailForm.querySelector('button[type=submit]'),
-        $('link-result'));
+      sendLink(subscription.endpoint, toBrowser, out);
     });
   }
 
@@ -222,7 +206,7 @@
   }
 
   /* A cookie session the server no longer accepts - its subscriber was deleted, say from the
-     unsubscribe link in a mail. Not an error to report: there is simply nothing to open. */
+     unsubscribe link on the confirmed page. Not an error to report: there is simply nothing to open. */
   function dropSession() {
     csrf = null;
     if (ticker) { clearInterval(ticker); ticker = null; }
@@ -298,17 +282,6 @@
     $('radius').value = current.radius_m;
     showLead();
     showRadius();
-
-    /* Only for email: the address says whose warnings these are. For push `current.address` is
-       the endpoint - 200-odd characters of URL that identify nothing to the reader. The states that
-       matter are not lost with it: pending and unhealthy each put a notice in the banner below. */
-    var who = $('who');
-    var state = {
-      active: 'aktiv', pending: 'noch nicht bestätigt',
-      unhealthy: 'gestört', paused: 'pausiert'
-    }[current.status] || current.status;
-    who.hidden = current.channel !== 'email';
-    who.textContent = who.hidden ? '' : current.address + ' · ' + state;
 
     /* Both notices, not whichever runs last - pending first, because it explains why nothing is
        arriving. */
@@ -509,8 +482,7 @@
      `options.token`: a settings link's token. signup.js reads it from `#t=` and erases it from the
      address bar the moment the page starts deciding, before anything is awaited.
      `options.session`: whether a cookie session is possible at all. Asking costs a request on every
-     visit, and without a push subscription in this browser and without email on this deployment
-     there is nothing it could find - nor anywhere below to ask for a new link. A link always asks. */
+     visit, and without a push subscription in this browser there is nothing it could find - nor anywhere below to ask for a new link. A link always asks. */
   async function begin(pageApi, options) {
     page = pageApi;
     options = options || {};

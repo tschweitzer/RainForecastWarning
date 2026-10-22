@@ -15,7 +15,6 @@
  data-radius="{{ settings.default_radius_m | default(2000) }}"
  data-layer-opacity="{{ layer_opacity | default(1.0) }}"
  data-vapid-key="{{ vapid_public_key or '' }}"
- data-email-available="{{ settings.email_channel_enabled | tojson }}"
  {# The window the page opens on, already resolved and clamped by the server. The script may
     override it from localStorage, which is the reader's own stored preference - but never from
     the raw query string, so a clamp cannot be bypassed here. #}
@@ -94,20 +93,13 @@
            color:var(--fg); opacity:.75; font-size:.68rem; font-weight:600; }
   .place::before { display:none; }
 
-  .channel { border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; margin:0 0 1rem; }
-  .channel legend { padding:0 .3rem; font-size:.85rem; color:var(--muted); }
-  .channel label { display:inline-flex; gap:.35rem; align-items:center; margin-right:1rem;
-                   font-weight:normal; }
-  /* Not scoped: the restart line belongs to the whole result, including the email branch, and
-     scoping it left it rendering as loudly as the instructions. */
+  /* Not scoped: the restart line belongs to the whole result, and scoping it left it rendering as
+     loudly as the instructions. */
   .alt { font-size:.85rem; color:var(--muted); }
   .done { font-weight:600; }
   /* The waiting state between "allow notifications" and the test notification arriving. Usually
      under a second, occasionally several - a push service has to reach the device. */
   .waiting { display:flex; gap:.6rem; align-items:center; }
-  .already { margin-top:1.25rem; padding-top:1rem; border-top:1px solid var(--line);
-             font-size:.9rem; color:var(--muted); }
-  .already summary { cursor:pointer; }
 
   /* The settings (D-67): what /manage carried under its map. */
   #einstellungen h2 { margin:1.5rem 0 .25rem; font-size:1.2rem; }
@@ -182,8 +174,8 @@
 </nav>
 
 {# Which of the states below is shown is decided in the browser (signup.js `decideSignupState`):
-   the settings when this browser can prove a subscription - a device key, a settings link, or an
-   email session - else state B when it holds a push subscription without such proof, else the
+   the settings when this browser can prove a subscription - a device key, a settings link, or a
+   session from confirming - else state B when it holds a push subscription without such proof, else the
    signup. Exactly one of them, never two.
 
    While that is being decided for a browser that does hold something - a link to redeem, or a
@@ -222,9 +214,6 @@
    and circle, zoomed in. #}
 <section id="einstellungen" hidden>
   <h2>Einstellungen</h2>
-  {# Only for email: the address says whose warnings these are. For push there is nothing to
-     show - the endpoint identifies nothing to the reader. #}
-  <p class="lede" id="who" hidden></p>
   {# Why the settings opened even though the link was spent. Separate from #settings-banner,
      which `fill()` uses for facts about the subscription itself. #}
   <p class="hint" id="settings-note" hidden></p>
@@ -280,8 +269,8 @@
   </form>
   <p id="settings-result" role="status"></p>
 
-  {# The session countdown, for a cookie session only (email, or a browser that cannot keep a
-     device key). With a device key there is no session and nothing to count down (D-64), and the
+  {# The session countdown, for a cookie session only (a browser that cannot keep a device
+     key). With a device key there is no session and nothing to count down (D-64), and the
      script hides this. No "Sitzung beenden" either way: the only account controls here are
      subscribing and unsubscribing (PLAN_DEVICE_KEY.md §11). #}
   <p class="session-end" id="session-end" hidden>
@@ -289,8 +278,8 @@
     <button type="button" class="linklike" id="extend" hidden>Verlängern</button>
   </p>
 
-  {# The way out, and the only one on the push channel: a notification body is plain text
-     nothing linkifies, and notifications carry no buttons (D-64).
+  {# The way out: a notification body is plain text nothing linkifies, and notifications carry
+     no buttons (D-64).
 
      Two steps, not one. It deletes the location and the history, and a single mis-tap would be a
      bad way to discover that. #}
@@ -317,41 +306,12 @@
   <p class="lede">Eine Nachricht, kurz bevor es bei dir anfängt zu regnen. Radardaten des DWD,
   Vorhersage bis zwei Stunden voraus. Kostenlos, ohne Konto, ohne App.</p>
 
-  {# Above the channel choice, because it explains that choice.
-
-     `announceCapability()` moves the radio from push to E-Mail when this browser cannot do push,
-     and this sentence is the only thing that says why. Inside #what-happens it rendered below the
-     fold on a 390x844 phone - so the reader's first screen was an E-Mail radio they had not
-     selected and an address box, with no reason given anywhere in view. A note that changes the
-     premise of a control has to precede the control.
-
-     No `for-push` class, deliberately. It had one, and `syncChannelFields()` sets `hidden` on
-     every `.for-push` node whenever the channel changes - so the note was force-shown (empty) on
-     a capable browser and force-hidden on the blocked one it exists for, i.e. wrong in both
-     directions. Its visibility is owned by `announceCapability()` alone. #}
+  {# Above the form, because it changes its premise: whether signing up can work in this browser
+     at all (`announceCapability()` in signup.js owns its visibility). Inside #what-happens it
+     rendered below the fold on a 390x844 phone, with no reason in view for what the form then did. #}
   <p class="note" id="capability-note" hidden></p>
 
   <form id="signup">
-    {# With no mail provider configured the API refuses `channel=email`, so the choice is not a
-       choice. The fieldset is hidden rather than dropped: the push radio stays checked and in the
-       DOM, which is what `chosenChannel()` and `syncChannelFields()` read, and the page does not
-       ask a question whose second answer would be rejected. #}
-    <fieldset class="channel" {% if not settings.email_channel_enabled %}hidden{% endif %}>
-      <legend>Wie sollen wir dich warnen?</legend>
-      <label><input type="radio" name="channel" value="webpush" checked> Push auf diesen Browser</label>
-      {% if settings.email_channel_enabled %}
-      <label><input type="radio" name="channel" value="email"> E-Mail</label>
-      {% endif %}
-    </fieldset>
-
-    {# Hidden for push, and not merely ignored: the request is refused if an address arrives on
-       the webpush channel, so leaving it fillable would let someone believe it had been stored. #}
-    <div id="email-field" hidden>
-      <label for="email">E-Mail</label>
-      <input type="email" id="email" name="email" autocomplete="email"
-             placeholder="du@example.org">
-    </div>
-
     {# The map these point at is at the top of the page, so they say so. They live inside the
        form rather than under the map because in state B there is no picking to do, and a hint
        telling a subscriber to tap the map would be an instruction to change something this page
@@ -399,7 +359,7 @@
          No "tippe sie an" any more: since D-66 the service worker confirms by itself and the
          notification that arrives says "Erfolgreich angemeldet". Asking for a tap promised a step
          that no longer exists. #}
-      <p class="for-push" style="margin:.6rem 0 0">Dein Browser bestätigt die Anmeldung dann mit
+      <p style="margin:.6rem 0 0">Dein Browser bestätigt die Anmeldung dann mit
       einer Benachrichtigung – meist in wenigen Sekunden, von selbst. Ohne Bestätigung wird die
       Anmeldung nach
       {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen keine weiteren
@@ -411,7 +371,7 @@
          unregisters the service worker, which deactivates the push subscription. There is no
          recovery path - no address to send a link to, nothing to type - so the honest thing is to
          say so here. D-47. #}
-      <p class="for-push" style="margin:.6rem 0 0">Die Anmeldung lebt in diesem Browser. Wenn du
+      <p style="margin:.6rem 0 0">Die Anmeldung lebt in diesem Browser. Wenn du
       die Websitedaten löschst oder Benachrichtigungen blockierst, endet sie – dann musst du dich
       neu
       {# Not "dabei", which says: at that moment. We do not learn the subscription is gone until
@@ -420,24 +380,16 @@
          honestly as "es kann also einige Tage länger dauern". Two pages must not disagree about a
          deletion promise. #}
       anmelden. Deinen Standort löschen wir danach von selbst.</p>
-      <span class="for-email" hidden>Du bekommst zuerst eine Bestätigungsmail. Ohne Bestätigung
-      wird die Anmeldung nach {{ settings.unconfirmed_purge_hours }} Stunden gelöscht und es kommen
-      keine weiteren Mails.</span>
     </div>
 
-    {# Both wordings are rendered and one is hidden, rather than written by script: the consent
-       text is the thing being agreed to, so it belongs where it can be read in the template and
-       in the page source, not assembled at runtime. Which one was shown follows from the
-       subscriber's stored `channel` plus `consent_text_version` (DESIGN.md §13). #}
+    {# In the template, not written by script: the consent text is the thing being agreed to, so it
+       belongs where it can be read in the template and in the page source. What was shown follows
+       from `consent_text_version` (DESIGN.md §13). #}
     <div class="consent">
       <input type="checkbox" id="consent" required>
       <label for="consent" style="font-weight:400;margin:0">
-        <span class="for-push">Ich bin einverstanden, dass die Push-Adresse dieses Browsers und
-        mein Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar
-        in den Einstellungen.</span>
-        <span class="for-email" hidden>Ich bin einverstanden, dass meine E-Mail-Adresse und mein
-        Standort gespeichert werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar über
-        den Abmeldelink.</span>
+        Ich bin einverstanden, dass die Push-Adresse dieses Browsers und mein Standort gespeichert
+        werden, um mir Regenwarnungen zu schicken. Jederzeit widerrufbar in den Einstellungen.
       </label>
     </div>
 
@@ -450,28 +402,13 @@
        before you agree) pushed the button down far enough that this sentence went from fully
        visible to 0 pixels visible. Two different jobs, so two different positions: context before
        the checkbox, the un-undoable warning against the button. #}
-    <p class="note for-push" id="permission-prompt-note" style="margin:0 0 .8rem"><strong>Beim
+    <p class="note" id="permission-prompt-note" style="margin:0 0 .8rem"><strong>Beim
     Anmelden fragt dein Browser, ob wir dir Benachrichtigungen schicken dürfen – bitte auf
     „Zulassen“ tippen.</strong> Ohne das können wir dich nicht warnen.</p>
     <button type="submit">Anmelden</button>
   </form>
   <p id="result" role="status"></p>
 
-  {# An email subscriber opens the settings through a link: in the mail, or requested here. Push
-     needs no such form - a subscribed browser shows state B or the settings instead. Collapsed,
-     because almost nobody looking at the signup form is an email subscriber. #}
-  {% if settings.email_channel_enabled %}
-  <details class="already" id="email-link">
-    <summary>Schon per E-Mail angemeldet? Link zu den Einstellungen schicken</summary>
-    <form id="link-form">
-      <label for="link-address">E-Mail</label>
-      <input type="email" id="link-address" required autocomplete="email"
-             placeholder="du@example.org">
-      <button type="submit">Link schicken</button>
-    </form>
-    <p id="link-result" role="status"></p>
-  </details>
-  {% endif %}
 </section>
 
 <link rel="stylesheet" href="{{ static_url('vendor/leaflet/leaflet.css') }}">

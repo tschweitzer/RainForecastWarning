@@ -3,7 +3,7 @@
 Two properties this module exists to guarantee:
 
 * **Indexed by lead, never by position** (§8.0). A cycle missing one member would otherwise shift
-  every later value down a slot, so rain at +60 gets emailed as rain at +55 and the wrong time is
+  every later value down a slot, so rain at +60 gets announced as rain at +55 and the wrong time is
   written to the permanent record.
 * **Per-frame coverage.** The no-data region advects with the forecast, so a point near the edge of
   radar range can have good data at t+0 and none at t+45. A single coverage number taken from

@@ -1,7 +1,7 @@
 """The self-service settings page: how you get in, and what you may change once you are.
 
 Weighted towards the things that are invisible when they break. A magic link that stays valid
-after use, a write that a third-party page can trigger, an address the endpoint confirms exists,
+after use, a write that a third-party page can trigger, an endpoint the route confirms exists,
 a threshold that becomes a 500 in the database rather than a sentence on the form - none of those
 show up by clicking through the page once.
 """
@@ -26,6 +26,8 @@ from tests.helpers import js_function
 
 MUNICH = (48.1533, 11.5574)
 HAMBURG = (53.5511, 9.9937)
+FRIEND = "https://fcm.googleapis.com/fcm/send/friend"
+STRANGER = "https://fcm.googleapis.com/fcm/send/stranger"
 
 
 @pytest.fixture()
@@ -33,7 +35,6 @@ def settings():
     return Settings(
         database_url="postgresql+psycopg://unused",
         public_base_url="https://rain.example.invalid",
-        mail_from="RainAlert <noreply@rain.example.invalid>",
         secret_key="test-secret",
         notifier="console",
         _env_file=None,
@@ -56,33 +57,36 @@ def client(db, settings, notifier):
     )
 
 
-def subscribed(client, notifier, email="friend@example.com", lat=MUNICH[0], lon=MUNICH[1]):
-    """A confirmed, active email subscriber - and *only* that.
+def push_body(endpoint=FRIEND, lat=MUNICH[0], lon=MUNICH[1]) -> dict:
+    return {"lat": lat, "lon": lon, "endpoint": endpoint, "p256dh": "k" * 87, "auth": "a" * 22}
 
-    Confirming now also opens a session, which is the point of that change but would quietly
-    wreck every test below it: they would start authorised, and a magic link that had stopped
-    working would still look like it worked. So the cookie goes, and the assertion holds this
-    helper to its own docstring.
+
+def subscribed(client, notifier, endpoint=FRIEND, lat=MUNICH[0], lon=MUNICH[1]):
+    """A confirmed, active subscriber - and *only* that.
+
+    Confirming also opens a session, which is the point of that change but would quietly wreck
+    every test below it: they would start authorised, and a magic link that had stopped working
+    would still look like it worked. So the cookie goes, and the assertion holds this helper to its
+    own docstring. `push_subscribed` below keeps it.
     """
-    client.post("/api/v1/subscriptions", json={"email": email, "lat": lat, "lon": lon})
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
-    client.post("/confirm", data={"token": token})
+    push_subscribed(client, notifier, lat=lat, lon=lon, endpoint=endpoint)
     client.cookies.delete(MANAGE_COOKIE)
     assert client.get("/api/v1/subscriptions/me").status_code == 401
-    return email
+    return endpoint
+
+
+def ask_for_link(client, endpoint=FRIEND, **kwargs):
+    return client.post("/api/v1/manage/link", json={"address": endpoint}, **kwargs)
 
 
 def link_token(notifier) -> str:
     """The magic link puts its token in the fragment, not the query string.
 
-    Read from the body for email and from `click_url` for push, because the push branch no longer
-    prints a URL at all - a notification body is plain text nothing linkifies, and the mail version
-    of this message put two untappable URLs and a licence footer in a notification shade. The rule
-    being checked is unchanged and is the point of the helper: wherever the token is, it is behind a
-    `#` (F-4/F-8), never in a query string a log or a Referer header would keep.
+    Read from `click_url`: a notification body is plain text nothing linkifies, so it prints no
+    URL. The rule being checked is the point of the helper: the token is behind a `#` (F-4/F-8),
+    never in a query string a log or a Referer header would keep.
     """
-    message = notifier.sent[-1]
-    carrier = message.text if "/#t=" in message.text else (message.click_url or "")
+    carrier = notifier.sent[-1].click_url or ""
     assert "/#t=" in carrier, "the token must ride in the fragment (F-4/F-8)"
     assert "?t=" not in carrier and "?token=" not in carrier
     return carrier.split("/#t=")[1].split()[0]
@@ -90,7 +94,7 @@ def link_token(notifier) -> str:
 
 def signed_in(client, notifier, **kwargs) -> str:
     subscribed(client, notifier, **kwargs)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     response = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
     assert response.status_code == 200
     return response.json()["csrf"]
@@ -118,7 +122,7 @@ def test_the_link_opens_a_session_that_can_read_and_write(client, notifier, db):
     csrf = signed_in(client, notifier)
     me = client.get("/api/v1/subscriptions/me")
     assert me.status_code == 200
-    assert me.json()["address"] == "friend@example.com"
+    assert me.json()["status"] == "active"
     assert write(client, csrf, threshold_mm_5min=0.25).status_code == 204
     with db() as session:
         assert float(session.query(Subscription).one().threshold_mm_5min) == 0.25
@@ -126,7 +130,7 @@ def test_the_link_opens_a_session_that_can_read_and_write(client, notifier, db):
 
 def test_the_link_works_exactly_once(client, notifier):
     subscribed(client, notifier)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     token = link_token(notifier)
     assert client.post("/api/v1/manage/session", data={"token": token}).status_code == 200
     # A link to someone's home coordinates sitting in an inbox must stop working once spent.
@@ -135,10 +139,9 @@ def test_the_link_works_exactly_once(client, notifier):
 
 def test_a_second_request_supersedes_the_first_link(client, notifier, db):
     subscribed(client, notifier)
-    body = {"channel": "email", "address": "friend@example.com"}
-    client.post("/api/v1/manage/link", json=body)
+    ask_for_link(client)
     first = link_token(notifier)
-    client.post("/api/v1/manage/link", json=body)
+    ask_for_link(client)
     assert client.post("/api/v1/manage/session", data={"token": first}).status_code == 401
     with db() as session:
         live = session.execute(
@@ -149,7 +152,7 @@ def test_a_second_request_supersedes_the_first_link(client, notifier, db):
 
 def test_an_expired_link_is_refused(client, notifier, db):
     subscribed(client, notifier)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     token = link_token(notifier)
     with db() as session:
         row = session.execute(
@@ -160,21 +163,19 @@ def test_an_expired_link_is_refused(client, notifier, db):
     assert client.post("/api/v1/manage/session", data={"token": token}).status_code == 401
 
 
-def test_an_unknown_address_answers_the_same_and_sends_nothing(client, notifier):
+def test_an_unknown_endpoint_answers_the_same_and_sends_nothing(client, notifier):
     subscribed(client, notifier)
     before = len(notifier.sent)
-    response = client.post(
-        "/api/v1/manage/link", json={"channel": "email", "address": "stranger@example.com"}
-    )
+    response = ask_for_link(client, STRANGER)
     # Same status and same body as the hit, or the page is a subscriber-list oracle.
     assert response.status_code == 202
     assert len(notifier.sent) == before
 
 
 def test_an_unconfirmed_subscriber_gets_no_link(client, notifier):
-    client.post("/api/v1/subscriptions", json={"email": "new@example.com", "lat": 50.1, "lon": 8.6})
+    client.post("/api/v1/subscriptions", json=push_body(STRANGER))
     before = len(notifier.sent)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "new@example.com"})
+    ask_for_link(client, STRANGER)
     # Confirmation is what proves the channel reaches the person; a settings link does not get
     # to take that on trust.
     assert len(notifier.sent) == before
@@ -182,10 +183,9 @@ def test_an_unconfirmed_subscriber_gets_no_link(client, notifier):
 
 def test_requesting_links_is_rate_limited(client, notifier, settings):
     subscribed(client, notifier)
-    body = {"channel": "email", "address": "friend@example.com"}
     for _ in range(settings.manage_link_limit_per_hour):
-        assert client.post("/api/v1/manage/link", json=body).status_code == 202
-    assert client.post("/api/v1/manage/link", json=body).status_code == 429
+        assert ask_for_link(client).status_code == 202
+    assert ask_for_link(client).status_code == 429
 
 
 # --- CSRF, and why the cookie is not enough ----------------------------------------------------
@@ -248,7 +248,7 @@ def test_deleting_ends_the_session_cookie_too(client, notifier):
 def test_the_session_cookie_is_httponly_and_secure_on_https(client, notifier):
     """Script must not be able to read it, and it must not travel in clear."""
     subscribed(client, notifier)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     response = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
     header = response.headers["set-cookie"].lower()
     assert "httponly" in header
@@ -263,7 +263,7 @@ def test_the_cookie_is_not_secure_when_the_site_is_served_over_http(db, notifier
         create_app(plain, session_factory=db, notifier=notifier), base_url=plain.public_base_url
     )
     subscribed(local, notifier)
-    local.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(local)
     response = local.post("/api/v1/manage/session", data={"token": link_token(notifier)})
     assert "secure" not in response.headers["set-cookie"].lower()
     assert local.get("/api/v1/subscriptions/me").status_code == 200
@@ -274,20 +274,6 @@ def test_the_csrf_endpoint_needs_the_cookie(client, notifier):
     assert client.get("/api/v1/manage/csrf").status_code == 200
     client.cookies.clear()
     assert client.get("/api/v1/manage/csrf").status_code == 401
-
-
-def test_the_api_token_still_works_and_needs_no_form_token(client, notifier, db):
-    """The app's credential is unaffected: it cannot be sent by a cross-site request anyway."""
-    client.post("/api/v1/subscriptions", json={"email": "app@example.com", "lat": 50.1, "lon": 8.6})
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
-    api = client.post("/confirm", data={"token": token}).text.split("<code>")[1].split("</code>")[0]
-    headers = {"Authorization": f"Bearer {api}"}
-    assert (
-        client.patch(
-            "/api/v1/subscriptions/me", json={"lead_time_minutes": 45}, headers=headers
-        ).status_code
-        == 204
-    )
 
 
 # --- what may be changed -----------------------------------------------------------------------
@@ -346,7 +332,7 @@ def test_the_rule_is_writable_but_the_address_is_not(client, notifier):
     # Changing where warnings go is a new subscription with its own confirmation, not a setting.
     response = client.patch(
         "/api/v1/subscriptions/me",
-        json={"address": "elsewhere@example.com"},
+        json={"address": STRANGER},
         headers={CSRF_HEADER: csrf},
     )
     assert response.status_code == 422
@@ -544,18 +530,8 @@ def push_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1], endpoint=PUS
     longer echoes anything, because the browser already holds what it just gave us. Under ntfy it
     had to return the topic, which is what this helper used to read.
     """
-    client.post(
-        "/api/v1/subscriptions",
-        json={
-            "channel": "webpush",
-            "lat": lat,
-            "lon": lon,
-            "endpoint": endpoint,
-            "p256dh": "k" * 87,
-            "auth": "a" * 22,
-        },
-    )
-    token = notifier.sent[-1].click_url.split("/confirm#")[1].split("=", 1)[1]
+    client.post("/api/v1/subscriptions", json=push_body(endpoint, lat, lon))
+    token = notifier.sent[-1].click_url.split("/confirm#a=")[1]
     client.post("/confirm", data={"token": token})
     return endpoint
 
@@ -563,27 +539,19 @@ def push_subscribed(client, notifier, lat=MUNICH[0], lon=MUNICH[1], endpoint=PUS
 def test_confirming_leaves_a_working_session(client, notifier, db):
     """Confirming proves the same thing redeeming a magic link proves - a token we sent to the
     channel came back - so a second link to prove it again is ceremony."""
-    client.post(
-        "/api/v1/subscriptions",
-        json={"email": "new@example.com", **dict(zip(("lat", "lon"), MUNICH))},
-    )
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
+    client.post("/api/v1/subscriptions", json=push_body())
+    token = notifier.sent[-1].click_url.split("/confirm#a=")[1]
     confirmed = client.post("/confirm", data={"token": token})
 
     assert confirmed.status_code == 200
     assert MANAGE_COOKIE in confirmed.cookies
     me = client.get("/api/v1/subscriptions/me")
     assert me.status_code == 200
-    assert me.json()["address"] == "new@example.com"
+    assert me.json()["status"] == "active"
 
 
 def test_the_session_from_confirming_can_write_and_is_not_open_ended(client, notifier, db):
-    client.post(
-        "/api/v1/subscriptions",
-        json={"email": "new@example.com", "lat": MUNICH[0], "lon": MUNICH[1]},
-    )
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
-    client.post("/confirm", data={"token": token})
+    push_subscribed(client, notifier)
 
     state = client.get("/api/v1/manage/csrf").json()
     assert write(client, state["csrf"], threshold_mm_5min=0.25).status_code == 204
@@ -592,7 +560,7 @@ def test_the_session_from_confirming_can_write_and_is_not_open_ended(client, not
     assert state["seconds_until_deadline"] <= 120 * 60
 
 
-def test_confirming_sends_nothing_after_the_confirmation_on_either_channel(client, notifier, db):
+def test_confirming_sends_nothing_after_the_confirmation(client, notifier, db):
     """The anchor message is gone (D-45).
 
     It existed because an ntfy topic was an unmemorable string the reader had to keep somewhere, so
@@ -604,10 +572,6 @@ def test_confirming_sends_nothing_after_the_confirmation_on_either_channel(clien
     before = len(notifier.sent)
     push_subscribed(client, notifier)
     # Exactly one: the confirmation. Nothing follows it.
-    assert len(notifier.sent) == before + 1
-
-    before = len(notifier.sent)
-    subscribed(client, notifier)
     assert len(notifier.sent) == before + 1
 
 
@@ -686,7 +650,7 @@ def test_the_session_cookie_actually_round_trips(client, notifier):
     subscribed(client, notifier)
     # A magic link has to be requested first; the notification `subscribed` leaves behind is the
     # confirmation, whose token goes to /confirm rather than /manage.
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     response = client.post("/api/v1/manage/session", data={"token": link_token(notifier)})
     assert response.status_code == 200, response.text
     assert "__session" in response.cookies, dict(response.cookies)
@@ -777,15 +741,13 @@ def test_the_start_page_says_why_nothing_happens_without_script(client):
     assert "JavaScript" in body[body.index("<noscript>") : body.index("</noscript>")]
 
 
-def test_the_settings_name_no_channel_for_push(client):
+def test_the_settings_name_no_channel(client):
     """The line "Push auf diesen Browser · aktiv" read as nonsense - the page is open on some
-    browser, not necessarily the subscribed one - so a push subscription gets no line at all. Email
-    keeps the address, which says whose warnings these are. The states worth saying get their own
-    notice."""
+    browser, not necessarily the subscribed one - so there is no such line at all. The states worth
+    saying get their own notice."""
     fill = js_function(settings_script(client), "fill")
     assert "'Push auf diesen Browser'" not in fill
-    assert "who.hidden = current.channel !== 'email';" in fill
-    assert "current.address + ' · ' + state" in fill
+    assert "current.address" not in fill and "current.channel" not in fill
     assert (
         "notices.push(current.health_note)" in fill and "if (current.status === 'pending')" in fill
     )
@@ -798,7 +760,7 @@ def test_the_old_settings_address_is_gone(client):
 
 def test_settings_links_point_at_the_start_page(client, notifier):
     subscribed(client, notifier)
-    client.post("/api/v1/manage/link", json={"channel": "email", "address": "friend@example.com"})
+    ask_for_link(client)
     assert "/#t=" in notifier.sent[-1].click_url
     assert "/manage" not in notifier.sent[-1].click_url + notifier.sent[-1].text
 
@@ -819,56 +781,52 @@ def behind_proxy(db, settings, notifier):
 
 
 def test_a_settings_link_cannot_be_flooded_from_many_ips(behind_proxy, settings, notifier):
-    """The per-address half of the limiter, which was missing while the setting that configures it
+    """The per-endpoint half of the limiter, which was missing while the setting that configures it
     described itself as "deliberately as tight as signing up".
 
-    It was not as tight: `POST /api/v1/subscriptions` limits per-IP *and* per-address, and this route
+    It was not as tight: `POST /api/v1/subscriptions` limits per-IP *and* per-endpoint, and this route
     limited only per-IP - so the half that survives IP rotation was the half absent. Demonstrated
     before the fix: 40 POSTs carrying 40 different `X-Forwarded-For` values, all 202, 40 messages
     delivered to one subscriber.
 
     The flood is the lesser harm. `issue_manage_token` deletes the subscriber's previous *unused*
-    token, so a stranger who knows an address could invalidate that person's real settings link as
+    token, so a stranger who knows an endpoint could invalidate that person's real settings link as
     fast as they could ask for one - and for a push subscriber the settings page is the only route to
     "Abmelden und meine Daten löschen", so their deletion right could be held shut indefinitely.
     """
-    email = subscribed(behind_proxy, notifier)
+    endpoint = subscribed(behind_proxy, notifier)
     notifier.sent.clear()
 
     codes = [
-        behind_proxy.post(
-            "/api/v1/manage/link",
-            json={"channel": "email", "address": email},
-            headers={"X-Forwarded-For": f"203.0.113.{i}"},
+        ask_for_link(
+            behind_proxy, endpoint, headers={"X-Forwarded-For": f"203.0.113.{i}"}
         ).status_code
         for i in range(settings.manage_link_limit_per_hour * 4)
     ]
 
     assert codes.count(202) == settings.manage_link_limit_per_hour, (
-        "rotating the client IP must not buy more settings links for one address"
+        "rotating the client IP must not buy more settings links for one endpoint"
     )
     assert 429 in codes
     assert len(notifier.sent) == settings.manage_link_limit_per_hour
 
 
 def test_the_address_limiter_is_not_an_existence_oracle(behind_proxy, settings, notifier):
-    """An address nobody has ever used must be counted and refused exactly like a real one.
+    """An endpoint nobody has ever used must be counted and refused exactly like a real one.
 
-    Otherwise the limiter itself answers the question the route is careful not to: this endpoint
-    returns 202 whether or not the address is known, and a 429 that only ever appeared for real
+    Otherwise the limiter itself answers the question the route is careful not to: this route
+    returns 202 whether or not the endpoint is known, and a 429 that only ever appeared for real
     subscribers would undo that.
     """
     codes = [
-        behind_proxy.post(
-            "/api/v1/manage/link",
-            json={"channel": "email", "address": "nobody@example.invalid"},
-            headers={"X-Forwarded-For": f"198.51.100.{i}"},
+        ask_for_link(
+            behind_proxy, STRANGER, headers={"X-Forwarded-For": f"198.51.100.{i}"}
         ).status_code
         for i in range(settings.manage_link_limit_per_hour * 2)
     ]
     assert codes.count(202) == settings.manage_link_limit_per_hour
     assert 429 in codes
-    assert notifier.sent == [], "nothing may be sent for an address nobody subscribed"
+    assert notifier.sent == [], "nothing may be sent for an endpoint nobody subscribed"
 
 
 def test_the_threshold_picker_cannot_widen_the_page(client):
@@ -887,55 +845,3 @@ def test_the_colour_hint_is_plain_text(client):
     assert '<p class="hint">Die Farben sind dieselben wie auf der Radarkarte.</p>' in (
         client.get("/").text
     )
-
-
-# --- the global cap on transactional mail (SECURITY_REVIEW.md F-5, status 2026-10-09) ---------
-
-
-def test_confirmation_and_settings_mails_share_one_daily_cap(db, settings, notifier):
-    """Counted across all requests, so a forged client IP cannot get around it - and once the day's
-    budget is spent the request still answers as usual, so the caller learns nothing."""
-    capped = settings.model_copy(update={"transactional_mail_cap_per_day": 3})
-    client = TestClient(
-        create_app(capped, session_factory=db, notifier=notifier),
-        base_url=capped.public_base_url,
-    )
-    subscribed(client, notifier, email="a@example.com")  # mail 1: confirmation
-    assert (
-        client.post(
-            "/api/v1/manage/link", json={"channel": "email", "address": "a@example.com"}
-        ).status_code
-        == 202
-    )  # mail 2: settings link
-    before = len(notifier.sent)
-    response = client.post(
-        "/api/v1/subscriptions", json={"email": "b@example.com", "lat": MUNICH[0], "lon": MUNICH[1]}
-    )
-    assert response.status_code == 202 and len(notifier.sent) == before + 1  # mail 3
-    for email in ("c@example.com", "d@example.com"):
-        response = client.post(
-            "/api/v1/subscriptions", json={"email": email, "lat": MUNICH[0], "lon": MUNICH[1]}
-        )
-        assert response.status_code == 202, "the answer must not reveal the cap"
-    assert (
-        client.post(
-            "/api/v1/manage/link", json={"channel": "email", "address": "a@example.com"}
-        ).status_code
-        == 202
-    )
-    assert len(notifier.sent) == before + 1, "nothing past the cap"
-
-
-def test_unknown_addresses_do_not_use_up_the_mail_budget(db, settings, notifier):
-    capped = settings.model_copy(update={"transactional_mail_cap_per_day": 1})
-    client = TestClient(
-        create_app(capped, session_factory=db, notifier=notifier),
-        base_url=capped.public_base_url,
-    )
-    for _ in range(3):
-        client.post("/api/v1/manage/link", json={"channel": "email", "address": "who@example.com"})
-    assert notifier.sent == []
-    client.post(
-        "/api/v1/subscriptions", json={"email": "a@example.com", "lat": MUNICH[0], "lon": MUNICH[1]}
-    )
-    assert len(notifier.sent) == 1

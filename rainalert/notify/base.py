@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class OutboundMessage:
+    """One web push notification, before encryption (D-76: push is the only channel)."""
+
+    #: The browser's push endpoint.
     to: str
+    #: The notification's title and body.
     subject: str
     text: str
-    #: Which kind of address ``to`` is, matching the subscriber's stored ``Channel``. Not a
-    #: preference and not decoration: it is what lets one process hold both transports without an
-    #: address ever reaching the wrong one. The failure it was introduced to prevent was a mailbox
-    #: delivered to ntfy, which published the address *as a public topic name*. Web push cannot
-    #: repeat that exact mistake - an endpoint is issued by a browser, not chosen - but a mailbox
-    #: handed to the web push transport is still a message nobody receives, silently.
-    channel: str = "email"
-    html: str | None = None
-    #: Extra headers. One-click unsubscribe (RFC 8058) lives here.
-    headers: dict[str, str] = field(default_factory=dict)
-    #: Where tapping the message should take the reader. Email puts the link in the body and
-    #: ignores this; push notifications have nowhere to put a link *except* here, so a
-    #: confirmation that works in mail and not on a phone is exactly what this prevents.
+    #: The browser's P-256 public key and the shared auth secret, base64url, straight from the
+    #: subscriber row. RFC 8291 encrypts to them, so a message without them cannot be built rather
+    #: than being sent in clear - see `__post_init__` for the outage that made them required.
+    push_p256dh: str
+    push_auth: str
+    #: Where tapping the notification takes the reader. A push notification has nowhere to put a
+    #: link *except* here.
     click_url: str | None = None
     #: How long a push service should hold this message for a device that is offline (RFC 8030 §5.2),
     #: and how hard it should try to wake it (§5.3). `None` means "use the notifier's default", which
@@ -50,33 +48,12 @@ class OutboundMessage:
     #: housekeeping displace the thing this service exists to deliver is not.
     push_tag: str | None = None
 
-    def _check_push_fields(self) -> None:
-        """`ttl_seconds` and `urgency` are written to RFC 8030 headers, so a nonsense value is a 400
-        from the push service - i.e. a warning nobody receives, discovered in a log if at all.
-
-        Only this codebase sets them today, which is the argument for checking them here rather than
-        trusting each call site: the cost is one comparison and the failure mode is silent.
-        """
-        if self.ttl_seconds is not None and self.ttl_seconds < 0:
-            raise ValueError("ttl_seconds must not be negative")
-        if self.urgency is not None and self.urgency not in ("very-low", "low", "normal", "high"):
-            raise ValueError(f"urgency must be an RFC 8030 value, got {self.urgency!r}")
-
-    #: The browser's P-256 public key and the shared auth secret, base64url, straight from the
-    #: subscriber row. Required for `channel="webpush"` and meaningless otherwise: RFC 8291
-    #: encrypts to them, so a message without them cannot be built rather than being sent in
-    #: clear. Channel-specific fields on a general message are not new here - `click_url` is
-    #: already push-only - and the alternative, packing three values into `to`,
-    #: would put parsing between us and the endpoint we have to reach exactly.
-    push_p256dh: str | None = None
-    push_auth: str | None = None
-
     def __post_init__(self) -> None:
-        # Header injection: a newline in a field that becomes a header lets an attacker append
-        # headers of their own - Bcc, Reply-To, a second body. Addresses come from user input.
-        for value in (self.to, self.subject, self.click_url or "", *self.headers.values()):
+        # The endpoint and the tap target are URLs the push transport and the service worker act
+        # on; a line break in either is never legitimate.
+        for value in (self.to, self.click_url or ""):
             if "\n" in value or "\r" in value:
-                raise ValueError("header values must not contain line breaks")
+                raise ValueError("URLs must not contain line breaks")
         # A web push message without keys cannot be encrypted, so it cannot be sent. Refused here
         # rather than at the transport because *here* is where the mistake is made and where it is
         # cheap to see: every message builder runs in the test suite, so a builder that forgets the
@@ -84,16 +61,22 @@ class OutboundMessage:
         #
         # This is not hypothetical. It is exactly what happened: `push_p256dh`/`push_auth` were
         # added to this dataclass and threaded through `subscriptions.subscribe` and the notifier,
-        # and every one of the five builders in api/mail.py was left setting neither - so no push
+        # and every one of the five message builders was left setting neither - so no push
         # subscriber could be confirmed, warned, sent a settings link or sent a receipt. The
         # transport reported it correctly and nothing was listening, because every test either
         # built its own message with keys or used a fake notifier that ignored them. 523 tests
-        # passed over a channel that could not deliver one byte.
-        if self.channel == "webpush" and not (self.push_p256dh and self.push_auth):
+        # passed over a channel that could not deliver one byte. Since D-76 they are required
+        # fields as well, so leaving them out does not even construct.
+        if not (self.push_p256dh and self.push_auth):
             raise ValueError(
-                "a webpush message needs push_p256dh and push_auth - see Subscriber.push_p256dh"
+                "a push message needs push_p256dh and push_auth - see Subscriber.push_p256dh"
             )
-        self._check_push_fields()
+        # `ttl_seconds` and `urgency` are written to RFC 8030 headers, so a nonsense value is a 400
+        # from the push service - i.e. a warning nobody receives, discovered in a log if at all.
+        if self.ttl_seconds is not None and self.ttl_seconds < 0:
+            raise ValueError("ttl_seconds must not be negative")
+        if self.urgency is not None and self.urgency not in ("very-low", "low", "normal", "high"):
+            raise ValueError(f"urgency must be an RFC 8030 value, got {self.urgency!r}")
 
 
 @dataclass(frozen=True)

@@ -1,21 +1,10 @@
 locals {
-  # A deployment with push working and no mail provider yet. It decides three things together,
-  # so they cannot drift apart: whether the signup page offers email, whether the API accepts it,
-  # and whether the SMTP password secret is mounted at all.
-  email_enabled = var.smtp_host != ""
-
   # Settings both workloads share. Anything secret comes from Secret Manager instead.
   common_env = {
     PUBLIC_BASE_URL = var.public_base_url
-    MAIL_FROM       = var.mail_from
-    # `auto` routes each message by its channel: push endpoints to the web push transport,
-    # addresses to SMTP. Not one transport for everything - that is how a mailbox ended up
-    # published as a public ntfy topic, which is the failure notify/routing.py exists for.
-    NOTIFIER                = "auto"
-    EMAIL_CHANNEL_ENABLED   = tostring(local.email_enabled)
-    SMTP_HOST               = var.smtp_host
-    SMTP_PORT               = tostring(var.smtp_port)
-    SMTP_USERNAME           = var.smtp_username
+    # Push is the only channel (D-76). A broken VAPID key does not stop the service starting: the
+    # notifier then fails each send and logs why (notify/__init__.py, UnavailableNotifier).
+    NOTIFIER = "webpush"
     # Falls back to alert_email so a deployment cannot end up signing with the placeholder in
     # config.py, which some push services accept and others refuse.
     VAPID_SUBJECT           = var.vapid_subject != "" ? var.vapid_subject : "mailto:${var.alert_email}"
@@ -24,9 +13,6 @@ locals {
     VECTOR_TILE_URL         = var.vector_tile_url
     CONTACT_EMAIL           = var.contact_email
     PRIVACY_CONTROLLER      = var.privacy_controller
-
-    # Confirmation and settings-link mails per rolling day, across all requests (D-63).
-    TRANSACTIONAL_MAIL_CAP_PER_DAY = tostring(var.transactional_mail_cap_per_day)
 
     # How far the wet share of the radar area may rise before a cycle is set aside as corrupt
     # instead of alerting anyone (D-70). 0 turns the check off.
@@ -124,21 +110,6 @@ resource "google_cloud_run_v2_service" "api" {
           secret_key_ref {
             secret  = google_secret_manager_secret.this["secret-key"].secret_id
             version = "latest"
-          }
-        }
-      }
-      # Mounted only when there is a provider. A secret with no version fails the container at
-      # startup, so on a push-only deployment this must not be here at all - the secret itself
-      # stays, empty, so turning email on later is one `gcloud secrets versions add`.
-      dynamic "env" {
-        for_each = local.email_enabled ? [1] : []
-        content {
-          name = "SMTP_PASSWORD"
-          value_source {
-            secret_key_ref {
-              secret  = google_secret_manager_secret.this["smtp-password"].secret_id
-              version = "latest"
-            }
           }
         }
       }
@@ -277,18 +248,6 @@ resource "google_cloud_run_v2_job" "ingest" {
             secret_key_ref {
               secret  = google_secret_manager_secret.this["secret-key"].secret_id
               version = "latest"
-            }
-          }
-        }
-        dynamic "env" {
-          for_each = local.email_enabled ? [1] : []
-          content {
-            name = "SMTP_PASSWORD"
-            value_source {
-              secret_key_ref {
-                secret  = google_secret_manager_secret.this["smtp-password"].secret_id
-                version = "latest"
-              }
             }
           }
         }
@@ -482,18 +441,6 @@ resource "google_cloud_run_v2_job" "liveness" {
             secret_key_ref {
               secret  = google_secret_manager_secret.this["vapid-private-key"].secret_id
               version = "latest"
-            }
-          }
-        }
-        dynamic "env" {
-          for_each = local.email_enabled ? [1] : []
-          content {
-            name = "SMTP_PASSWORD"
-            value_source {
-              secret_key_ref {
-                secret  = google_secret_manager_secret.this["smtp-password"].secret_id
-                version = "latest"
-              }
             }
           }
         }

@@ -6,6 +6,11 @@
 **Scope:** the design is the primary target; M1 code (`decoder.py`, `grid.py`, `cli.py`) is reviewed as
 built. No server, DB or API exists yet, which is why this is worth doing now.
 
+**Update 2026-10-22 (DESIGN.md D-76): email is gone.** Web push is the only channel. Every finding
+below that was about mail - the bearer token in an emailed link (F-4), mail relay and quota abuse
+(F-5, F-15), the mail ceiling (F-2), mail header injection (F-16), the mail provider as a processor
+(F-12) - now has a status line saying what is left of it. The findings are kept as written.
+
 ---
 
 ## Executive summary
@@ -203,6 +208,10 @@ under one front - with no way to get them back. The ceiling on mails stays, now 
 (`email_alert_cap_per_day`), since mail is what has a quota to protect; push is bounded per
 subscription (F-15). The national-max gate (`PLAUSIBILITY_MAX_MM_5MIN`) is unchanged.
 
+**Status (2026-10-22, D-76):** the mail ceiling (`email_alert_cap_per_day`) went with email. Push is
+bounded per subscription (F-15) and the wet-share gate bounds the whole cycle, which covers the
+worst case this finding describes without a provider quota to protect.
+
 ---
 
 ### F-3 — One bad subscription row kills the cycle for everyone
@@ -302,6 +311,12 @@ lists `POST` as an also-accepted alternative rather than the required method.
   require the manage page. "One accidental prefetch destroys the record" is not a good property for
   the artefact that also proves consent.
 
+**Status (2026-10-22, D-76): closed by removal.** The long-lived API token no longer exists: D-64
+had stopped issuing it to push subscribers, and migration `e5b2c8d4f1a6` deleted the ones email
+subscribers held. Confirmation links are push-only (`#a=`), read from the fragment and spent by a
+`POST`; the unsubscribe link is shown on the confirmation page only. No mail scanner sits between
+this service and a notification.
+
 ---
 
 ### F-5 — Rate limiting has no defined client-IP source, and deletion erases the abuse state
@@ -374,6 +389,10 @@ What that buys an attacker, and what bounds it:
   Past it, mails are not sent, the request answers as usual, and an error is logged (RUNBOOK
   "Transactional mail cap reached"). Rain warnings have their own cap (`email_alert_cap_per_day`)
   and are not counted. This is the global cap the fix list above asked for.
+  *(2026-10-22, D-76: both caps went with email. Breadth now means confirmations to many push
+  endpoints, which an attacker must first obtain from real browsers subscribed with our VAPID key,
+  and which reach only the attacker's own browsers. No quota is spent, and the transactional cap
+  never counted push in the first place.)*
 - *Still open:* the per-IP limits on settings writes and location updates (authenticated anyway),
   and rows in `rate_limit_hits` (purged after `rate_limit_retention_days` - which, it turned out
   in 2026-10, nothing did until D-73 wired the purge into the ingest job; the rows hold a salted
@@ -628,6 +647,10 @@ include the provider's log-purge/anonymisation setting where one exists.
 5-minute-resolution per-subscriber series is a presence log is exactly right, and the 48 h TTL is the
 correct conclusion. Keep it.
 
+**Status (2026-10-22, D-76):** there is no mail provider, so the second processor and its delivery
+logs are gone. What is left is Google (Cloud Run, Cloud SQL, GCS) and the push services, which
+receive the endpoint and ciphertext only - both named on the privacy page.
+
 ---
 
 ### F-13 — `/metrics` "internal" is not expressible on Cloud Run
@@ -758,6 +781,9 @@ owner's decision recorded above — the threshold floor stays 0.01 and the lead 
 reasoning that a bound should come from what the data can express rather than from a guess about
 behaviour. The caps are what make that defensible.
 
+**Status (2026-10-22, D-76):** the shared sending reputation is gone with email. The per-subscription
+cap stays: it protects the VAPID key's standing with the push services instead.
+
 ---
 
 ### F-16 — Web hardening gaps the design does not mention
@@ -879,6 +905,10 @@ design and three reviews in docs/PLAN_DEVICE_KEY.md). What changed for this find
   origin can act as the reader (as before); a two-minute replay window for identical requests.
 - **Kill switch:** `DEVICE_KEY_LOGIN_ENABLED=false` returns everyone to the push link and cookie
   session; empty `device_keys` before re-enabling after a verification bug (RUNBOOK).
+
+**Status (2026-10-22, D-76):** mail header injection is moot - there is no SMTP adapter. The CR/LF
+check stays on the push endpoint and `click_url` in `OutboundMessage`, where a line break could
+still split an HTTP header.
 
 ---
 

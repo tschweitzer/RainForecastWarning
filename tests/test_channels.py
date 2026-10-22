@@ -1,8 +1,7 @@
-"""Subscribing over the push channel (D-5 revised, D-45).
+"""Subscribing over web push, the only channel (D-5 revised, D-45, D-76).
 
-Double opt-in was never about email specifically: it is about proving the channel reaches the
-person who asked. These tests are mostly about the ways that can go wrong differently for a browser
-push subscription than for a mailbox.
+Double opt-in is about proving the channel reaches the person who asked. These tests are mostly
+about the ways that can go wrong for a browser push subscription.
 
 Rewritten rather than adapted when ntfy was removed. Roughly half of what was here tested things
 that no longer exist - that a generated topic was unguessable, that it was never taken from the
@@ -21,10 +20,7 @@ from sqlalchemy import select
 
 from rainalert import subscriptions as svc
 from rainalert.config import Settings
-from rainalert.db.models import Channel, Subscriber, SubscriptionStatus
-from rainalert.notify.base import DeliveryResult, OutboundMessage
-from rainalert.notify.routing import RoutingNotifier
-from rainalert.tokens import hash_address
+from rainalert.db.models import Subscriber, SubscriptionStatus
 from tests.helpers import page_source
 
 FRANKFURT = (50.1109, 8.6821)
@@ -40,7 +36,6 @@ def push_subscriber(address=ENDPOINT):
     return SimpleNamespace(
         id=uuid.uuid4(),
         address=address,
-        channel=Channel.WEBPUSH,
         push_p256dh=P256DH,
         push_auth=AUTH,
     )
@@ -89,22 +84,13 @@ def subscribe_body(**overrides):
     return body
 
 
-def alert_for(channel, address):
-    from rainalert.api.mail import alert_message
+def alert_for(address):
+    from rainalert.api.messages import alert_message
 
-    # The keys are part of a push subscriber, not decoration: `OutboundMessage` refuses a webpush
-    # message without them, which is what makes a builder that forgets them fail in the suite.
-    subscriber = SimpleNamespace(
-        id=uuid.uuid4(),
-        address=address,
-        channel=channel,
-        push_p256dh=P256DH if channel is Channel.WEBPUSH else None,
-        push_auth=AUTH if channel is Channel.WEBPUSH else None,
-    )
     return alert_message(
         None,
         _SETTINGS_FOR_ALERT,
-        subscriber,
+        push_subscriber(address),
         SimpleNamespace(timezone="Europe/Berlin"),
         ALERT_PAYLOAD,
     )
@@ -186,8 +172,7 @@ def test_resubscribing_never_overwrites_the_stored_keys(db, settings):
         svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh=P256DH,
             push_auth=AUTH,
             lat=FRANKFURT[0],
@@ -200,8 +185,7 @@ def test_resubscribing_never_overwrites_the_stored_keys(db, settings):
         svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh="ATTACKER" + P256DH[8:],
             push_auth="ATTACKERattackerattac1",
             lat=FRANKFURT[0],
@@ -221,8 +205,7 @@ def test_an_endpoint_longer_than_a_mailbox_is_stored_whole(db, settings):
         svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=long_endpoint,
+            endpoint=long_endpoint,
             push_p256dh=P256DH,
             push_auth=AUTH,
             lat=FRANKFURT[0],
@@ -231,19 +214,20 @@ def test_an_endpoint_longer_than_a_mailbox_is_stored_whole(db, settings):
         assert session.execute(select(Subscriber)).scalar_one().address == long_endpoint
 
 
-# --- what the two channels will and will not accept -------------------------------------------
+# --- what the signup will and will not accept ---------------------------------------------------
 
 
-def test_an_email_address_on_the_push_channel_is_refused_not_ignored(client, db):
-    """Silently dropping an address someone supplied is how they end up believing it was stored."""
+def test_a_field_the_signup_does_not_know_is_refused_not_ignored(client, db):
+    """Silently dropping something a caller supplied is how they end up believing it was stored.
+    An `email` field is the case that matters: a page from before D-76 could still send one."""
     response = client.post("/api/v1/subscriptions", json=subscribe_body(email="a@b.example"))
     assert response.status_code == 422
     with db() as session:
         assert session.execute(select(Subscriber)).first() is None
 
 
-def test_a_push_subscription_on_the_email_channel_is_refused(client, db):
-    body = subscribe_body(channel="email", email="a@b.example")
+def test_any_channel_but_webpush_is_refused(client, db):
+    body = subscribe_body(channel="email")
     assert client.post("/api/v1/subscriptions", json=body).status_code == 422
 
 
@@ -258,29 +242,15 @@ def test_two_of_the_three_push_values_is_refused(client, db, missing):
         assert session.execute(select(Subscriber)).first() is None
 
 
-def test_email_still_requires_an_address(client, db):
-    response = client.post(
-        "/api/v1/subscriptions",
-        json={"channel": "email", "lat": FRANKFURT[0], "lon": FRANKFURT[1]},
-    )
-    assert response.status_code == 422
-
-
-def test_an_endpoint_spelled_like_a_mailbox_is_a_different_subscriber():
-    """The hash covers the channel, so the two namespaces cannot collide."""
-    assert hash_address("email", "a@b.example") != hash_address("webpush", "a@b.example")
-
-
 def test_endpoints_are_not_case_folded(db, settings):
-    """A mailbox folds case; a URL path does not. Folding an endpoint would change which
-    subscription it names."""
+    """A URL path does not fold case, so folding an endpoint would change which subscription it
+    names."""
     mixed = "https://fcm.googleapis.com/fcm/send/AbCdEf"
     with db() as session:
         svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=mixed,
+            endpoint=mixed,
             push_p256dh=P256DH,
             push_auth=AUTH,
             lat=FRANKFURT[0],
@@ -300,8 +270,7 @@ def test_a_push_subscription_is_pending_until_the_notification_is_tapped(db, set
         result = svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh=P256DH,
             push_auth=AUTH,
             lat=FRANKFURT[0],
@@ -316,24 +285,13 @@ def test_a_push_subscription_is_pending_until_the_notification_is_tapped(db, set
 def test_the_confirmation_is_tappable_and_prints_no_url(settings):
     """A notification body is plain text that nothing linkifies, so a URL printed in one is an exit
     the reader can see and not take. Tapping it is the way through, which is `click_url`."""
-    from rainalert.api.mail import confirmation_message
+    from rainalert.api.messages import confirmation_message
 
-    message = confirmation_message(
-        settings, ENDPOINT, "tok123", channel="webpush", subscriber=push_subscriber()
-    )
-    assert message.channel == "webpush"
-    # `#a=` is confirm-on-open. The extra click mail keeps exists to defend against mail scanners
-    # (F-4), and none of those sits between us and a phone.
+    message = confirmation_message(settings, push_subscriber(), "tok123")
+    # `#a=` is confirm-on-open. An extra click would defend against mail scanners (F-4), and none
+    # of those sits between us and a phone.
     assert message.click_url.endswith("/confirm#a=tok123")
     assert "http" not in message.text, message.text
-
-
-def test_the_email_confirmation_still_waits_for_a_click(settings):
-    from rainalert.api.mail import confirmation_message
-
-    message = confirmation_message(settings, "a@b.example", "tok123", channel="email")
-    assert "#t=tok123" in message.click_url
-    assert "/confirm#t=tok123" in message.text
 
 
 # --- the way out ------------------------------------------------------------------------------
@@ -343,106 +301,47 @@ def test_a_push_alert_carries_no_buttons_and_no_unsubscribe_url():
     """The exit on push is the settings page, which carries "Abmelden und meine Daten loeschen" and
     is reached through the site. Notifications carry no buttons at all (D-64); tapping a warning
     opens the map at the warned place."""
-    message = alert_for(Channel.WEBPUSH, ENDPOINT)
+    message = alert_for(ENDPOINT)
     assert "#l=" in message.click_url
     assert "Abmelden:" not in message.text
     assert "http" not in message.text
 
 
-def test_an_email_alert_still_carries_the_unsubscribe_line():
-    message = alert_for(Channel.EMAIL, "a@b.example")
-    assert "Abmelden: https://" in message.text
-    assert "List-Unsubscribe" in message.headers
+# --- the notifier ---------------------------------------------------------------------------
 
 
-# --- routing ----------------------------------------------------------------------------------
+def test_the_dev_notifiers_never_post_to_a_push_service(settings):
+    """`console` and `file` stay sinks, so a local run never posts to a real push service."""
+    from rainalert.notify import ConsoleNotifier, FileNotifier, build_notifier
+
+    assert isinstance(build_notifier("console", settings), ConsoleNotifier)
+    assert isinstance(build_notifier("file", settings), FileNotifier)
 
 
-class Spy:
-    def __init__(self):
-        self.seen = []
-
-    def send(self, message):
-        self.seen.append(message)
-        return DeliveryResult(ok=True)
-
-
-def test_a_mailbox_is_never_handed_to_the_push_transport():
-    """The failure this exists to prevent, in its original form: with one notifier for everything,
-    an email subscriber's confirmation was published to a public ntfy topic named after their
-    address. The transports changed; a message reaching the wrong one still means somebody's
-    warning was not delivered."""
-    email, push = Spy(), Spy()
-    router = RoutingNotifier(email=email, webpush=push)
-    router.send(OutboundMessage(to="a@b.example", subject="s", text="t", channel="email"))
-    router.send(
-        OutboundMessage(
-            to=ENDPOINT,
-            subject="s",
-            text="t",
-            channel="webpush",
-            push_p256dh=P256DH,
-            push_auth=AUTH,
-        )
-    )
-    assert [m.to for m in email.seen] == ["a@b.example"]
-    assert [m.to for m in push.seen] == [ENDPOINT]
-
-
-def test_a_channel_with_no_transport_raises_rather_than_falling_back():
-    """A fallback here would be the same bug wearing a helpful face."""
-    router = RoutingNotifier(email=Spy())
-    with pytest.raises(ValueError, match="no transport configured"):
-        router.send(
-            OutboundMessage(
-                to=ENDPOINT,
-                subject="s",
-                text="t",
-                channel="webpush",
-                push_p256dh=P256DH,
-                push_auth=AUTH,
-            )
-        )
-
-
-def test_the_production_notifier_routes_and_the_dev_ones_do_not(settings):
-    """`console` and `file` stay sinks that take everything, so a local run never posts to a real
-    push service because a test subscriber happened to pick push."""
+def test_the_production_notifier_is_web_push(settings):
     from rainalert.notify import build_notifier
-    from rainalert.notify.webpush import generate_vapid_keys
+    from rainalert.notify.webpush import WebPushNotifier, generate_vapid_keys
 
-    assert not isinstance(build_notifier("console", settings), RoutingNotifier)
-    assert not isinstance(build_notifier("file", settings), RoutingNotifier)
     private, _ = generate_vapid_keys()
-    # Both, because `auto` builds a real `WebPushNotifier` and that refuses to exist without a
-    # subject - `vapid_subject` defaults to empty rather than to a placeholder, so a deployment
-    # that forgets it fails at startup instead of signing every JWT with `ops@example.invalid`
-    # and being rejected by the push service. Terraform always passes one (falling back to
-    # `mailto:${alert_email}`), so the empty state is local-only.
+    # `vapid_subject` defaults to empty rather than to a placeholder, so a deployment that forgets
+    # it never signs every JWT with `ops@example.invalid` and is rejected by the push service.
+    # Terraform always passes one (falling back to `mailto:${alert_email}`).
     production = settings.model_copy(
-        update={
-            "vapid_private_key": private,
-            "vapid_subject": "mailto:ops@rain.example.invalid",
-        }
+        update={"vapid_private_key": private, "vapid_subject": "mailto:ops@rain.example.invalid"}
     )
-    assert isinstance(build_notifier("auto", production), RoutingNotifier)
+    assert isinstance(build_notifier("webpush", production), WebPushNotifier)
 
 
-def test_auto_disables_push_rather_than_refusing_to_start(settings):
-    """A misconfigured push channel must not take the rest of the service down with it.
+def test_a_broken_vapid_setup_fails_each_send_rather_than_the_service(settings):
+    """A misconfigured push transport must not take the rest of the service down with it.
 
-    This test previously asserted the opposite - that `auto` raises without a usable VAPID subject,
-    so a deployment which forgot one failed loudly at startup. Review showed what "loudly at startup"
-    means on Cloud Run: `create_app` builds the notifier before anything else, so an empty, disabled
-    or unreadable VAPID secret made the process raise at import, no revision ever became ready, and
-    the map, the radar, the privacy page and the *email* channel went down with the push channel.
-    `api/app.py` already had a comment saying that must not happen, one screen below the code that
-    made it happen.
-
-    So the contract is now: build what can be built, log the rest, and let `RoutingNotifier` refuse
-    per *message*. A push subscriber's warning fails and is recorded as failed; nobody else notices.
+    `create_app` builds the notifier before anything else, so a notifier that raised on an empty,
+    disabled or unreadable VAPID secret made the process raise at import, no Cloud Run revision
+    ever became ready, and the map, the radar and the privacy page went down with it. So the
+    contract is: start, log why, and fail each message - recorded as failed, which the liveness
+    alerts see.
     """
-    from rainalert.notify import RoutingNotifier, build_notifier
+    from rainalert.notify import UnavailableNotifier, build_notifier
     from rainalert.notify.base import OutboundMessage
     from rainalert.notify.webpush import generate_vapid_keys
 
@@ -452,28 +351,25 @@ def test_auto_disables_push_rather_than_refusing_to_start(settings):
         ("no key", {"vapid_private_key": "", "vapid_subject": "mailto:ops@rain.example.invalid"}),
         ("malformed key", {"vapid_private_key": "nonsense", "vapid_subject": "mailto:a@b.invalid"}),
     ]:
-        notifier = build_notifier("auto", settings.model_copy(update=update))
-        assert isinstance(notifier, RoutingNotifier), label
-        # Email still works - that is the whole point.
-        assert "email" in notifier._by_channel, label
-        # And a push message fails as one message, not as the process.
-        with pytest.raises(ValueError, match="no transport configured"):
-            notifier.send(
-                OutboundMessage(
-                    to="https://fcm.googleapis.com/fcm/send/x",
-                    channel="webpush",
-                    subject="s",
-                    text="t",
-                    push_p256dh="A" * 87,
-                    push_auth="B" * 22,
-                )
+        notifier = build_notifier("webpush", settings.model_copy(update=update))
+        assert isinstance(notifier, UnavailableNotifier), label
+        result = notifier.send(
+            OutboundMessage(
+                to="https://fcm.googleapis.com/fcm/send/x",
+                subject="s",
+                text="t",
+                push_p256dh="A" * 87,
+                push_auth="B" * 22,
             )
+        )
+        assert not result.ok, label
+        assert "unavailable" in result.error, label
 
 
-def test_every_message_the_service_builds_names_its_channel(settings):
-    """Nothing may be sent without a channel: that field is what keeps an address off the wrong
-    transport, and a default of "email" on a push message would be exactly that bug."""
-    from rainalert.api.mail import (
+def test_every_message_the_service_builds_carries_the_keys(settings):
+    """`OutboundMessage` refuses to exist without them, so a builder that forgets them fails here
+    rather than as a channel nobody can be reached on."""
+    from rainalert.api.messages import (
         confirmation_message,
         deletion_receipt,
         manage_link_message,
@@ -482,17 +378,20 @@ def test_every_message_the_service_builds_names_its_channel(settings):
 
     who = push_subscriber()
     for message in (
-        confirmation_message(settings, ENDPOINT, "t", channel="webpush", subscriber=who),
-        manage_link_message(settings, ENDPOINT, "t", who.id, channel="webpush", subscriber=who),
-        deletion_receipt(settings, ENDPOINT, channel="webpush", push=push_keys(who)),
+        confirmation_message(settings, who, "t"),
+        manage_link_message(settings, who, "t"),
+        deletion_receipt(settings, ENDPOINT, push_keys(who)),
     ):
-        assert message.channel == "webpush", message.subject
-    for message in (
-        confirmation_message(settings, "a@b.example", "t"),
-        manage_link_message(settings, "a@b.example", "t", uuid.uuid4()),
-        deletion_receipt(settings, "a@b.example"),
-    ):
-        assert message.channel == "email", message.subject
+        assert (message.push_p256dh, message.push_auth) == (P256DH, AUTH), message.subject
+
+
+def test_a_message_without_keys_cannot_be_built():
+    from rainalert.notify.base import OutboundMessage
+
+    with pytest.raises((TypeError, ValueError)):
+        OutboundMessage(to=ENDPOINT, subject="s", text="t", push_p256dh="", push_auth="")
+    with pytest.raises(TypeError):
+        OutboundMessage(to=ENDPOINT, subject="s", text="t")
 
 
 # --- rate limiting ----------------------------------------------------------------------------
@@ -546,50 +445,6 @@ def test_the_endpoint_is_rate_limited_as_well_as_the_ip(client, db, settings):
     for _ in range(settings.subscribe_limit_per_hour + 2):
         seen.add(client.post("/api/v1/subscriptions", json=subscribe_body()).status_code)
     assert 429 in seen
-
-
-# --- push-only deployments --------------------------------------------------------------------
-
-
-@pytest.fixture()
-def push_only_client(db, settings):
-    from fastapi.testclient import TestClient
-
-    from rainalert.api.app import create_app
-    from rainalert.notify import ConsoleNotifier
-
-    push_only = settings.model_copy(update={"email_channel_enabled": False})
-    return TestClient(create_app(push_only, session_factory=db, notifier=ConsoleNotifier()))
-
-
-def test_the_email_channel_can_be_refused_before_anything_is_stored(push_only_client, db):
-    response = push_only_client.post(
-        "/api/v1/subscriptions",
-        json={
-            "channel": "email",
-            "email": "a@b.example",
-            "lat": FRANKFURT[0],
-            "lon": FRANKFURT[1],
-        },
-    )
-    assert response.status_code == 422
-    with db() as session:
-        assert session.execute(select(Subscriber)).first() is None
-
-
-def test_push_still_works_when_email_is_off(push_only_client, db):
-    response = push_only_client.post("/api/v1/subscriptions", json=subscribe_body())
-    assert response.status_code == 202
-
-
-def test_the_page_stops_offering_a_choice_it_would_reject(push_only_client):
-    # The rendered page, not `page_source`: both assertions are about markup the template emits,
-    # so pulling the scripts in would only widen what could accidentally satisfy them.
-    body = push_only_client.get("/").text
-    assert 'value="webpush"' in body
-    # The fieldset is hidden rather than dropped: the push radio stays checked and in the DOM,
-    # which is what the script reads.
-    assert 'class="channel" hidden' in body
 
 
 def test_push_key_bounds_match_the_columns():

@@ -91,7 +91,7 @@ def test_raw_sql_against_channel_uses_the_stored_case():
             value = match.group(1)
             assert value == value.upper(), (
                 f"{name}: `{match.group(0)}` - subscribers.channel stores uppercase names, so this "
-                "matches nothing and reports success. See `Channel` in rainalert/db/models.py."
+                "matches nothing and reports success. See the note on it in rainalert/db/models.py."
             )
     # Guards the guard: if the pattern stops matching anything, it is no longer checking anything.
     assert found >= 2, "expected to find the runbook's and a9e4d2c71f05's channel literals"
@@ -174,10 +174,98 @@ def test_the_stranded_ntfy_rows_are_removed_and_every_subscriber_loads(postgres_
 
         with Session(engine) as session:
             # The real test. Before the fix this raised LookupError: 'NTFY' is not among the
-            # defined enum values.
+            # defined enum values. (The column is not mapped any more since D-76, which makes the
+            # load safe either way - and this the check that it stays safe.)
             loaded = session.execute(select(Subscriber)).scalars().all()
-            assert [s.channel.value for s in loaded] == ["webpush", "webpush"]
+            assert len(loaded) == 2
     finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_the_push_only_migration_keeps_push_and_removes_email(postgres_url, monkeypatch):
+    """e5b2c8d4f1a6 (D-76): email subscribers, their bearer tokens and the mail-only rate-limit
+    buckets go; push subscribers and everything of theirs stay; and the two channel columns get
+    the defaults that let the code from this release insert rows without naming them, while the
+    previous release - still serving during the deploy - keeps reading them. Then back down."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    from rainalert.tokens import hash_address
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+    engine = create_engine(postgres_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    push = "https://fcm.googleapis.com/fcm/send/keep"
+    try:
+        command.upgrade(config, "d9a3f6b1c2e7")
+        with engine.begin() as conn:
+            for channel, address, digest in (
+                ("WEBPUSH", push, hash_address(push)),
+                ("EMAIL", "a@example.com", b"m" * 32),
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO subscribers (id, channel, address, address_hash, locale, "
+                        "created_at) VALUES (gen_random_uuid(), :c, :a, :h, 'de', now())"
+                    ),
+                    {"c": channel, "a": address, "h": digest},
+                )
+            for purpose, owner, digest in (
+                ("api", "a@example.com", b"1" * 32),
+                ("unsubscribe", "a@example.com", b"2" * 32),
+                ("unsubscribe", push, b"3" * 32),
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO auth_tokens (id, subscriber_id, purpose, token_hash, "
+                        "created_at) SELECT gen_random_uuid(), id, :p, :h, now() "
+                        "FROM subscribers WHERE address = :a"
+                    ),
+                    {"p": purpose, "a": owner, "h": digest},
+                )
+            for bucket in ("mail:transactional", "subscribe:email:ab", "subscribe:webpush:cd"):
+                conn.execute(
+                    text("INSERT INTO rate_limit_hits (bucket, occurred_at) VALUES (:b, now())"),
+                    {"b": bucket},
+                )
+
+        command.upgrade(config, "e5b2c8d4f1a6")
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT address FROM subscribers")).scalars().all() == [push]
+            assert conn.execute(text("SELECT count(*) FROM auth_tokens")).scalar_one() == 1
+            buckets = conn.execute(text("SELECT bucket FROM rate_limit_hits")).scalars().all()
+            assert buckets == ["subscribe:webpush:cd"]
+            # The stored hash is still the one this release computes, so lookups keep working.
+            stored = conn.execute(text("SELECT address_hash FROM subscribers")).scalar_one()
+            assert bytes(stored) == hash_address(push)
+            # What this release inserts: no channel named, the default fills it in.
+            conn.execute(
+                text(
+                    "INSERT INTO subscribers (id, address, address_hash, locale, created_at) "
+                    "VALUES (gen_random_uuid(), 'x', :h, 'de', now())"
+                ),
+                {"h": b"x" * 32},
+            )
+            channels = conn.execute(text("SELECT channel FROM subscribers")).scalars().all()
+            assert channels == ["WEBPUSH", "WEBPUSH"]
+
+        command.downgrade(config, "d9a3f6b1c2e7")
+        command.upgrade(config, "head")
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
         engine.dispose()
         get_settings.cache_clear()
 
@@ -516,8 +604,10 @@ def test_reset_keeps_radar_data_by_default(db, tmp_path):
         )
         session.add(
             Subscriber(
-                address="a@example.com",
-                address_hash=hash_address("email", "a@example.com"),
+                address="https://fcm.googleapis.com/fcm/send/reset",
+                address_hash=hash_address("https://fcm.googleapis.com/fcm/send/reset"),
+                push_p256dh="k" * 87,
+                push_auth="a" * 22,
                 created_at=datetime(2026, 9, 16, tzinfo=UTC),
             )
         )
@@ -526,7 +616,7 @@ def test_reset_keeps_radar_data_by_default(db, tmp_path):
 
     outbox = tmp_path / "outbox"
     outbox.mkdir()
-    (outbox / "a.eml").write_text("x")
+    (outbox / "a.txt").write_text("x")
 
     report = reset(engine, (outbox,))
     assert report.radar_kept is True

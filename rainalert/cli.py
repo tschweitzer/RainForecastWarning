@@ -343,40 +343,30 @@ def backfill(args: argparse.Namespace) -> int:
 
 
 def outbox(args: argparse.Namespace) -> int:
-    """Print the links from the newest file-notifier mails, decoded.
+    """Print the newest messages `NOTIFIER=file` wrote, with the links to open.
 
-    A .eml is quoted-printable, so the confirmation link in the raw file reads
-    ``token=3DHFbOJa...c=`` and continues on the next line - copying what `cat` shows produces a
-    token that is wrong twice over. On a desktop a mail client hides that; on a headless box
-    nothing does, and the failure looks like the token is invalid rather than mistranscribed.
+    The confirmation and settings links are what a local signup needs, and on a headless box there
+    is no browser notification to tap - this is the tap.
     """
-    import email
-    import email.policy
-    import re
-
     from rainalert.config import get_settings
 
     settings = get_settings()
-    if not settings.mail_outbox_dir:
-        print("MAIL_OUTBOX_DIR is not set (NOTIFIER=file writes there)", file=sys.stderr)
+    if not settings.outbox_dir:
+        print("OUTBOX_DIR is not set (NOTIFIER=file writes there)", file=sys.stderr)
         return 2
 
-    directory = Path(settings.mail_outbox_dir)
+    directory = Path(settings.outbox_dir)
     if not directory.is_dir():
         print(f"no outbox at {directory}", file=sys.stderr)
         return 2
 
-    mails = sorted(directory.glob("*.eml"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not mails:
-        print(f"no mail in {directory}")
+    messages = sorted(directory.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not messages:
+        print(f"no messages in {directory}")
         return 0
 
-    for path in mails[: args.count]:
-        message = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
-        body = message.get_content()
-        print(f"{message['To']}   {message['Subject']}")
-        for url in re.findall(r"https?://\S+", body):
-            print(f"  {url}")
+    for path in messages[: args.count]:
+        print(path.read_text(encoding="utf-8").rstrip())
         print()
     return 0
 
@@ -403,7 +393,7 @@ def reset_local(args: argparse.Namespace) -> int:
             print("cancelled")
             return 1
 
-    directories = (settings.overlay_dir, settings.mail_outbox_dir)
+    directories = (settings.overlay_dir, settings.outbox_dir)
     if args.all:
         directories += (settings.archive_dir,)
 
@@ -471,9 +461,9 @@ def build_parser() -> argparse.ArgumentParser:
     f.set_defaults(func=backfill)
 
     o = sub.add_parser(
-        "outbox", help="print the links from the newest local mails, decoded and ready to open"
+        "outbox", help="print the newest messages NOTIFIER=file wrote, with their links"
     )
-    o.add_argument("-n", "--count", type=int, default=1, help="how many mails (newest first)")
+    o.add_argument("-n", "--count", type=int, default=1, help="how many (newest first)")
     o.set_defaults(func=outbox)
 
     b = sub.add_parser(

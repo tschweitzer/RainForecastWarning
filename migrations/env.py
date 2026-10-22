@@ -27,6 +27,19 @@ target_metadata = Base.metadata
 # in git is a credential in git.
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
+# Columns the database still has and the models no longer map. `subscribers.channel` and
+# `notifications.channel` outlived the email channel (D-76, migration e5b2c8d4f1a6) so that the
+# migration could run while the previous code, which still read them, was serving. Without this,
+# `alembic check` reports them as drift. Remove an entry with the migration that drops the column.
+LEGACY_COLUMNS = {("subscribers", "channel"), ("notifications", "channel")}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "column" and reflected and compare_to is None:
+        return (obj.table.name, name) not in LEGACY_COLUMNS
+    return True
+
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -49,6 +62,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -72,7 +86,7 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata, include_object=include_object
         )
 
         with context.begin_transaction():

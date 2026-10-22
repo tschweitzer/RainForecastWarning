@@ -1,4 +1,4 @@
-"""Evaluate every subscription against one cycle, queue mail, then deliver it.
+"""Evaluate every subscription against one cycle, queue notifications, then deliver them.
 
 Two structural rules here, both from things that have gone wrong in similar systems:
 
@@ -26,7 +26,6 @@ from rainalert.alerting.state_machine import Policy, StateView, Transition, adva
 from rainalert.config import Settings
 from rainalert.db.models import (
     AlertState,
-    Channel,
     Evaluation,
     Notification,
     RadarCycle,
@@ -68,7 +67,6 @@ class CycleReport:
     errors: int = 0
     #: Why the cycle was set aside as implausible (D-70), or None.
     implausible: str | None = None
-    daily_cap_tripped: bool = False
     decisions: dict[str, int] = field(default_factory=dict)
 
 
@@ -139,23 +137,13 @@ def evaluate_cycle(
             for subscription, state_row, reading, _ in pending
         ]
 
-    # The email quota (F-2, D-70). Counted once before the loop and then carried forward, so the
-    # mails this cycle is about to queue count against it too. Email only: push has no quota, and
-    # the per-subscription ceiling bounds it already.
-    day_ago = now - timedelta(hours=24)
-    emailed_today = (
-        alerts_since(session, day_ago, channel=Channel.EMAIL.value)
-        if settings.email_alert_cap_per_day
-        else 0
-    )
-
     for subscription, state_row, reading, transition in pending:
         # Isolated per subscription, and in a SAVEPOINT rather than a bare try.
         #
         # F-3 already said one bad row must not take the cycle down for everyone, and the loop
         # above honours that - but only for *evaluation*. Persisting ran unprotected, and that is
         # where it broke: a subscriber whose `channel` could not be loaded (an `NTFY` row that
-        # f3b8c21e7a94 failed to delete) raised from the lazy load in `_persist`. It only does that
+        # f3b8c21e7a94 failed to delete) raised from the lazy load in `_persist` (2026-10-05). It only does that
         # on the alert path, so it fired precisely when rain approached that subscriber - and it
         # took every other subscriber's warnings in the cycle with it. The cycle row is committed
         # before evaluation, so the next run saw it as already stored and never retried: those
@@ -167,29 +155,7 @@ def evaluate_cycle(
         # it, everything persisted for *other* subscriptions in this loop survives.
         try:
             with session.begin_nested():
-                # Inside the SAVEPOINT: reading the channel lazy-loads the subscriber, which is
-                # exactly what raised for the unloadable row described above.
                 alert = transition.alert
-                by_email = subscription.subscriber.channel is Channel.EMAIL
-                if (
-                    alert
-                    and by_email
-                    and settings.email_alert_cap_per_day
-                    and emailed_today >= settings.email_alert_cap_per_day
-                ):
-                    # Shared fate, and that is why it is an error rather than a counter: email
-                    # subscribers are not warned about weather that is happening, for a reason
-                    # that is not theirs.
-                    alert = False
-                    transition = replace(transition, alert=False, decision="suppressed_daily_cap")
-                    if not report.daily_cap_tripped:
-                        report.daily_cap_tripped = True
-                        logger.error(
-                            "email alert cap reached: %d warning mails in 24 h at the %d "
-                            "ceiling; further mail warnings are suppressed",
-                            emailed_today,
-                            settings.email_alert_cap_per_day,
-                        )
                 _persist(session, subscription, state_row, cycle, reading, transition, alert, now)
         except Exception:
             report.errors += 1
@@ -199,10 +165,6 @@ def evaluate_cycle(
             subscription.status = SubscriptionStatus.UNHEALTHY
             subscription.health_note = "Deine Warnung konnte nicht verschickt werden."
             continue
-        # Counted only once the alert is actually queued. Counting before the savepoint would let a
-        # row that failed to persist consume the shared daily ceiling without warning anyone.
-        if alert and by_email:
-            emailed_today += 1
         if transition.decision == "suppressed_cap":
             # Out of reach of real weather at 24 a day (D-70), so a hit is a bug or an absurd
             # rule - either way worth seeing, which it was not while it was silent.
@@ -264,7 +226,7 @@ def _check_plausibility(session, cycle, frames, settings) -> str | None:
     return reason
 
 
-def alerts_since(session, since: datetime, subscription_id=None, channel: str | None = None) -> int:
+def alerts_since(session, since: datetime, subscription_id=None) -> int:
     """How many *alerts* have been queued since `since`, for one subscription or for all of them.
 
     `event_id IS NOT NULL` is what makes it alerts rather than notifications: the liveness ping
@@ -283,8 +245,6 @@ def alerts_since(session, since: datetime, subscription_id=None, channel: str | 
     )
     if subscription_id is not None:
         stmt = stmt.where(Notification.subscription_id == subscription_id)
-    if channel is not None:
-        stmt = stmt.where(Notification.channel == channel)
     return session.execute(stmt).scalar_one()
 
 
@@ -394,18 +354,14 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
         Notification(
             subscription_id=subscription.id,
             event_id=event.id,
-            # Set explicitly. The column defaults to "email", so every warning queued for a push
-            # subscriber was recorded as a mail - `liveness.py` sets it and this did not. Nothing
-            # reads the column yet, which is exactly why it was wrong for as long as it was.
-            channel=subscription.subscriber.channel.value,
             status="queued",
             queued_at=now,
             payload={
                 # Which message: a warning ("Regen in etwa N Minuten") or "Es regnet jetzt".
                 "kind": "rain_now" if started_now else "warning",
                 "predicted_start_at": predicted.isoformat(),
-                # The cycle this was decided from, so the mail can state how fresh the data is
-                # rather than when the mail happened to be rendered.
+                # The cycle this was decided from, so the notification can state how fresh the data
+                # is rather than when it happened to be rendered.
                 "cycle_time": cycle.nominal_time.isoformat(),
                 "lead_minutes": 0 if started_now else reading.first_hit_lead_minutes,
                 # For rain that has started, how hard it is falling now - not the worst of the
@@ -426,10 +382,9 @@ def _persist(session, subscription, state_row, cycle, reading_pair, transition, 
 def _send_all(notifier, messages: list, settings: Settings) -> list:
     """Send every message; return a DeliveryResult or the exception it raised, in order.
 
-    Push concurrently, `delivery_concurrency` at a time: the web push transport keeps one HTTP
-    client with a connection pool, and each send is independent. Everything else - mail, and the
-    development sinks - one after another, because an SMTP connection is not something two threads
-    may share.
+    `delivery_concurrency` at a time: the web push transport keeps one HTTP client with a
+    connection pool, each send is independent, and each spends ~100 ms waiting on the push
+    service - one after another, a few thousand of them outran the job (D-70).
     """
 
     def attempt(message):
@@ -437,20 +392,14 @@ def _send_all(notifier, messages: list, settings: Settings) -> list:
             return notifier.send(message)
         except Exception as exc:
             # Reported per message, never for the whole batch.
-            logger.exception("delivery raised for a %s notification", message.channel)
+            logger.exception("delivery raised for a notification to %s", message.to[:40])
             return exc
 
-    outcomes: list = [None] * len(messages)
-    concurrent = [i for i, m in enumerate(messages) if m.channel == Channel.WEBPUSH.value]
-    serial = [i for i, m in enumerate(messages) if m.channel != Channel.WEBPUSH.value]
-    for i in serial:
-        outcomes[i] = attempt(messages[i])
-    if concurrent:
-        workers = max(1, min(settings.delivery_concurrency, len(concurrent)))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="push") as pool:
-            for i, outcome in zip(concurrent, pool.map(attempt, [messages[i] for i in concurrent])):
-                outcomes[i] = outcome
-    return outcomes
+    if not messages:
+        return []
+    workers = max(1, min(settings.delivery_concurrency, len(messages)))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="push") as pool:
+        return list(pool.map(attempt, messages))
 
 
 def deliver_queued(
@@ -464,7 +413,7 @@ def deliver_queued(
     that signal, and acting on it here is what keeps us from posting to a dead endpoint every time
     it rains, and from holding somebody's coordinates after they have gone (D-46).
     """
-    from rainalert.api.mail import alert_message
+    from rainalert.api.messages import alert_message
 
     now = now or datetime.now(UTC)
     rows = (

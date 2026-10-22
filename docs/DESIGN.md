@@ -16,12 +16,14 @@ security review folded in (§4.3.1, §8.0, §9, §15, §18.1); database resolved
 
 ## 1. Problem statement
 
-Warn a user shortly *before* it starts raining at their location in Germany, by email, using DWD
-radar nowcast data. "Get the laundry in / take a jacket" — not a general weather app.
+Warn a user shortly *before* it starts raining at their location in Germany, by browser push
+notification (email until D-76 removed it), using DWD radar nowcast data. "Get the laundry in / take a jacket" — not a general weather app.
 
 ### In scope for v1
 - Server-side service, deployed to Google Cloud, that ingests DWD radar nowcast data every 5 minutes.
-- Email subscription with double opt-in, one location per subscriber, location updatable via API.
+- Web push subscription with double opt-in, one location per subscriber, location updatable via API.
+  (Written as an email subscription; push replaced it as the live channel with D-45, and email was
+  removed with D-76.)
 - Alert when rain is predicted to start at the subscriber's location within the next 30 minutes.
 - Minimal server-rendered web UI: subscribe (map picker), confirm, manage, unsubscribe.
 - The map picker page renders a rain **timeline**: an overlay with a slider spanning the last
@@ -62,36 +64,37 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-2 | Trigger = "rain starts within lead window **and** it is currently dry at the location" | "Get the laundry in" semantics; avoids firing during ongoing rain |
 | D-3 | Spatial rule = max over cells within a radius (default **2000 m**) | 1 km grid + nowcast advection error; a single cell is too jittery |
 | D-4 | Host on GCP, serverless, scale-to-zero | Cloud Run service + Cloud Run job + Cloud Scheduler + GCS |
-| D-5 | Identity = **(channel, address)** + magic link (double opt-in); subscription holds an opaque API token | GDPR consent trail, no passwords, reusable by the future app. Revised 2026-09-19: email was never the point of double opt-in - proving the channel reaches the person who asked was - so channel and address became the identity and the confirmation goes out over whatever channel that is. One code path, no special case |
+| D-5 | Identity = **(channel, address)** + magic link (double opt-in); subscription holds an opaque API token | GDPR consent trail, no passwords, reusable by the future app. Revised 2026-09-19: email was never the point of double opt-in - proving the channel reaches the person who asked was - so channel and address became the identity and the confirmation goes out over whatever channel that is. One code path, no special case *(What this says about email is void since D-76.)* |
 | D-6 | Ingestion stores **full grids** (the original archives), not just samples | Enables replay, debugging, and the map overlay feature |
 | D-7 | Retention: raw archives **48 h**; forecast overlays **1 h**; observed overlays **14 h**; `evaluations` **48 h**; `rain_events` / `notifications` indefinitely | See D-23 |
 | D-8 | Alert de-duplication via a **per-subscription state machine** (§9), not a fixed cooldown | One mail per rain *event*, not per cycle |
-| D-9 | v1 throttling: **none the subscriber can turn off, except a hard ceiling** — `min_gap_minutes` and quiet hours stay off by default (D-10), so a normal subscriber still gets maximum notifications for debugging, but `alert_cap_per_subscription_per_day` (12, 24 since D-70) and `global_alert_cap_per_day` (300, email only since D-70 as `email_alert_cap_per_day`) bound it | Revised 2026-10-04. The original read "none beyond the state machine", which stopped being true and had stopped being safe: the state machine limits one alert per dry→warned *event*, and a rule of `threshold=0.01, lead=120, radius=20000` — in spec on every axis — widens "event" until it means most cycles in unsettled weather. What that spends is shared (SECURITY_REVIEW.md F-15), so the ceiling is not the subscriber's to set |
+| D-9 | v1 throttling: **none the subscriber can turn off, except a hard ceiling** — `min_gap_minutes` and quiet hours stay off by default (D-10), so a normal subscriber still gets maximum notifications for debugging, but `alert_cap_per_subscription_per_day` (12, 24 since D-70) and `global_alert_cap_per_day` (300, email only since D-70 as `email_alert_cap_per_day`) bound it | Revised 2026-10-04. The original read "none beyond the state machine", which stopped being true and had stopped being safe: the state machine limits one alert per dry→warned *event*, and a rule of `threshold=0.01, lead=120, radius=20000` — in spec on every axis — widens "event" until it means most cycles in unsettled weather. What that spends is shared (SECURITY_REVIEW.md F-15), so the ceiling is not the subscriber's to set *(What this says about email is void since D-76.)* |
 | D-10 | `min_gap_minutes` ("only once per N minutes") and quiet hours exist in the schema and config now, default **off** (`0` / disabled) | Future-configurable without migration |
 | D-11 | Language: **Python everywhere** (FastAPI + Jinja2 templates, numpy) | Radar tooling is Python; one image, one language |
-| D-12 | Mail via a pluggable `Notifier`; default adapter a transactional provider (Brevo/Mailgun/SendGrid free tier); console adapter for dev | Deliverability; swappable via config |
+| D-12 | **Superseded by D-76 (email removed).** Mail via a pluggable `Notifier`; default adapter a transactional provider (Brevo/Mailgun/SendGrid free tier); console adapter for dev | Deliverability; swappable via config |
 | D-13 | Defaults: **lead time 30 min**, threshold **0.15 mm / 5 min** | Nowcast skill decays fast. The threshold was 0.1 (≈1.2 mm/h, "you get wet") until 2026-09-21; it moved to 0.15 (≈1.8 mm/h, *leichter Regen*) when the settings page became a picker of the §11.1.1 bands, because a default that is not one of the bands shows up as "eigener Wert" - a confusing first impression for something nobody chose. The band boundary, not the round number, is what makes it legible |
 | D-14 | Alert rule parameters are **per-subscription columns with defaults**, not constants | v1 UI shows defaults only; later UI edits the same fields |
 | D-15 | API-first; push is a stubbed adapter | No FCM work in v1 |
-| D-16 | One subscriber (identified by email) → **one subscription** → **one location**, updatable | See D-17 for the consequence |
+| D-16 | One subscriber (identified by email) → **one subscription** → **one location**, updatable | See D-17 for the consequence *(What this says about email is void since D-76.)* |
 | D-17 | A location change of more than 1 km resets the alert state to `UNKNOWN` | Otherwise moving into existing rain produces a bogus "rain starting" mail |
 | D-18 | Audience: private (me + friends); designed so going public later is a config/paperwork change, not a rewrite | Still: double opt-in, one-click unsubscribe, deletion endpoint |
 | D-19 | Frontend: server-rendered HTML, no build step; Leaflet for the map, basemap tiles from a configured provider or none (§11.1). *Since D-59 the maps are drawn by MapLibre on vector tiles; Leaflet with raster tiles is the fallback* | Non-technical friends must be able to subscribe |
 | D-20 | Map picker page shows rain as an image overlay with a **time slider** | Added during the interview; drives the overlay renderer (§11) |
 | D-21 | Radar decoding: **own minimal decoder** in the runtime; `wradlib` is a **test-only** dependency used as the golden reference | See §5 — answers the "wradlib or alternatives" question |
 | D-69 | **Rain that starts without a warning gets one: "Es regnet jetzt".** `DRY → RAINING` now notifies (push: title "Es regnet jetzt", body "Bei dir hat gerade leichter Regen eingesetzt. Die Vorhersage hatte ihn nicht angekündigt."; email the same with the usual exit). Once per rain event, because `RAINING` only returns to `DRY` after `dry_clear_minutes`; through the same throttles (gap, quiet hours, per-subscription cap, email cap) as a warning; in the same notification slot. Not from `UNKNOWN`: a fresh or just-moved subscription that finds rain falling cannot tell when it began. `WARNED → RAINING` stays silent | Requested 2026-10-14 after a subscriber's data showed drizzle repeatedly starting with no forecast hit (`rain_started_unwarned`) - from the reader's side indistinguishable from the service missing the rain. Saying it late is better than not at all, and saying why there was no warning keeps it from reading as a fault. The event is born with its observed start so `jobs/verify.py` skips it |
-| D-70 | **Limits that drop as few valid notifications as possible.** (1) The blast radius is gone; a **plausibility check on the radar data** replaces it: a cycle is set aside - no state moves, nothing is sent, `skipped_implausible`, ERROR log, the operator alert - when the wet share of the radar area at t+0 rises more than `implausible_rise_pp` (20) points against the previous believable cycle within `implausible_window_minutes` (15), or when any forecast frame is more than 20 points wetter than t+0. Only rises count; the share is stored (`radar_cycles.wet_share`) only for believable cycles. (2) The 300-a-day ceiling applies to **email only** (`email_alert_cap_per_day`, was `global_alert_cap_per_day`). (3) The per-subscription ceiling is **24** (was 12) and logs a warning when reached. (4) A notification lives as long as it is true: a warning until its predicted start (at least 10, at most 120 min), "Es regnet jetzt" 15 min - both the expiry in `deliver_queued` and the push TTL (was 30 min for everything). (5) Push is sent **32 at a time** (`delivery_concurrency`); mail stays serial | Requested 2026-10-14: "valid notifications dropped as rarely as possible", for five subscribers and for ten thousand. The blast radius judged a cycle by how many it would warn, which means nothing when subscribers cluster - a household's five browsers in one shower were "all of them" - and what it dropped stayed dropped, because states advanced. Measured on 369 production frames (2026-10-13/14): wet share median 6.3 %, max 14.6 %; largest 5-minute rise 0.69 points (p99 0.25); forecast against t+0 at most 1.5 points; a radar site returning about 5; a corrupt "rain everywhere" cycle 85-95. 20 sits a factor of 30 above real weather and a factor of 4 below a broken cycle; real rain costs at most one five-minute cycle. Push has no quota and costs nothing per message, so the mail ceiling never had a reason to silence it. 24 a day is out of reach of real weather, so a hit is a bug worth seeing. The 30-minute expiry dropped a warning for rain 60 minutes out from a phone offline for 40, though the rain had not started. Sequential sends take ~100 ms each, waiting on the push service; 3,000 of them outran the ingest job's 240 s, 32 at a time take ~10 s |
+| D-70 | **Limits that drop as few valid notifications as possible.** (1) The blast radius is gone; a **plausibility check on the radar data** replaces it: a cycle is set aside - no state moves, nothing is sent, `skipped_implausible`, ERROR log, the operator alert - when the wet share of the radar area at t+0 rises more than `implausible_rise_pp` (20) points against the previous believable cycle within `implausible_window_minutes` (15), or when any forecast frame is more than 20 points wetter than t+0. Only rises count; the share is stored (`radar_cycles.wet_share`) only for believable cycles. (2) The 300-a-day ceiling applies to **email only** (`email_alert_cap_per_day`, was `global_alert_cap_per_day`). (3) The per-subscription ceiling is **24** (was 12) and logs a warning when reached. (4) A notification lives as long as it is true: a warning until its predicted start (at least 10, at most 120 min), "Es regnet jetzt" 15 min - both the expiry in `deliver_queued` and the push TTL (was 30 min for everything). (5) Push is sent **32 at a time** (`delivery_concurrency`); mail stays serial | Requested 2026-10-14: "valid notifications dropped as rarely as possible", for five subscribers and for ten thousand. The blast radius judged a cycle by how many it would warn, which means nothing when subscribers cluster - a household's five browsers in one shower were "all of them" - and what it dropped stayed dropped, because states advanced. Measured on 369 production frames (2026-10-13/14): wet share median 6.3 %, max 14.6 %; largest 5-minute rise 0.69 points (p99 0.25); forecast against t+0 at most 1.5 points; a radar site returning about 5; a corrupt "rain everywhere" cycle 85-95. 20 sits a factor of 30 above real weather and a factor of 4 below a broken cycle; real rain costs at most one five-minute cycle. Push has no quota and costs nothing per message, so the mail ceiling never had a reason to silence it. 24 a day is out of reach of real weather, so a hit is a bug worth seeing. The 30-minute expiry dropped a warning for rain 60 minutes out from a phone offline for 40, though the rain had not started. Sequential sends take ~100 ms each, waiting on the push service; 3,000 of them outran the ingest job's 240 s, 32 at a time take ~10 s *(What this says about email is void since D-76.)* |
 | D-71 | **The web service is billed per request, not per instance** (`cpu_idle = true`) | The October 2026 bill showed `Services CPU (Instance-based billing)`: about 4.3 instance-hours a day, ~9 EUR a month at list price, against §6.2's estimate of ~0. Cause: in the Google provider, `cpu_idle` defaults to true only when the container has no `resources` block; this one has one (limits, `startup_cpu_boost`), so the default became false - CPU always allocated, every instance billed for its whole lifetime including the up to 15 idle minutes Cloud Run keeps it. The API does nothing between requests (no background tasks; the DB pool uses `pool_pre_ping`, so a connection dropped while the instance is throttled is replaced on the next request). Cold starts are unchanged: instance lifetime and scale-to-zero do not depend on the billing mode, and startup gets full CPU plus the boost either way (D-51) |
 | D-72 | **The privacy page is a full Art. 13 statement, written from the code.** New sections: who is responsible (`PRIVACY_CONTROLLER`, shown with `CONTACT_EMAIL`), what the browser stores (the one cookie `__session`, the device key, the pending confirmation link, the service worker and push subscription, the remembered time range, the deletion flag), purposes with their legal bases (consent; Art. 6(1)(c) with 7(1) for the consent record; legitimate interest for abuse counters, server logs, hit-rate checks and the map; § 25(2) no. 2 TDDDG for the browser), recipients (Google Cloud as processor in Frankfurt, Firebase Hosting and Cloud Storage, the four push services, the mail server when email is on), retention per item, and the data subject rights. No cookie banner: nothing stored needs consent | Requested 2026-10-18 ("double check whether everything written there is really sufficient and covering all product behavior"). The audit found the page silent on: the controller and the rights (both required by Art. 13); the abuse counters, which hold the client IP in plain text for 7 days and outlive the account; the browser user agent and consent-text version in the consent record; `last_seen_at`; the 48 h evaluation log; Google's 30-day request logs and 7-day database backups, which made "löscht sofort und vollständig" untrue; Microsoft as a push service; and the session cookie and time-range preference. Numbers come from `settings` so the page cannot drift; log and backup retention are infrastructure defaults and their template comment says where. `tests/test_privacy.py` fails when a new browser store or cookie appears without the page changing. The consent wording itself is unchanged, so `consent_text_version` stays |
 | D-73 | **Rate-limit buckets hold a salted hash of the client IP, and the ingest job keeps every retention promise.** `ratelimit.ip_bucket` writes `<action>:<HMAC-SHA256(secret_key, ip)>`, the same hash as the consent record; rows from before it, keyed by a plain IP, are deleted by the first purge. `jobs/ingest.housekeeping` runs every cycle: `purge_unconfirmed` (24 h), `verify_events`, `purge_evaluations` (48 h), `purge_old_hits` (7 days) | Requested 2026-10-18 after D-72 found the buckets were `subscribe:ip:203.0.113.7` in plain text, kept past the account. The limits only need "the same address as before", never which address. Tracing the purge found it had no caller at all - and neither did verification or the evaluation purge outside `rainalert verify`, which nothing schedules: the counters and the 48-hour log were kept for good and no warning was ever scored, while the privacy page promised 7 days and 48 hours. Still personal data: whoever holds the secret can test a candidate address (the RUNBOOK's proxy-hop check does exactly that), so the retention and the privacy page entry stay |
 | D-74 | **RV is read from DWD's HDF5 edition, `composite_rv_*.tar`.** `rainalert/radar/odim.py` decodes the ODIM_H5 members into the same `RVFrame`s: rows flipped to south-up, values floored to 0.01 mm with every detected cell at least 0.01, which is exactly the binary edition (DWD_RV_FORMAT.md §11a). The decoder recognises the edition from the bytes, so archives from before still read back; they are stored under DWD's own name for their edition. `dwd_latest_name` is `composite_rv_LATEST.tar`; new dependency `h5py` | DWD stopped publishing the binary edition after the 2026-10-20 07:55 UTC cycle, as announced (moving the radar composites to HDF5). The job kept polling `DE1200_RV_LATEST.tar.bz2`, got a correct 304 every time, and stored nothing: no warnings from 07:55 until this deployed, and the stale alert was the only signal. Held to the old edition rather than taking B's finer 0.001 mm values, because every threshold, map band and plausibility figure was measured on A and an outage is not the time to retune them; on the wet twin cycle the two editions agree on > 99.9 % of cells at every threshold from 0.01 to 1.0. Archives are ~4x bigger (0.75-5.4 MB), well inside the response cap (32 MiB) and both byte budgets (≤ 65 MB/h, ≤ 1.6 GB/day against 512 MiB and 8 GiB). h5py parses third-party bytes: the member and archive limits still apply, the grid shape is checked before the data is read, and every attribute that sets a scale is range-checked, as for the binary header (F-2) |
 | D-75 | **The grid is DE1200 on the WGS84 ellipsoid, checked against DWD on every cycle, and a gap at a subscriber's location says which radar is down.** `radar/grid.py` uses `+a=6378137 +b=6356752.314` instead of the RADOLAN sphere; nothing else changes, because every location, radius and map pixel is derived from that one string. `radar/odim.py` compares each HDF5 member's `where/` - projection, size, scale, the four corners within 50 m - with it and rejects the cycle as "radar grid changed", which the ingestion alert now matches. `how/missing_nodes` is stored as `radar_cycles.missing_sites` (migration `d9a3f6b1c2e7`); when a subscriber's latest evaluation, at most 15 minutes old, was `skipped_missing`, `/api/v1/subscriptions/me` returns `coverage_note` and the settings banner shows it - naming the nearest missing radar within 150 km (`radar/sites.py`, positions from each radar's own files), or just that data is missing | Requested 2026-10-20 as two follow-ups to D-74. Building the grid check found the georeference itself wrong since launch: DE1200 is RADOLAN format version 5, which is on the ellipsoid (DWD's 'Radarkomposits - Projektionen und Gitter' v1.01; wradlib; every HDF5 file), while the code used the sphere of the older national grids and its test compared against wradlib's sphere default. Cell centres were 80 m to 1.3 km from DWD's, growing eastward; corners 1.2-2.3 km. So subscribers in the east were evaluated up to a cell from their location and the map was drawn up to a cell off. A check against the old constants would have rejected every cycle; a check against a pinned copy of DWD's declaration would have kept the error. The note exists because a cycle without data at a location changes nothing (state machine step 0), which is right and was silent: the settings page looked fine while nothing could warn there. Observed overlays already rendered keep the old placement until they age out (48 h) |
+| D-76 | **Web push is the only channel; email is gone, and will not come back.** Removed: the SMTP notifier and `RoutingNotifier` (`NOTIFIER=auto`/`smtp`), the email form and wording on every page, the long-lived `Bearer` API token (only email subscribers still had one since D-64), the email warning cap (D-70) and the transactional mail cap (D-63), `#t=` confirmation links (D-36), `List-Unsubscribe` (D-33), and every SMTP/mail setting, variable and secret. `api/mail.py` is `api/messages.py`, building push notifications only. `Channel` left the models; `subscribers.channel` and `notifications.channel` stay in the database, unmapped, with web push defaults (migration `e5b2c8d4f1a6`, which also deletes any non-push subscriber and every `api` token), so the previous release keeps working while the migration runs - a later release can drop them. `hash_address` still hashes `webpush:<endpoint>`, so stored hashes and rate-limit buckets stay valid. A VAPID key that cannot be used gives `UnavailableNotifier`: the service starts, and every send fails with the reason | Email was never switched on in production (no `smtp_host`), and keeping it cost more than code: a second consent wording and record, a mail provider as a second processor with its DPA (Q-4, Q-9), SPF/DKIM/DMARC, two caps whose only job was a provider's quota, scanner-safe confirmation (F-4), an unsubscribe header (Q-13), and every test written twice. The decision is final, so the code is simpler rather than switched off |
 | D-68 | **The radar refreshes: by a button at the end of the "Zeitraum" row, and by itself when the page comes back to the front with data older than five minutes.** The button (Material "refresh", inline SVG) spins until the "jetzt" frame's image has loaded, at least one turn; "reduce motion" gets a pulse instead. A refresh keeps the window, jumps to "jetzt" and stops playback, like a range change. "Stand HH:MM" beside the button names the newest observation. A refresh that fails or comes back empty keeps the frames on screen and says from when; only the newest of several loads in flight is applied | Reported 2026-10-11: the app opened from the Home Screen has no reload gesture, and is resumed rather than reopened, so it showed whatever it had loaded hours before - a new cycle arrives every five minutes. In the "Zeitraum" row, not the slider's, because that row is hidden exactly when a refresh is wanted most (no data yet, the last load failed). Automatic on `visibilitychange`/`pageshow` rather than on a timer: the timer costs battery and data while nobody looks. The icon font was not used because it would be a request to Google from every visitor and a CSP exception. The in-flight guard also fixes an older race between two quick range changes. Verified in Chromium on Leaflet and MapLibre with a scripted timeline: new cycle, slow image, offline, empty answer, refresh-vs-range race, return after five minutes, back/forward cache, reduced motion, 360 px |
 | D-67 | **The settings are on the start page; `/manage` is gone.** Below the map and its "Zeitraum" picker, a section "Einstellungen" carries what `/manage` carried from its map hint to "Abmelden und meine Daten löschen"; the map above shows the subscription's pin and circle, editable, zoomed in to at least 11. What the page shows below the map is decided in the browser (signup.js): the settings when this browser can prove a subscription (a device key, a settings link in `#t=`, an email session), state B ("Dieser Browser ist angemeldet" plus "Einstellungen öffnen", which sends one link to this browser) when it holds a push subscription it cannot prove yet, else the signup - with, where email is on, "Schon per E-Mail angemeldet?" for a settings link. Settings links now point at `/#t=`; the liveness ping and the worker's "Erfolgreich angemeldet" at `/#einstellungen`. `/manage` is deleted, not redirected (in development: no backward compatibility until the service is declared production-ready), so a settings link mailed before this release answers 404. The start page carries no navigation; the other pages keep one link, "Start", back to it. After the service worker confirms a signup (D-66), the settings open in place. Deleting clears the session cookie too and reloads `/`, which says "Abgemeldet" once (told through sessionStorage: a URL marker could be linked by anyone) | Requested 2026-10-10: with device keys (D-64) a subscribed browser proves itself on every request, so a separate page in front of the same map added a second address and nothing else. One page means one map, one picker and one locate control (signup.js dispatches a pin move to whichever state is shown) and one reader of the push subscription (`ownSubscription`, so the VAPID-key check exists once instead of two copies). Privacy consequence, stated on `/privacy`: a subscribed browser now shows the area around its warning location to the tile server on every visit to the start page, not only when the settings were opened; and every such visit is a signed request, which also counts as "seen" for liveness (`last_seen_at`). Verified in Chromium on Leaflet and MapLibre: signup through the worker straight into the settings, reload with a key, editing and saving the place, state B and its link in the same tab, deletion, and an email session |
 | D-66 | **The service worker confirms a push signup itself; the notification says it is done.** On a confirmation push the worker POSTs `/confirm` exactly as the confirm page would - the token, proof that this browser holds the subscription, a fresh device key (`devicekey.js`, imported into the worker) - and only then shows *Erfolgreich angemeldet - ab jetzt bekommst du hier eine Benachrichtigung, wenn bei dir Regen aufzieht* (tap: settings). Open pages are told (`rainalert-confirmed`) and say the same in place of the waiting line. If the worker cannot confirm (offline, refused, 15 s passed) it shows the old confirmation and hands the link over (D-65) | Reported 2026-10-10: after D-65 the signup completed by itself, but the notification still asked to be tapped to activate - which by then was false. No new trust: the token was decrypted by this browser and opening it is what a tap does (D-36); the same redemption checks apply (proof before the token is spent, `Sec-Fetch-Site` same-origin). Accepted residual: a confirmation that succeeds only after the 15 s bound shows the fallback as well, and the handed-over link then finds its token spent. Verified in Chromium with a real worker and a push delivered through DevTools: page open, page closed, and a worker without the subscription (fallback) |
 | D-65 | **A push confirmation completes without its notification being clicked.** The service worker keeps the confirmation link it receives (IndexedDB `rainalert-sw`/`pending`, this origin only, only `/confirm#a=` links) and posts it to open pages; the start page takes it once and goes to `/confirm`, on arrival or the next time it is opened. The confirmed page forgets the link and closes the notification. Tapping the notification still works | Reported 2026-10-10 on desktop Chrome on a Mac: clicking the confirmation did nothing, so signing up was impossible. `registration.getNotifications()` came back empty while macOS still showed the notification - Chrome had dropped it, and a click on it reaches no service worker. Nothing on the page can make that click arrive; the worker, which already holds the link, can. No new trust: the link is the same single-use token, it never leaves the browser that decrypted it, and opening it is exactly what a tap does (D-36). Verified in Chromium with a real worker and a push delivered through DevTools, page open and page reopened later |
 | D-64 | **A push subscriber's settings open with a device key, not a session; notifications carry no buttons.** The browser registers a non-extractable WebCrypto ECDSA P-256 key together with a push-delivered single-use token (the confirmation or a settings link) and signs every settings request with it (`Authorization: RainKey`, over origin, method, raw path, server time and body hash). No cookie, no CSRF value, nothing to expire; the key rotates silently once a day and dies with the subscription. Only subscribe and unsubscribe are offered - no sign-out, no word about keys. Full design and its three security reviews: docs/PLAN_DEVICE_KEY.md | The push round trip proved the right thing (only the subscribed browser can decrypt the push) but cost availability and friction: muted notifications or a push-service hiccup locked people out of their settings, including deletion, and every visit cost a push. A key bound to that same proof is as strong, is cheap to check per request, and makes a session pointless (PLAN §9), which also removes CSRF for key holders. A long-lived cookie would have done nearly as well; the key wins only against copy-the-bytes leaks (HAR files, cookie exporters). Push token redemptions now require the browser holding that subscription (endpoint or `p256dh`), checked before the token is spent, and refuse cross-site POSTs by `Sec-Fetch-Site` - which closes login CSRF too. Pages from before the release redeem as before. The notification buttons, the durable request token behind them and `/manage/request` are gone; the liveness job's "acted on nothing" signal is now `last_seen_at` (a tapped warning, an opened settings page). Push subscribers no longer get the long-lived API token. Kill switch: `DEVICE_KEY_LOGIN_ENABLED` |
-| D-63 | **One global daily cap on confirmation and settings-link mails** (`transactional_mail_cap_per_day`, default 50). Counted across all requests, in one bucket, never per IP | The per-IP limits can be sidestepped in production: Cloud Run's run.app address answers directly, and with `trusted_proxy_hops = 2` a request sent there chooses its own client IP (SECURITY_REVIEW.md F-5, status 2026-10-09). The per-address limits still cap what one mailbox receives, but not how many different mailboxes one attacker can have us write to, and those mails spend the provider quota and the domain reputation the warnings need. Only real sends count, so unknown addresses do not use up the day. Past the cap, nothing is sent, the answer is unchanged, and an error is logged. Push messages are free and not counted; warnings keep their own cap (`email_alert_cap_per_day`). 50 is far above a friends-and-family day; the cost of hitting it is a new subscriber whose confirmation does not arrive until tomorrow |
+| D-63 | **Superseded by D-76 (email removed).** **One global daily cap on confirmation and settings-link mails** (`transactional_mail_cap_per_day`, default 50). Counted across all requests, in one bucket, never per IP | The per-IP limits can be sidestepped in production: Cloud Run's run.app address answers directly, and with `trusted_proxy_hops = 2` a request sent there chooses its own client IP (SECURITY_REVIEW.md F-5, status 2026-10-09). The per-address limits still cap what one mailbox receives, but not how many different mailboxes one attacker can have us write to, and those mails spend the provider quota and the domain reputation the warnings need. Only real sends count, so unknown addresses do not use up the day. Past the cap, nothing is sent, the answer is unchanged, and an error is logged. Push messages are free and not counted; warnings keep their own cap (`email_alert_cap_per_day`). 50 is far above a friends-and-family day; the cost of hitting it is a new subscriber whose confirmation does not arrive until tomorrow |
 | D-62 | **The vector map zooms to 20 (Leaflet scale), and house numbers are readable.** `radar-gl.js` `MAX_ZOOM = 20`, two levels past the Leaflet fallback's 18. House numbers are solid grey with a halo in the building colour, and sized like the street names (10 to 13 px) | Asked for after using the vector map: it stopped zooming one level after the house numbers appeared (they start at Leaflet 18), and the numbers were hard to read. Vector tiles stay sharp when scaled, so the limit was the raster map's, carried over; the z14 data has nothing finer to show beyond 20. The numbers as generated were the label colour at 30 % opacity, about 1.9:1 against the building fill; now 5.7:1 (light) and 4.9:1 (dark), above WCAG's 4.5:1. At 8 to 10 px they were also small print on a phone. `build.mjs` stops if the building fill changes upstream, so the contrast is rechecked rather than lost. The radar still goes blocky long before 20, which is honest about 1 km cells |
 | D-61 | **The OSMF vector tile usage policy was read (2026-10-08) and the service meets it.** It permits external use - "in principle happy for our map tiles to be used ... for creative and unexpected uses", with no exclusion of applications, unlike the raster policy that ruled OSM tiles out in Q-5 - on minimum requirements, best effort, no SLA, and access may be blocked without notice | Read from the policy text (the page itself was not reachable from the development sandbox). **Required, met:** licence attribution, bottom right (MapLibre's attribution control, linked to /copyright); a valid User-Agent and, from a web page, a valid Referer (the browser's own UA; the site's origin as Referer, D-58); no no-cache headers and tiles cached per their expiry (browsers do both - checked in Chromium with the HTTP cache on: no `Cache-Control`/`Pragma` on tile requests, and a second visit fetched nothing; a run with Playwright's request interception showed `no-cache` on every tile, but that is interception switching the cache off, not the page); no bulk downloading, no caching proxy. **Recommended, now done:** the tile URL is not hard-coded - `vector_tile_url` is a Terraform variable, so switching provider or turning the vector map off is an apply, not a rebuild; a "Karte verbessern" link to /fixthemap next to the attribution; a contact address in every page's footer through `contact_email` - optional and empty by default, because it is published and the operator chooses it. The privacy page links the OSMF privacy policy when its server is in use. **Versioning:** a new Shortbread major version gets a new URL path; the old tiles stay updated for a month and available for two more - RUNBOOK §3c says what to do |
 | D-60 | **The radar is drawn as a gradient between the band colours, not seven flat steps.** Each band's colour is drawn exactly at the value where the band starts; a value inside a band is shaded toward the next band's colour by how far along it is, on a log scale, in 32 shades per band. The legend, the threshold picker and alerting are unchanged | Flat steps hid most of what the radar reports: since D-52 `Nieselregen` runs from 0.01 to 0.15 mm/5 min - fourteen distinct readings, all one pale blue - so a drizzle field and the edge of a shower looked the same. **Anchored at the band starts** so the seven colours the legend and the picker show still name what is on the map. **Log scale** because that is how the band starts are spaced (each roughly double the last) and how rain is felt; linearly, the lower half of every band would barely change colour. Interpolated in sRGB with alpha: the stops are hue neighbours, so the straight line between two passes through no muddy middle. Above the last band start (6 mm/5 min) the colour stays the last one. **Shades, not a continuous blend:** continuous made a wet frame 282 KB instead of 77 KB. 32 shades per band is 225 colours, which fits a PNG palette (one byte a pixel, alpha per entry in tRNS) - 107 KB, and the render got faster - and is the smallest count at which every one of `Nieselregen`'s fourteen readings gets its own shade (16 gave 11). Readings are snapped to 1e-6 before the scale is applied, because the decoder's float32 puts 0.35 just below 0.35 and a band's start must get exactly the band's colour - the same trap D-52 fixed in the sampler. Verified on a real frame on both map engines. Frames rendered before the deploy keep flat colours until they age out of the window |
@@ -124,14 +127,14 @@ Decisions taken during the requirements interview. Each is binding unless supers
 | D-43 | The basemap **defaults to basemap.de** (BKG, CC BY 4.0) rather than to nothing | §11.1 (*Basemap tiles*) has the reasoning; what belongs here is why the earlier no-default decision was right and still got reversed. The objection was to *borrowing* a volunteer-run service, not to having a basemap, and open government data published for reuse is not borrowed. The property that picked it over better-looking alternatives was the licence rather than the cartography: Stadia, Jawg and MapTiler restrict their free tiers to non-commercial use, so any of them would have had to be revisited the day this page carried an ad, whereas CC BY 4.0 has no such concept. Germany-only coverage is not the compromise it looks like - RV is a German product, so global tiles would render places the rest of the system cannot speak about. The cost is a WMTS `{z}/{y}/{x}` template whose reversal is silent, which is why it has its own test and `make verify-basemap` |
 | D-42 | A **spent magic link falls through to the session this browser already has**, and says so; the complaint about it is reached only once that session has been ruled out too | Opening the link twice in one browser is ordinary - a second tab, a restored tab, a link tapped again - and the first open both spends the token and sets the cookie. So the second was answered "dieser Link gilt nicht mehr" while the reader was signed in, and reloading that same page then worked, which is what made it baffling rather than merely wrong. The cookie is the authority (D-25); a spent token subtracts nothing from it. `redeem` therefore reports and only the dispatch decides. It is not silent about it either: `#panel-note`, separate from the `#panel-banner` that `fill()` owns, explains why the page opened anyway - otherwise the second tab is indistinguishable from the first and the confusion just goes quiet. In a browser with no session a spent link still refuses, which is the case the single-use rule exists for |
 | D-41 | `/manage` renders **four states, all hidden**, and the script reveals exactly one: `busy`, `sent`, `gate`, `panel` | The gate used to be the markup's default, so it was what you looked at while any other path was still working - and arriving from a notification (`#r=`) the "we sent you a link" answer appeared *underneath* a form asking for the topic it had just used. The deeper fault was that the default was load-bearing without being written down: `redeem`, `load` and the CSRF refetch each only `return`ed on failure and relied on the gate still being there, so what a reader ended up seeing depended on what had not happened yet. With nothing shown by default every exit has to name a state, which is what makes the page's behaviour reviewable. The `sent` state names the link's TTL and offers the form only afterwards, as "nichts angekommen?" - a subscription deleted elsewhere still holds a valid request token, so the link can be sent to a channel nobody is listening on. A 429 and a 500 also stopped giving the same answer, which had been sending people away for an hour over a fault on our side |
-| D-40 | The confirm page's button is **hidden in the markup** and revealed only on the mailed path; the push path shows a spinner, and the button returns after 8 s if the submit has not landed | D-36 confirms a push link on open, so its button is a thing to press that is already being pressed - and it appeared for a moment on every push confirmation, long enough to reach for. Hiding it *from* script cannot fix that: the script runs after the markup is parsed, so by then it may already be painted. `hidden` plus base.html's `[hidden] { display: none !important }` is the only version that cannot flash. The fallback is kept but offered on evidence rather than up front - a dropped connection would otherwise leave the reader on a spinner forever. A `<noscript>` now says why the page needs script at all: the token is in the fragment, so without it there is nothing to read |
-| D-39 | **One notifier per channel, chosen by the message** (`NOTIFIER=auto` → `RoutingNotifier`, email + webpush since D-45), and a deployment can turn the email channel off entirely (`EMAIL_CHANNEL_ENABLED=false`) | There was one notifier per process, applied to everything, which is fine while one channel is live and unsafe the moment both are: `NtfyNotifier` puts `message.to` in the URL path, so with `NOTIFIER=ntfy` an email subscriber's confirmation was published to `<server>/<their address>` - the address becomes a public topic name and the confirmation link becomes that topic's contents. `OutboundMessage.channel` carries the label and the router refuses a channel it has no transport for, because a fallback is the same bug wearing a helpful face. `console` and `file` stay single sinks on purpose, or a local run would start publishing to a public ntfy server. The flag exists because the first deployment has push working and no mail provider: accepting an address it cannot write to is worse than refusing it, since the page then says to check a mailbox nothing ever arrives in. It gates signing up, not delivery - an existing email subscriber keeps working and can still reach `/manage` - and Terraform derives it from `smtp_host` so the page, the API and the mounted secret cannot drift apart |
+| D-40 | The confirm page's button is **hidden in the markup** and revealed only on the mailed path; the push path shows a spinner, and the button returns after 8 s if the submit has not landed | D-36 confirms a push link on open, so its button is a thing to press that is already being pressed - and it appeared for a moment on every push confirmation, long enough to reach for. Hiding it *from* script cannot fix that: the script runs after the markup is parsed, so by then it may already be painted. `hidden` plus base.html's `[hidden] { display: none !important }` is the only version that cannot flash. The fallback is kept but offered on evidence rather than up front - a dropped connection would otherwise leave the reader on a spinner forever. A `<noscript>` now says why the page needs script at all: the token is in the fragment, so without it there is nothing to read *(What this says about email is void since D-76.)* |
+| D-39 | **Superseded by D-76 (email removed).** **One notifier per channel, chosen by the message** (`NOTIFIER=auto` → `RoutingNotifier`, email + webpush since D-45), and a deployment can turn the email channel off entirely (`EMAIL_CHANNEL_ENABLED=false`) | There was one notifier per process, applied to everything, which is fine while one channel is live and unsafe the moment both are: `NtfyNotifier` puts `message.to` in the URL path, so with `NOTIFIER=ntfy` an email subscriber's confirmation was published to `<server>/<their address>` - the address becomes a public topic name and the confirmation link becomes that topic's contents. `OutboundMessage.channel` carries the label and the router refuses a channel it has no transport for, because a fallback is the same bug wearing a helpful face. `console` and `file` stay single sinks on purpose, or a local run would start publishing to a public ntfy server. The flag exists because the first deployment has push working and no mail provider: accepting an address it cannot write to is worse than refusing it, since the page then says to check a mailbox nothing ever arrives in. It gates signing up, not delivery - an existing email subscriber keeps working and can still reach `/manage` - and Terraform derives it from `smtp_host` so the page, the API and the mounted secret cannot drift apart |
 | D-38 | Tapping a warning opens the map **on the place that warning was about**, via a signed reference that stops resolving after `locate_link_ttl_minutes` (60) | The country view does not answer the question a warning raises, which is whether that shower is coming *here*. The coordinates are deliberately not in the link: a warning stays in a notification list for good, so a screenshot of one would be a home address in plain text - more than the message itself says, since it names a time and an intensity but never a place. `POST /api/v1/locate` resolves the reference instead, and answers an expired one exactly as it answers a forged one, because telling them apart would say whether the subscription behind an old link still exists. Push only: email ignores `click_url`, and a mail body is forwarded far more often than a notification. Once it expires the map opens where it always did, which is the point - last week's warning tells a reader nothing about where its owner lives |
 | D-37 | One **navigation block on every page**, between the content and the footer: Start, Regenradar, Einstellungen, with the current page marked rather than dropped | Each page used to invent its own wayfinding - the front page was "Zur Anmeldung" from the map, "Zur Startseite" from the settings and "Neu anmelden" after unsubscribing - while `/confirm`, `/unsubscribe` and `/privacy` had none at all, so an expired link left the reader on a page with no way off it. Keeping the current entry in the list means the set never changes shape as you move around, which is what lets it be found by habit. Rendering goes through one `page()` helper so the site-wide context cannot be forgotten on a route added later, which is how those three dead ends happened. Datenschutz stays in the footer: it is not a place you go to do something. The radar is listed unconditionally - `has_map` means there is imagery, not that the page exists |
-| D-36 | A **push** confirmation link confirms when it is opened (`#a=`); a **mailed** one still waits for a click (`#t=`) | The click is there for F-4, and every actor F-4 names is a mail scanner - SafeLinks, Proofpoint, Gmail's link handling. None of them sits between this service and a notification on a phone, so on push the click defends nothing and costs a step. What actually keeps a scanner from spending the token is not the click but the fragment (D-26): the URL a scanner fetches carries nothing the server sees, so it takes script *and* the fragment before anything happens, which is why the mail click is kept as the second layer for scanners that do run script. The marker is chosen in the message builder because nothing downstream can work it out - the token is opaque and the server never receives the fragment |
+| D-36 | A **push** confirmation link confirms when it is opened (`#a=`); a **mailed** one still waits for a click (`#t=`) | The click is there for F-4, and every actor F-4 names is a mail scanner - SafeLinks, Proofpoint, Gmail's link handling. None of them sits between this service and a notification on a phone, so on push the click defends nothing and costs a step. What actually keeps a scanner from spending the token is not the click but the fragment (D-26): the URL a scanner fetches carries nothing the server sees, so it takes script *and* the fragment before anything happens, which is why the mail click is kept as the second layer for scanners that do run script. The marker is chosen in the message builder because nothing downstream can work it out - the token is opaque and the server never receives the fragment *(What this says about email is void since D-76.)* |
 | ~~D-35~~ | *Superseded by D-45 (2026-09-27): there is no app to deep-link to and no topic to encode.* The desktop QR encoded the **`ntfy://` deep link**, not the topic's web URL, and the page asks which device should be warned rather than guessing | The code is scanned by the phone that wants the warnings, and ntfy's web page would subscribe *that phone* to web push - which its own docs say needs iOS 16.4 and the page on the home screen, and which is what a native app was chosen to avoid. Reverses the earlier reasoning that a camera would not open a custom scheme: it does, confirmed on Android (Q-11). The cost is that a scan does nothing at all when the app is missing, and a camera cannot say so - which is why installing is step 1, both stores are offered (the page cannot know what the phone is), and the step says in words that nothing will happen otherwise. The browser route is kept as a real alternative rather than a fallback, with its own cost stated where it is chosen: it only works while that computer is awake |
 | D-34 | **Confirming opens the settings session itself**; the page that follows leads straight into `/manage` | Tapping the confirmation proves a token we sent to the channel came back, which is the same thing redeeming a magic link proves (D-25) - a few seconds earlier. Sending a second link to prove it again is ceremony. The session is the ordinary one: same length, same wall, same cookie, so nothing is bought by arriving this way rather than that one |
-| D-33 | **No RFC 8058 one-click unsubscribe.** `List-Unsubscribe` carries the same fragment link a person clicks; `List-Unsubscribe-Post` is not sent | One-click would have the mail client POST the URI with a body it fixes itself and never run the page, so the token would have to sit in the query string where a log gets it (D-26) - and the handler reads its token with `Form(...)`, which does not see a query parameter, so every conforming request was answered 400 while the page's own form returned 200 and deleted. Both measured. It was therefore not a feature being traded away for privacy, it was a promise the server did not keep, and removing it costs nothing that worked. Without the POST header a mail client opens the URI instead of posting it, so one fragment link serves both. Re-adding one-click when email becomes a real channel is Q-13, and means writing the handler first |
+| D-33 | **Superseded by D-76 (email removed).** **No RFC 8058 one-click unsubscribe.** `List-Unsubscribe` carries the same fragment link a person clicks; `List-Unsubscribe-Post` is not sent | One-click would have the mail client POST the URI with a body it fixes itself and never run the page, so the token would have to sit in the query string where a log gets it (D-26) - and the handler reads its token with `Form(...)`, which does not see a query parameter, so every conforming request was answered 400 while the page's own form returned 200 and deleted. Both measured. It was therefore not a feature being traded away for privacy, it was a promise the server did not keep, and removing it costs nothing that worked. Without the POST header a mail client opens the URI instead of posting it, so one fragment link serves both. Re-adding one-click when email becomes a real channel is Q-13, and means writing the handler first |
 | ~~D-32~~ | *Moot since D-45: there is no topic to rotate, and a push endpoint is issued by the browser rather than by us.* There was **no "new topic" button**. Recovering from a suspected topic leak is delete-and-resubscribe | Rotation was designed as far as a working two-phase shape (issue the new topic, confirm on it, retire the old one only then) which does genuinely evict a passive watcher. It was dropped anyway, because deleting and signing up again *already* evicts, at no code cost: the new topic is minted in a session the watcher is not in. Rotation's real marginal benefit is therefore keeping the location, threshold, lead and radius rather than retyping them - about thirty seconds, in a scenario that is already rare - against a new token purpose, an enum migration, a pending-topic state, a second confirm endpoint and every half-state to test. It would also add a destructive one-way control to a page an attacker who has the topic can reach, quieter than `DELETE`, which at least sends a deletion receipt |
 
 ---
@@ -181,8 +184,9 @@ Files: `composite_rv_<YYYYMMDD>_<HHMM>.tar` (HDF5), plus a rolling `composite_rv
 ### 4.2 Licence and attribution (mandatory)
 
 DWD open data is **CC BY 4.0** (since 2023; previously GeoNutzV). Commercial use permitted with
-attribution. The service **must** display, on the map page, on the privacy page, and in the footer
-of every alert email:
+attribution. The service **must** display it on the map page and the privacy page - the footer of
+every page carries it. (Every alert email carried it too; a push notification has no room for it,
+and the map a warning opens shows it.)
 
 ```
 Datenbasis: Deutscher Wetterdienst (DWD), Radarprodukt RV, CC BY 4.0
@@ -351,7 +355,7 @@ Cloud Run Job: ingest ───────────────────�
   5. sample per distinct radius mask (deduped) ► fan out to subs    │
   6. evaluate state machine ► enqueue alerts ─────► Postgres       │
   7. render overlays: 1 observed + 24 forecast ──► GCS (14 h / 1 h)│
-  8. deliver queued alerts via Notifier ─────────► push / mail     │
+  8. deliver queued alerts via Notifier ─────────► web push        │
   9. housekeeping (D-73): purge unconfirmed, verify, purge evaluations│
      and rate-limit rows ──────────────────────────► Postgres       │
 └──────────────────────────────────────────────────────────────────┘
@@ -386,7 +390,7 @@ than none; a warning about rain that has not started yet is not late.
 | Cloud Run **service** `rainalert-api` | API + web UI | min instances 0, **`--max-instances` set explicitly** (see below) |
 | Cloud Scheduler `rainalert-tick` | `4-59/5 * * * *` UTC | invokes the job via OIDC SA; minute 4 is measured, not guessed (§4.4) |
 | GCS bucket `rainalert-data` | `raw/` (48 h), `overlays/obs/` (14 h), `overlays/fc/` (1 h) | per-prefix lifecycle rules, uniform ACL |
-| Secret Manager | DB URL, mail API key, `SECRET_KEY` | mounted as env |
+| Secret Manager | DB URL, VAPID private key, `SECRET_KEY` | mounted as env |
 | Artifact Registry | one container image, two entrypoints | |
 | Cloud Logging / Monitoring | structured logs, staleness alert | §15 |
 | Postgres | **Cloud SQL `db-f1-micro`, `europe-west3`** | see §6.3 for why, not Neon free |
@@ -411,7 +415,7 @@ with reserved connections, and never let the web tier be able to take alerting d
 | GCS raw archives | ~5 MB/cycle × 288/day ≈ 1.4 GB/day, 48 h retention ≈ 3 GB | <0.1 |
 | GCS overlays | observed: 144 × ~150 KB rolling ≈ 22 MB; forecast: 24/cycle × 1 h ≈ 43 MB | <0.1 |
 | Egress | overlay PNGs to a handful of browsers | ~0 |
-| Mail | free tier (~300/day) | 0 |
+| Web push | Google's, Mozilla's and Apple's push services; no account, no quota we have hit | 0 |
 | Database | Cloud SQL `db-f1-micro` + storage + backups | ~9–12 |
 | **Total** | | **~11–17** — the database is most of the bill (§6.3) |
 
@@ -437,7 +441,7 @@ It can be tuned to fit — dropping autosuspend to ~60 s costs about 65 s of wak
 roughly 39 CU-hours/month — but that is production running on a free tier trimmed to fit, with
 arithmetic to re-verify whenever the cadence or the plan changes. Not worth €10/month.
 
-**It would add a second processor for the most sensitive table.** We store email addresses and
+**It would add a second processor for the most sensitive table.** We store push endpoints and
 precise home coordinates of private individuals in Germany. Cloud SQL in `europe-west3` keeps that
 inside Google, which is already the processor for Cloud Run and GCS: one DPA, one subprocessor
 entry. Neon is a second processor, US-headquartered since the Databricks acquisition, so the CLOUD
@@ -458,6 +462,12 @@ SQL for production.** That costs nothing extra and puts Neon's branching where i
 ---
 
 ## 7. Data model (PostgreSQL)
+
+The schema as first designed. `rainalert/db/models.py` and `migrations/` are authoritative, and the
+largest difference is the subscriber: since D-45 it is a push subscription - `address` holds the
+endpoint, `address_hash` is `sha256("webpush:" + endpoint)`, beside the RFC 8291 keys - and since
+D-76 there is no email at all. `subscribers.channel` and `notifications.channel` remain in the
+database, unmapped, defaulting to web push.
 
 ```sql
 CREATE TYPE subscription_status AS ENUM ('pending','active','paused','deleted');
@@ -631,7 +641,7 @@ indexed by position.
 
 The two agree only when all 25 members are present with leads exactly 0, 5, … 120. If a cycle
 arrives with `_015` missing, positional indexing shifts every later entry down one slot: rain at +60
-is emailed as rain at +55, and the wrong `predicted_start_at` is written to the permanent
+is announced as rain at +55, and the wrong `predicted_start_at` is written to the permanent
 `rain_events` record — which then corrupts the verification job that exists to tune the thresholds.
 With a forged `VV` field the misalignment is chosen by the sender. Absent leads stay NULL, which the
 §9 per-frame gate already treats as "excluded, not dry".
@@ -688,7 +698,7 @@ instead of suppressing one.
 
 **States and transitions**
 
-| From | Condition | To | Mail? |
+| From | Condition | To | Notify? |
 |---|---|---|---|
 | `UNKNOWN` | `now_wet` | `RAINING` | no — rain is already falling and we cannot tell for how long, so there is nothing useful to say |
 | `UNKNOWN` | not `now_wet` and `first_hit` exists | `WARNED` | **yes** — dry here, rain approaching: we already know enough |
@@ -721,8 +731,7 @@ an ERROR line raises the operator alert. Real weather moves the share by well un
 cycle; a corrupt "rain everywhere" cycle moves it by 85-95. The share is stored only for believable
 cycles, so two broken cycles in a row are both caught. This replaced the blast radius, which refused
 any cycle that would warn more than `min(50 %, 25)` of the subscribers - and so refused, for good,
-the shower that warned one household's five browsers at once. Confirmation mail has its own daily
-cap (D-63), so it cannot starve alert mail.
+the shower that warned one household's five browsers at once.
 
 **Suppression checks** (evaluated in this order, before queuing). In all of them the state still
 advances to `WARNED`: rolling the transition back would re-fire the identical event on the next
@@ -733,32 +742,29 @@ cycle and achieve nothing but a delay.
    for later — a warning delivered at 06:00 about rain at 03:00 is noise).
 3. `alert_cap_per_subscription_per_day` alerts already queued for this subscription in the rolling
    24 h → `suppressed_cap`.
-4. email only: `email_alert_cap_per_day` warning mails already queued across *all* subscriptions in
-   the rolling 24 h → `suppressed_daily_cap`, and logged at ERROR. Push is not counted (D-70): it
-   has no quota, and check 3 bounds it.
+
+A fourth, `email_alert_cap_per_day` across all subscriptions (`suppressed_daily_cap`), protected a
+mail provider's quota and went with email (D-76). Push has no quota, and check 3 bounds it.
 
 The first two are the subscriber's own preferences and **disabled by default** per D-10; they are
 checked first so that when they apply, the reason recorded is the one the subscriber chose.
 
-The last two are limits imposed on them and are **on** by default (24 and 300) — they are what makes
+The third is a limit imposed on them and is **on** by default (24) — it is what makes
 D-9's "maximum notifications" defensible rather than an amplification lever (SECURITY_REVIEW.md
 F-15, F-2). The ordering matters for what lands in `evaluations`: a cap is only interesting to see
 there when nothing the subscriber chose would have stopped the send anyway.
 
-Their asymmetry is deliberate. The per-subscription cap is fair — the account being capped is the
-one that caused it — so it is a warning in the log, not an error; at 24 a day it is out of reach
-of real weather, so a hit means a bug or an absurd rule. The email ceiling is shared fate: reaching it means
-somebody is not warned about weather that is happening, for a reason that is not theirs, so it is an
-error in the log. If it fires the question is whether the traffic is real, not whether to raise the
-number.
+The per-subscription cap is fair — the account being capped is the one that caused it — so it is a
+warning in the log, not an error; at 24 a day it is out of reach of real weather, so a hit means a
+bug or an absurd rule.
 
 Counted from `notifications` with `event_id IS NOT NULL`, so the six-monthly liveness ping (which
 writes `event_id = NULL`) does not count against a rain-warning cap — which would otherwise make
 every cap one tighter than it claims, silently.
 
 **Why this shape:** a fixed cooldown either spams during showers or misses the second front. Tying
-suppression to the physical event (it must go dry again for 30 minutes) gives exactly one mail per
-rain event, which is what "not too many notifications" means in practice.
+suppression to the physical event (it must go dry again for 30 minutes) gives exactly one warning
+per rain event, which is what "not too many notifications" means in practice.
 
 **Verification loop (cheap, high value):** `rain_events` rows are kept indefinitely (D-23), so a daily
 job can compare `rain_events.predicted_start_at` with the later-observed t+0 frames and populate
@@ -770,32 +776,33 @@ tune the defaults in D-13 later.
 
 ## 10. API
 
-Base path `/api/v1`. JSON in/out. Auth: `Authorization: Bearer <token>` with an `api` token.
-All endpoints return RFC 7807 problem details on error.
+Base path `/api/v1`. JSON in/out. Auth: a device key (`Authorization: RainKey …`, D-64) or the
+`__session` cookie, which needs the CSRF value on a write. The `Bearer` API token was the third way
+in and went with email (D-76). All endpoints return RFC 7807 problem details on error.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/subscriptions` | none (rate limited) | `{email, lat, lon, radius_m?, threshold_mm_5min?, lead_time_minutes?}` → `202`. Always responds identically whether or not the address is already known (no account enumeration). Sends the confirmation mail. |
-| `GET` | `/confirm#t=…` | confirm token | Renders a button and changes nothing; the `POST` behind it activates the subscription and opens settings access (D-34): for push, it registers the device key the page sent (D-64) - or, without one, opens a settings session; for email, it issues the long-lived `api` token and opens a session. A current page's push confirmation must come from the browser holding that subscription (endpoint or `p256dh`), checked before the token is spent; a cross-site `POST` is refused. Single use, 24 h expiry. The page reads the token from the fragment and the handler takes no `token` parameter at all. |
-| `GET` | `/subscriptions/me` | api, session or device key | Current location + rule + state + last evaluation. Every authenticated answer is `Cache-Control: private, no-store`. |
-| `PUT` | `/subscriptions/me/location` | api | `{lat, lon}` → `204`. The endpoint the future mobile app calls. Applies D-17. Rate limited to 1 per 60 s. |
-| `PATCH` | `/subscriptions/me` | api or session | Update `radius_m`, `threshold_mm_5min`, `lead_time_minutes`. Absent fields are left alone. Bounds in §11.2. `min_gap_minutes`, quiet hours and `timezone` are still columns only. |
-| `POST` | `/manage/link` | none | Ask for a settings link on a confirmed channel. Always `202`, known address or not. Rate limited to 5/hour. |
+| `POST` | `/subscriptions` | none (rate limited) | `{lat, lon, endpoint, p256dh, auth}` - what `PushSubscription.toJSON()` gives the page - → `202`. Sends the confirmation notification; for an endpoint already confirmed it sends nothing and says `already_active`, which only the owner of that endpoint can learn. A `channel` field is accepted only as `"webpush"`, for pages loaded before D-76. |
+| `GET` | `/confirm#t=…` | confirm token | Renders a button and changes nothing; the `POST` behind it activates the subscription and opens settings access (D-34): for push, it registers the device key the page sent (D-64) - or, without one, opens a settings session. A current page's push confirmation must come from the browser holding that subscription (endpoint or `p256dh`), checked before the token is spent; a cross-site `POST` is refused. Single use, 24 h expiry. The page reads the token from the fragment and the handler takes no `token` parameter at all. |
+| `GET` | `/subscriptions/me` | session or device key | Current location + rule + state + last evaluation. Every authenticated answer is `Cache-Control: private, no-store`. |
+| `PUT` | `/subscriptions/me/location` | session or device key | `{lat, lon}` → `204`. Applies D-17. Rate limited to 1 per 60 s. |
+| `PATCH` | `/subscriptions/me` | session or device key | Update `radius_m`, `threshold_mm_5min`, `lead_time_minutes`. Absent fields are left alone. Bounds in §11.2. `min_gap_minutes`, quiet hours and `timezone` are still columns only. |
+| `POST` | `/manage/link` | none | `{address: <endpoint>}`: send a settings link to a confirmed push subscription. Always `202`, known endpoint or not. Rate limited to 5/hour per IP and per endpoint. |
 | `POST` | `/locate` | locate token | Resolves the reference a warning's tap target carries → `{located, lat, lon, radius_m}`, so the map can open on the place that warning was about. Stops verifying after `LOCATE_LINK_TTL_MINUTES` (60); an expired reference is answered exactly like a forged one, `{"located": false}` (D-38) |
 | `POST` | `/manage/session` | manage token | Spend the one-use link. With a device key from a current page (and the browser holding the push subscription): register it and answer `{"enrolled": key_id}`, no cookie (D-64). Otherwise set the session cookie and return the CSRF value. A push mismatch is `403 {"detail": {"error": "push_mismatch"}}` and leaves the link unspent; a cross-site `POST` is refused. |
 | `POST` | `/device-key/rotate` | device key only | `{device_key}` → `{rotated: key_id}`: replace the key that signed this request with a fresh one from the same browser. The page does it at most once a day (PLAN_DEVICE_KEY.md §4.5). |
-| `GET` | `/manage/csrf` | session | A fresh CSRF value for a session already held, so a page reload does not cost an email. |
+| `GET` | `/manage/csrf` | session | A fresh CSRF value for a session already held, so a page reload does not cost another link. |
 | `POST` | `/manage/extend` | session + CSRF | Renews the session to its full length, never past the wall the first link set (D-25). `409` once that wall is reached, which is the point of having one |
-| `POST` | `/subscriptions/me/pause` / `/resume` | api | Temporarily stop alerts without deleting data. |
-| `DELETE` | `/subscriptions/me` | api | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
-| `GET` | `/forecast?lat=&lon=&radius_m=` | api | The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
+| `POST` | `/subscriptions/me/pause` / `/resume` | - | Not built. Temporarily stop alerts without deleting data. |
+| `DELETE` | `/subscriptions/me` | session or device key | Hard-deletes subscriber, subscription, tokens, evaluations, notifications. Returns `204`. |
+| `GET` | `/forecast?lat=&lon=&radius_m=` | - | Not built. The 25 sampled values for an arbitrary point + a human summary (`"rain starting in ~20 min, light"`). Powers the app and manual testing. |
 | `GET` | `/overlays/timeline?past_hours=` | none | The full slider manifest, default `TIMELINE_DEFAULT_HOURS` (12), capped at `TIMELINE_PAST_HOURS` (48), floored at 1: `{now, latest_cycle, bounds:[[s,w],[n,e]], width, height, colorscale:[…], attribution, gaps:[…], frames:[{offset_minutes, valid_time, kind:"observed"｜"forecast", source_cycle, url}]}`. `offset_minutes` is negative for the past, ordered ascending. Cache-Control 60 s. |
 | `GET` | `/#l=…` | none (the reference is resolved by `POST /locate`) | The start page, which is the radar. With a warning's reference in the fragment it opens pinned on the warned location at zoom 11; without one, or once it has expired, on the country view (D-38) |
-| `GET` | `/unsubscribe#t=…` | unsubscribe token | Renders a button and changes nothing; the `POST` behind it deletes. The `List-Unsubscribe` header carries this same link (D-33). |
+| `GET` | `/unsubscribe#t=…` | unsubscribe token | Renders a button and changes nothing; the `POST` behind it deletes. The confirmation page shows this link; nothing else carries it since D-76. |
 | `GET` | `/healthz`, `/readyz` | none | Liveness / readiness. **Readiness = database reachable *and* its schema at the migration this code expects**, because new code on an old schema connects fine and then 500s on the first request touching what the migration added. `503` names the revision it found, the one it wanted, and the command. It does **not** keep such a revision from taking traffic: the startup probe is `/healthz` (D-51), so a revision whose migration has not run serves, and 500s. Run the migrate job after every apply that carries a migration (RUNBOOK §4). |
 | `GET` | `/metrics` | internal | Prometheus-format metrics (§15). |
 
-Rate limits (per IP and per email hash): `POST /subscriptions` 5/hour, `PUT location` 60/hour,
+Rate limits (per IP and per endpoint hash): `POST /subscriptions` 5/hour, `PUT location` 60/hour,
 `GET /forecast` 120/hour. Implemented in-process with a Postgres-backed counter; good enough at this
 scale, replaceable later.
 
@@ -806,18 +813,20 @@ scale, replaceable later.
 Server-rendered Jinja2, no build step, no SPA. Pages:
 
 - **`/` — subscribe.** Map (MapLibre on vector tiles since D-59; Leaflet on raster tiles as the fallback), "use my location" button (browser geolocation, §11.3),
-  draggable marker, email field, consent checkbox with a one-line purpose statement, submit.
+  draggable marker, consent checkbox with a one-line purpose statement, submit - which asks the
+  browser for notification permission and a push subscription.
   **Plus the rain timeline overlay + slider (D-20, D-22).**
-- **`/confirm`** — result page; shows the API token once with a copy button ("you will need this for
-  the app later"), and the manage link.
+- **`/confirm`** — confirms on open (`#a=`, D-36), registers the device key, and links to the
+  settings and to `/unsubscribe`. (It once showed the email API token; D-64 and D-76 removed it.)
 - **Settings — on `/`, below the map (D-67).** Threshold, lead time, radius and location, the last
   pickable on the start page's map, which then centres on the stored point at zoom 11 or closer,
   with the radius drawn as a circle and the radar loop underneath. Shown when this browser proves
-  a subscription: a device key, a magic link, or an email session (§11.2). `/manage` is gone. Pause/resume is still not built; delete is.
-- **`/unsubscribe`** — confirmation of one-click unsubscribe.
+  a subscription: a device key, or a magic link and the session it opens (§11.2). `/manage` is gone. Pause/resume is still not built; delete is.
+- **`/unsubscribe`** — confirmation of the unsubscribe link from the confirmation page.
 - **`/privacy`** — §13. There is **no `/attribution` page** and none is needed: §4.2 asks for the
-  credit on the map page, the privacy page and in every alert, and the footer is on every page
-  while `ATTRIBUTION` is in every message. A page would be one more place for the same sentence
+  credit on the map page, the privacy page and in every alert, and the footer is on every page.
+  (`ATTRIBUTION` was in every mail; a notification has no room for it, and the map a warning opens
+  carries it.) A page would be one more place for the same sentence
   to drift out of date. If a paid tile provider or a vendored library ever needs crediting too,
   that is when a page earns its place.
 
@@ -887,7 +896,7 @@ the plan — how many cycles, how long, roughly how many MB — and asks before 
 nobody should learn the size of a burst by watching a log scroll.
 
 Three things it deliberately does not do. It **never evaluates alerts**: backfilled cycles are
-history, and warning about them would mail every subscriber about rain that stopped hours ago,
+history, and warning about them would notify every subscriber about rain that stopped hours ago,
 once per cycle — `fetch_missing` takes no notifier at all, which is the cheapest way to guarantee
 that. It **never retries a 404**: a cycle past DWD's retention window is counted and skipped, and
 asking four more times would not bring it back. And it **refuses a file whose header disagrees
@@ -1088,8 +1097,7 @@ this order):
 3. A cookie session: the settings with a countdown.
 
 Failing all three, the page shows state B when this browser holds a push subscription (one link to
-this browser registers a key, so the link step happens once), else the signup - which, where email
-is on, offers "Schon per E-Mail angemeldet?" to request a link.
+this browser registers a key, so the link step happens once), else the signup.
 
 `POST /manage/link` answers `202` whether or not the address is known, and sends nothing to an
 **unconfirmed** subscriber - confirmation is what proves the channel reaches the person, and a
@@ -1195,31 +1203,31 @@ class Notifier(Protocol):
     def send(self, message: OutboundMessage) -> DeliveryResult: ...
 ```
 
-Adapters: `console` (dev, prints), `smtp` (generic), `brevo`/`mailgun`/`sendgrid` (HTTP API, default
-in prod), `push` (**stub**, raises `NotImplementedError` — D-15). Selected by `NOTIFIER` env var.
+Adapters, selected by `NOTIFIER`: `webpush` (production; `push` is an alias), `console` (dev,
+prints) and `file` (dev, writes each message to `OUTBOX_DIR` as text, which `rainalert outbox`
+prints). A `webpush` that cannot be built - no VAPID subject, a missing or malformed key - becomes
+`UnavailableNotifier`, which fails every send with the reason rather than stopping the process
+(D-76). The SMTP adapter, `RoutingNotifier` and `NOTIFIER=auto`/`smtp` were removed with email.
 
-Alert mail:
-- Subject: `Regen in ~20 Minuten (Musterstadt)` — lead time and a place name resolved once at
-  subscribe time (reverse geocode is optional; falls back to coordinates).
-- Body (text + minimal HTML): predicted start time (local), expected intensity class, the 30-minute
-  series in a compact line, the map link, the data timestamp, the DWD attribution, and the
-  unsubscribe link.
-- Headers: `List-Unsubscribe` (the same fragment link as in the body) and
-  `Auto-Submitted: auto-generated`. **Not** `List-Unsubscribe-Post`: see D-33 for why one-click
-  was removed rather than fixed, and Q-13 for what bringing it back would take.
-- Tap target (push only, `click_url`): `/#l=<locate token>` — the radar, opened on the place
-  the warning was about (D-38). The coordinates are **not** in the link: a warning stays in a
-  notification list for good, and a screenshot of one carrying decimal degrees would say more
-  than the message does, which names a time and an intensity but never a place. The reference
-  stops resolving after `LOCATE_LINK_TTL_MINUTES` and the map then opens on the country view.
-  Not put in the mail body: email ignores `click_url`, and a body is forwarded far more often
-  than a notification is.
-- Deliverability: SPF + DKIM + DMARC on the sending domain are a **hard prerequisite** for M6; without
-  them these mails land in spam and the whole service is pointless.
+Every message is built in `api/messages.py` as an `OutboundMessage`: endpoint, RFC 8291 keys (both
+required, so a builder that forgets them fails at construction), title, body, and optionally
+`click_url`, TTL, urgency and tag.
 
-**Push (W3C Web Push), replaced ntfy 2026-09-27 (D-45).** `NOTIFIER=auto` posts an encrypted
-notification to the push endpoint a browser issued, instead of sending mail. The original reason
-holds and is about the product rather than convenience: a warning is only useful before the rain,
+The warning:
+- Title `Regen in etwa 20 Minuten`, or `Es regnet jetzt` (D-69). Body: predicted start time (local),
+  intensity class, and the radar time the decision was made from. No URL: nothing in a notification
+  shade linkifies one.
+- Tap target (`click_url`): `/#l=<locate token>` — the radar, opened on the place the warning was
+  about (D-38). The coordinates are **not** in the link: a warning stays in a notification list
+  for good, and a screenshot of one carrying decimal degrees would say more than the message does,
+  which names a time and an intensity but never a place. The reference stops resolving after
+  `LOCATE_LINK_TTL_MINUTES` and the map then opens on the country view.
+- TTL until the rain it announces (D-70), tag `rainalert-alert` so a newer warning replaces the
+  older one.
+
+**Push (W3C Web Push), replaced ntfy 2026-09-27 (D-45).** `NOTIFIER=webpush` (`auto` until D-76)
+posts an encrypted notification to the push endpoint a browser issued, instead of sending mail.
+The original reason holds and is about the product rather than convenience: a warning is only useful before the rain,
 email latency is unpredictable - usually seconds, sometimes minutes, and greylisting can cost five -
 and a fifteen-minute lead time does not survive that.
 
@@ -1243,10 +1251,10 @@ encryption can hide, is the endpoint, the timing and the size of each message. T
 nothing: a notification arriving says it is about to rain where this subscriber is, which is a
 coarse signal about their location. The location itself is never transmitted.
 
-*Confirmation still happens, for the reason it always did.* On email it proves the person filling
-the form controls the address, which is what stops the service being a mail relay. On web push there
-is no third party to protect - the browser handed us its own endpoint. What the confirmation proves
-instead is that the channel reaches them, and there is *more* of that chain to get wrong here, not
+*Confirmation still happens.* On email it proved the person filling the form controlled the
+address, which is what stopped the service being a mail relay. On web push there is no third party
+to protect - the browser handed us its own endpoint. What the confirmation proves instead is that
+the channel reaches them, and there is *more* of that chain to get wrong here, not
 less: a service worker that fails to install, a payload the browser refuses, a permission granted
 and revoked before the first send. Each leaves a subscription that looks healthy from the database
 and shows nothing on the device. A warning that silently goes nowhere is worse than none.
@@ -1263,18 +1271,21 @@ browser all revoke the subscription, and none of them reaches this service. A 40
 push service is the only signal, and it arrives only when something is sent - so the weekly
 liveness notification exists to make sure something eventually is (D-46).
 
-Transactional mails: confirmation (double opt-in), deletion confirmation. No marketing mail, ever.
+Besides warnings: the confirmation (double opt-in), the settings link, the deletion receipt and the
+liveness notification (D-46). Nothing promotional, ever.
 
 ---
 
 ## 13. Security, privacy, GDPR
 
-The service processes **email address + precise location** of identifiable people in Germany. Even as
-a private project this is personal data under GDPR.
+The service processes **a browser's push endpoint + precise location** of identifiable people in
+Germany - no name and no email address (D-76). Even as a private project this is personal data
+under GDPR.
 
 - **Legal basis:** consent (Art. 6(1)(a)), obtained via double opt-in; the confirmation timestamp and
   source IP hash are the consent record.
-- **Data minimisation:** store only email, coordinates, rule settings, and the alerts actually sent.
+- **Data minimisation:** store only the push endpoint and keys, coordinates, rule settings, and the
+  alerts actually sent.
   **Coordinates are rounded to four decimals (~11 m) at the API edge**, in the request models, so
   no route can store more by accident. The service samples a radius mask on a 1 km radar grid, so
   even 100 m cannot change an answer - the seven decimals a phone reports, or the six a mapping
@@ -1293,27 +1304,28 @@ a private project this is personal data under GDPR.
   (D-46) makes sure there is such a send within `webpush_liveness_days` even in a dry spell.
   *Corrected 2026-10-20:* this said subscriptions without a location update or login for 12 months
   were purged after a warning mail. Nothing implements that, and the privacy page never promised
-  it; an email subscriber stays until they unsubscribe.
+  it.
 - **Transport:** HTTPS only, HSTS, secure cookies (`SameSite=Lax`), CSP without inline scripts except
   a nonce for the map bootstrap.
 - **Tokens:** 32 bytes from `secrets.token_urlsafe`, stored only as SHA-256; confirm tokens single-use
-  with 24 h expiry; api tokens revocable; constant-time comparison.
-- **Abuse:** subscribe endpoint is rate limited and only ever sends mail to an address after the
-  double opt-in, so it cannot be used as a mail relay.
+  with 24 h expiry; constant-time comparison. No long-lived bearer token exists since D-76.
+- **Abuse:** the subscribe endpoint is rate limited per IP and per endpoint, accepts only endpoints
+  of the known push services (an SSRF guard, §12), and sends nothing but the confirmation before
+  the double opt-in.
 - **Secrets** in Secret Manager, never in the repo; `.env.example` holds names only.
-- **Logging:** never log full email addresses or exact coordinates; log `subscriber_id` and
+- **Logging:** never log push endpoints or exact coordinates; log `subscriber_id` and
   coordinates rounded to 2 decimals (~1 km) instead.
-- **Consent text is versioned and per channel.** `consent_text_version` records which wording was
-  agreed to, so a record still means something after the text is edited (Art. 7(1)) - it must be
-  bumped whenever that text changes. Since M5 there are **two wordings per version**, one naming
-  an email address and one a push topic, because they describe different data; the subscriber's
-  `channel` is stored alongside, so channel + version identifies exactly what was on screen
-  without a second column. The signup note also stopped claiming that nothing is stored before
-  confirmation: a `pending` row exists from the moment of signup and is deleted after
-  `unconfirmed_purge_hours`, which is what the privacy page had always said.
+- **Consent text is versioned.** `consent_text_version` records which wording was agreed to, so a
+  record still means something after the text is edited (Art. 7(1)) - it must be bumped whenever
+  that text changes. From M5 until D-76 there were two wordings per version, one naming an email
+  address and one the push address, told apart by the stored channel; there is one now, the push
+  one, and no email subscriber's record is left (migration `e5b2c8d4f1a6`). The signup note also
+  stopped claiming that nothing is stored before confirmation: a `pending` row exists from the
+  moment of signup and is deleted after `unconfirmed_purge_hours`, which is what the privacy page
+  had always said.
 
-**Deferred until a public launch (D-18):** Impressum (§5 TMG/DDG) and the
-Auftragsverarbeitungsvertrag with the mail provider. Tracked as **Q-2**. The full
+**Deferred until a public launch (D-18):** Impressum (§5 TMG/DDG) and the processor agreements
+(Google's CDPA is the only one left without a mail provider). Tracked as **Q-2**. The full
 Datenschutzerklärung is done (D-72; the controller's name and address are `PRIVACY_CONTROLLER`), and
 no consent banner is needed: the third-party tiles set no cookies and nothing the site stores in the
 browser needs consent.
@@ -1340,7 +1352,6 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 | `PLAUSIBILITY_MAX_MM_5MIN` | `40` | national max above this gates the cycle |
 | `IMPLAUSIBLE_RISE_PP` | `20` | wet-share rise that sets a cycle aside as corrupt; 0 turns it off (§9, D-70) |
 | `ALERT_CAP_PER_SUBSCRIPTION_PER_DAY` | `24` | rain notifications per subscription per rolling 24 h (§9) |
-| `EMAIL_ALERT_CAP_PER_DAY` | `300` | warning mails across all subscriptions per rolling 24 h (§9) |
 | `DELIVERY_CONCURRENCY` | `32` | push messages sent at once (D-70) |
 | `RAW_RETENTION_HOURS` | `48` | GCS lifecycle (D-7) |
 | `EVALUATION_RETENTION_HOURS` | `48` | purge of the `evaluations` debug log (D-23) |
@@ -1354,8 +1365,9 @@ All configuration via environment variables, parsed by a single pydantic `Settin
 | `DRY_CLEAR_MINUTES` | `30` | `RAINING → DRY` |
 | `WARNED_RETRACT_CYCLES` | `3` | `WARNED → DRY` |
 | `MISSING_FRACTION_LIMIT` | `0.30` | data quality gate |
-| `NOTIFIER` | `console` | `console｜smtp｜brevo｜mailgun｜sendgrid｜push` |
-| `MAIL_FROM`, `MAIL_API_KEY` | — | provider credentials |
+| `NOTIFIER` | `console` | `console｜file｜webpush` (`push` is an alias); production sets `webpush` |
+| `OUTBOX_DIR` | — | where `NOTIFIER=file` writes (`./var/outbox` when unset) |
+| `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | — | the web push signing key and the operator contact in it (§12) |
 | `PUBLIC_BASE_URL` | — | link generation |
 | `PRIVACY_CONTROLLER` | — | name and postal address of the controller, shown on the privacy page (D-72) |
 | `SECRET_KEY` | — | token/HMAC signing |
@@ -1424,7 +1436,7 @@ Unit tests must run **offline** and fast. No test ever touches `opendata.dwd.de`
 5. **Politeness tests.** HTTP mock asserting: one GET per cycle, conditional headers sent, backoff
    sequence on 429/503, attempt cap, circuit breaker, budget guard.
 6. **Idempotency test.** Run the pipeline twice on the same cycle → one `radar_cycles` row, one
-   `evaluations` row per subscription, one mail.
+   `evaluations` row per subscription, one notification.
 7. **API tests.** Double opt-in flow end to end with the console notifier; token expiry/single use;
    enumeration-safe responses; deletion cascades.
 8. **Rendering test.** Overlay PNG has expected size/bounds; colour scale maps known values;
@@ -1469,9 +1481,9 @@ RainForecastWarning/
       plausibility.py       # wet-share check on each cycle (D-70)
       dispatcher.py         # queue + deliver, caps, push concurrency
     notify/
-      base.py console.py smtp.py webpush.py routing.py ...   # §12
+      base.py console.py file.py webpush.py   # §12
     api/
-      app.py ratelimit.py mail.py metrics.py templates/ static/
+      app.py ratelimit.py messages.py metrics.py templates/ static/
     jobs/
       ingest.py             # the Cloud Run job entrypoint (§6), incl. housekeeping (D-73)
       liveness.py           # weekly push liveness ping and the deletions it triggers (D-46)
@@ -1535,7 +1547,7 @@ the first real 25-frame archive the decoder has ever seen.
 the per-cycle numbers go to structured logs); the GCS store is written but unexercised, there being
 no bucket yet (M6); Alembic arrives with M3, when there is more than one table to migrate.
 
-**M3 — subscriptions + mail.** ✅ *deployed. Push rather than mail is the live channel; the mail path is code-complete and unexercised (no `smtp_host` configured)*
+**M3 — subscriptions + mail.** ✅ *deployed. Push replaced mail as the live channel (D-45), and the mail path, never configured in production, was removed (D-76). What follows is the milestone as it was.*
 Schema and Alembic migrations, API (§10) minus `/forecast` and `/overlays`, double opt-in,
 subscribe/confirm/unsubscribe/privacy pages, `Notifier` adapters, rate limits, deletion. 98 tests.
 Verified end to end against a live server: subscribe → confirmation mail → GET leaves the state
@@ -1548,14 +1560,14 @@ browser-geolocation button; rule parameters exist as columns and API fields but 
 (D-14); `PATCH /subscriptions/me` and pause/resume are not implemented yet, and neither is the
 `/manage` page - changing a location is an API call until it is.
 
-**Delivery is configuration, not code (Q-4).** Every provider worth using — Brevo, Mailgun,
+**Delivery is configuration, not code (Q-4; moot since D-76).** Every provider worth using — Brevo, Mailgun,
 SendGrid, Postmark, SES, or an ordinary mailbox — speaks SMTP, so the SMTP adapter covers all of
 them and choosing one is a matter of host, port and credentials. A provider's HTTP API can be added
 behind the same `Notifier` protocol later if its delivery telemetry justifies the coupling. The
 `console` and `file` adapters make the whole opt-in flow testable without sending anything.
 
-**Domains are configuration too (Q-1).** `PUBLIC_BASE_URL` and `MAIL_FROM` are the only places a
-hostname appears; every link in every mail is built from the former. The defaults are working
+**Domains are configuration too (Q-1).** `PUBLIC_BASE_URL` is the only place a hostname appears
+(`MAIL_FROM` was the other, until D-76); every link in every message is built from it. The defaults are working
 localhost placeholders, so nothing is blocked on choosing a domain.
 
 **M4 — alerting.** ✅ *deployed 2026-10. Caps from F-15/F-2 landed 2026-10-04*
@@ -1614,13 +1626,14 @@ the first build to need fixing; they are not "verified working".
 *Still blocked on prerequisites*, in the order they bite: the domain (Q-1), the mail provider and
 its credentials (Q-4), SPF/DKIM/DMARC on the sending domain, and the provider's DPA (Q-9). Only
 the last is a legal rather than technical blocker, and it applies from the first friend's address.
+*(Since D-76 only the domain is left: there is no mail provider to choose, configure or contract.)*
 
 *Known gaps, listed in the runbook:* the cycle-age SLI is not on a Cloud Monitoring *dashboard* (it
 lives in the database, which Monitoring cannot see) — but it is alerted, by logging it from the
 ingest job and filtering the words (D-50); the map tiles are still third-party, under the OSMF's vector tile policy (best effort, no SLA, may block without notice; D-61) - the OSMF's vector server, which sees each visitor's IP and map area, disclosed on the privacy page (D-59); the map libraries are vendored; Cloud Run's
 request logs still carry confirm and unsubscribe tokens for 30 days by default.
 
-**M7 — later (not v1).** Mobile app + FCM/APNs, user-editable rule UI, "all clear" mails, multiple
+**M7 — later (not v1).** Mobile app + FCM/APNs, user-editable rule UI, "all clear" notifications, multiple
 locations per subscriber, additional countries/sources.
 
 ---
@@ -1667,16 +1680,16 @@ owns them:
 | Q-1 | Domain name and sending domain (needed for links, `User-Agent` contact, SPF/DKIM/DMARC) | M3 |
 | Q-2 | Confirm the private-audience assumption (D-18). Going public adds Impressum, Datenschutzerklärung, provider DPA | before any public link |
 | ~~Q-3~~ | **Resolved 2026-09-16: Cloud SQL `db-f1-micro` in `europe-west3` for production, Neon or local Postgres for dev/CI.** Reasoning in §6.3 — the 5-minute cadence exhausts Neon's free CU-hour allowance around day 16 of each month, and Neon would add a second, US-headquartered processor for the table holding email plus home coordinates | done |
-| Q-4 | Mail provider account: Brevo vs Mailgun vs SendGrid (all have a usable free tier) | M3 |
+| ~~Q-4~~ | **Moot since D-76: there is no email channel, so no mail provider.** Was: mail provider account, Brevo vs Mailgun vs SendGrid | done |
 | ~~Q-5~~ | **Resolved 2026-09-27: basemap.de Web Raster (BKG) is the default.** CC BY 4.0, no API key, no account, no quota, and — the property that decided it — no non-commercial clause, so it survives this service ever carrying ads. Germany only, which matches the DE1200 composite's own footprint; expanding past Germany is a radar-data problem (OPERA or per-country services) long before it is a basemap problem, so global coverage was not worth paying for. Reasoning and the alternatives in §11.1 (*Basemap tiles*) and docs/LOCAL.md §"Choosing a basemap" | done |
 | Q-14 | **Does the whole push flow work on a real Android phone, and on an iPhone with the site on the Home Screen?** Everything here is asserted against a mock transport and a simulated browser: the encryption round-trips, the payload and the service worker agree on their field names, and Chromium renders the pages. What none of that covers is a real push service actually delivering - permission prompt, service worker activation, a notification in the shade, the two action buttons drawing, and `pushsubscriptionchange` firing on a rotation. On iOS the extra step is the Home Screen install, which the page describes but nobody here has performed | before telling anyone it works |
 | Q-6 | Should raw archives be kept longer than 48 h — and become a permanent cold archive? They are the system of record (D-23), N-independent at ~500 GB/year, ≈ €2–4/month on Coldline, and the only thing that allows retroactively re-tuning thresholds against real weather. My recommendation: 48 h hot now, revisit once alerting is tuned | M2 |
 | Q-8 | Is 12 h the right past span, or would 24 h be more useful? Storage is negligible (~22 MB per 12 h); the real limits are DWD's own file retention and slider usability | M5 |
-| Q-9 | Accept the mail provider's DPA and Google's CDPA before the first friend subscribes (F-12). Ten minutes of clicking, and Art. 28 GDPR applies from the first address handed over — this is not launch paperwork | M3 |
+| Q-9 | Accept Google's CDPA before the first friend subscribes (F-12; the mail provider's DPA is moot since D-76). Ten minutes of clicking, and Art. 28 GDPR applies from the first address handed over — this is not launch paperwork | M3 |
 | Q-7 | Reverse geocoding for a friendly place name in the subject line — worth an extra dependency/service? | M4 |
 | ~~Q-11~~ | **Moot since D-45 (2026-09-27): there is no `ntfy://` link and no app to install.** What replaces it is narrower and still open as Q-14 | done |
 | ~~Q-12~~ | **Moot since D-45.** ntfy's `Actions` header is gone; the equivalent question - whether a notification action button renders and fires - is answered by the Notification API rather than by one app's docs, and `maxActions` reports what a browser will draw | done |
-| Q-13 | **Does email need RFC 8058 one-click unsubscribe, and on what terms?** It was removed rather than fixed (D-33) because it never worked; nothing sends bulk mail, and Gmail's and Yahoo's requirement starts at 5 000 messages a day. Bringing it back means two things together: a handler that reads the token from the query on `POST`, and a decision about what that exposes - deletion reachable by mail-client automation, which is F-4's worry one level up, against a token in a query string, which is D-26's. Neither is answerable before there is a sending domain | when email becomes a real channel, with Q-1 |
+| ~~Q-13~~ | **Moot since D-76: there is no email.** Was: **Does email need RFC 8058 one-click unsubscribe, and on what terms?** It was removed rather than fixed (D-33) because it never worked; nothing sends bulk mail, and Gmail's and Yahoo's requirement starts at 5 000 messages a day. Bringing it back means two things together: a handler that reads the token from the query on `POST`, and a decision about what that exposes - deletion reachable by mail-client automation, which is F-4's worry one level up, against a token in a query string, which is D-26's. Neither is answerable before there is a sending domain | done |
 | **Q-10** | **`PUBLIC_BASE_URL` must move to `https://` before anyone but the author subscribes.** It is deliberately `http://<the VM's IP>:8000` during development, which needs no code - every link in every message is built from it (§12). Two things are broken while it stays that way. The session cookie drops its `Secure` flag, by design, because a `Secure` cookie over http is silently discarded and login would appear broken - so the settings session travels in clear and anyone on the path can take it. And browsers refuse geolocation outside a secure context, so the locate control on both maps cannot work at all (§11.3). The tokens themselves no longer travel in clear: confirm, unsubscribe, the magic link and a warning's location reference all ride in the fragment (D-26), which the browser never sends. **This does not need Q-1.** Cloud Run serves https on its own generated hostname with a managed certificate, so deploying there and setting this to the `api_url` output resolves it; a domain only changes what the hostname reads like | before the first friend |
 
 ---
@@ -1689,12 +1702,12 @@ owns them:
 | Georeferencing off by a few cells | Warnings for the wrong place, undetectable by eye | Cross-check against wradlib at fixed reference points (§16.2) |
 | Nowcast skill decays with lead time | False alarms | 30 min default (D-13); verification job measures the real hit/false-alarm ratio; thresholds are per-subscription |
 | Radar outage read as "dry" | Missed warnings, wrong state transitions | `MISSING_FRACTION_LIMIT` gate (§9 step 0) |
-| Mail lands in spam | Service is useless | SPF/DKIM/DMARC as an M6 gate; transactional provider; RFC 8058 unsubscribe |
+| A push service refuses or silently drops our traffic | Nobody is warned | VAPID subject with a working contact (§12); `ALLOWED_PUSH_HOSTS` alert on an unknown service; liveness notification (D-46); delivery metrics (§15) |
 | Cloud Run job overruns the 5-minute budget as subscribers grow | Cycles skipped | `rainalert_pipeline_seconds` alert; split the overlay renderer out first (§6) |
 | A poisoned or corrupt upstream response suppresses everyone's alerts while monitoring stays green | Nobody is warned, and we do not find out | Plausibility gate and cycle status metric (§4.3.1, §15); staleness alone does not cover "fetched, parsed, meaningless" |
 | One unevaluatable subscription aborts every cycle | Permanent outage for all users from one bad row | Per-subscription fault isolation (§8 step 4); `OutsideGrid` covers every rejected coordinate |
 | Hammering DWD through a retry bug | Blocked by DWD, reputational | Attempt caps, backoff, circuit breaker, daily byte budget, idempotency (§4.3) |
-| Personal data leak (email + precise location) | GDPR incident | Minimisation, hashed tokens, rounded logs, hard delete (§13) |
+| Personal data leak (push endpoint + precise location) | GDPR incident | Minimisation, hashed tokens, rounded logs, hard delete (§13) |
 | 168 timeline frames overwhelm a phone on mobile data | Map page unusable where it matters most | Windowed lazy loading, no full preload, LRU eviction (§11.1) |
 | Per-subscriber time series outgrows the radar archive itself | DB cost scales with N × cycles for data that is ~99 % "nothing happened" | `evaluations` is a 48 h debug log; the permanent record is event-shaped (§8.1, D-23) |
 | DWD retains too little history for backfill | Timeline starts empty and fills over 12 h | M0 verifies actual retention; re-render from raw archives; purely cosmetic — alerting is unaffected |

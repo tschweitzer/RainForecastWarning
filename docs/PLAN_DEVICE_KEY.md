@@ -4,6 +4,10 @@ Status: **implemented 2026-10-09** (revision 3, with security review 3 folded in
 code differs from the text below, §14 says how and why. Scope: web push subscribers;
 email keeps its magic link and session. Would become DESIGN.md D-64 once agreed (D-63 is the mail cap).
 
+Since D-76 (2026-10-22) there is no email: what this plan says about email subscribers, their
+sessions and `mail.py` (now `api/messages.py`) is history. The cookie session it keeps for email
+remains for browsers without a device key.
+
 History: revision 1 replaced the push round trip with a key that opened the ordinary session
 (security review 1, §8). Revision 2 dropped the session for key holders and signed every request
 (§9; security review 2, §10). Revision 3 applies the product decisions and the infrastructure

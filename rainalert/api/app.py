@@ -2,13 +2,13 @@
 
 Shape notes that are security decisions rather than style:
 
-* Everything subscriber-scoped is addressed as ``/me`` and resolved from the bearer token. There is
-  no object id in any path, so the entire IDOR class does not exist.
-* ``POST /api/v1/subscriptions`` answers identically whether or not the address is known, so it
+* Everything subscriber-scoped is addressed as ``/me`` and resolved from the device key or the
+  session cookie. There is no object id in any path, so the entire IDOR class does not exist.
+* ``POST /api/v1/subscriptions`` answers identically whether or not the endpoint is known, so it
   cannot be used to test whether someone is subscribed.
-* Confirm and unsubscribe are **side-effect free on GET**. Mail scanners follow links; a
-  state-changing GET means the scanner consumes the token and the real user is told it is already
-  used, and on unsubscribe it would silently delete the account (SECURITY_REVIEW.md F-4).
+* Confirm and unsubscribe are **side-effect free on GET**. Link scanners and prefetching browsers
+  follow links; a state-changing GET means the token is consumed before the real user arrives, and
+  on unsubscribe it would silently delete the account (SECURITY_REVIEW.md F-4).
 """
 
 from __future__ import annotations
@@ -30,10 +30,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import (
     BaseModel,
     ConfigDict,
-    EmailStr,
     Field,
     field_validator,
-    model_validator,
 )
 from sqlalchemy import or_, select, update
 from sqlalchemy import text as sql_text
@@ -42,7 +40,7 @@ from sqlalchemy.orm import Session
 from rainalert import devicekeys
 from rainalert import subscriptions as svc
 from rainalert.api.assets import VersionedStaticFiles, static_url
-from rainalert.api.mail import (
+from rainalert.api.messages import (
     confirmation_message,
     deletion_receipt,
     manage_link_message,
@@ -56,11 +54,9 @@ from rainalert.coverage import coverage_note
 from rainalert.db.models import (
     PUSH_AUTH_MAX_LENGTH,
     PUSH_P256DH_MAX_LENGTH,
-    Channel,
     DeviceKey,
     Subscriber,
     Subscription,
-    TokenPurpose,
 )
 from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
@@ -82,8 +78,7 @@ from rainalert.tokens import (
 
 logger = logging.getLogger(__name__)
 
-#: Upper bound for anything that identifies a subscriber in a request body - a mailbox or a push
-#: endpoint. Shared so the subscribe route and the settings-link route cannot drift apart again; the
+#: Upper bound for a push endpoint in a request body. Shared so the subscribe route and the settings-link route cannot drift apart again; the
 #: column behind both is `Text`, so this is a request-size bound rather than a storage one.
 MAX_ADDRESS_LENGTH = 2048
 
@@ -179,16 +174,15 @@ class SubscribeRequest(BaseModel):
     # the database is re-evaluated every cycle forever (SECURITY_REVIEW.md F-3).
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
 
-    #: EmailStr also rejects RFC 2606 special-use domains (.invalid, .test, .localhost). That is
-    #: wanted: an address we can never deliver to is one we should never store, and a bounce we
-    #: can predict is a bounce we should not generate.
-    #: Required for email, absent for web push.
-    email: EmailStr | None = None
-    channel: Literal["email", "webpush"] = "email"
+    #: Accepted and ignored, so a page loaded before email was removed (D-76) - which still sends
+    #: it - keeps working through the deploy. Only "webpush" is accepted.
+    channel: Literal["webpush"] = "webpush"
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
 
-    #: The three values `PushSubscription.toJSON()` gives the page, for `channel="webpush"`.
+    #: The three values `PushSubscription.toJSON()` gives the page. All three are required: two of
+    #: them is a row that can be stored and never delivered to, which looks like a working
+    #: subscription from both ends.
     #: Capped at `MAX_ADDRESS_LENGTH`, the same constant `ManageLinkRequest.address` uses - the two
     #: must agree or a subscriber can exist who cannot reach their own settings.
     #:
@@ -196,7 +190,7 @@ class SubscribeRequest(BaseModel):
     #: applied in subscriptions.subscribe, because a URL rather than a length is what can hurt us.
     #: It is here to bound an unauthenticated request body, an order of magnitude above the ~250
     #: characters the real push services issue.
-    endpoint: str | None = Field(default=None, max_length=MAX_ADDRESS_LENGTH)
+    endpoint: str = Field(min_length=1, max_length=MAX_ADDRESS_LENGTH)
     #: Base64url, unpadded, as the browser produces them. 87 and 22 characters in practice. The
     #: bounds are loose enough that a padded or otherwise longer encoding of the same key is not
     #: refused here - the real check is whether they decode to a usable key at send time - but they
@@ -214,32 +208,12 @@ class SubscribeRequest(BaseModel):
     #: now compares bytes so that path is safe regardless, but a key outside base64url cannot be a
     #: browser's key under any encoding, and the honest answer to one is 422 rather than a silent
     #: mismatch.
-    p256dh: str | None = Field(
-        default=None, max_length=PUSH_P256DH_MAX_LENGTH, pattern=r"^[A-Za-z0-9_=-]+$"
+    p256dh: str = Field(
+        min_length=1, max_length=PUSH_P256DH_MAX_LENGTH, pattern=r"^[A-Za-z0-9_=-]+$"
     )
-    auth: str | None = Field(
-        default=None, max_length=PUSH_AUTH_MAX_LENGTH, pattern=r"^[A-Za-z0-9_=-]+$"
-    )
+    auth: str = Field(min_length=1, max_length=PUSH_AUTH_MAX_LENGTH, pattern=r"^[A-Za-z0-9_=-]+$")
 
     _round = field_validator("lat", "lon")(_round_coord)
-
-    @model_validator(mode="after")
-    def _address_matches_channel(self) -> SubscribeRequest:
-        if self.channel == "email":
-            if not self.email:
-                raise ValueError("email is required for the email channel")
-            if self.endpoint or self.p256dh or self.auth:
-                raise ValueError("the email channel does not take a push subscription")
-            return self
-        if self.email:
-            # Refused rather than ignored: silently dropping an address someone supplied is how
-            # they end up believing it was stored.
-            raise ValueError("the webpush channel does not take an email address")
-        if not (self.endpoint and self.p256dh and self.auth):
-            # All three or none. Two of them is a row that can be stored and never delivered to,
-            # which looks like a working subscription from both ends.
-            raise ValueError("webpush needs endpoint, p256dh and auth")
-        return self
 
 
 class LocationRequest(BaseModel):
@@ -283,11 +257,12 @@ class RotateKeyRequest(BaseModel):
 
 
 class ManageLinkRequest(BaseModel):
-    """Who to send a settings link to, in the same shape the subscribe form uses."""
+    """Which push subscription to send a settings link to."""
 
     model_config = ConfigDict(extra="forbid")
 
-    channel: Literal["email", "webpush"] = "email"
+    #: Accepted and ignored, as on `SubscribeRequest` (D-76).
+    channel: Literal["webpush"] = "webpush"
     #: The same bound as `SubscribeRequest.endpoint`, from the same constant.
     #:
     #: The bug was the *disagreement*: this was 2048 while `endpoint` was unbounded, so a browser
@@ -345,12 +320,12 @@ def create_app(
 
         The state change is already committed by this point, so raising here would 500 a request
         that actually succeeded - and on the subscribe path it would also leak, through the status
-        code, whether a mail was attempted at all. A failure is logged and counted; the address is
-        not logged.
+        code, whether a message was attempted at all. A failure is logged and counted; the endpoint
+        is not logged.
 
         `message` may also be a callable returning one, and on every path where the message is built
-        from request data it should be. Building is as failure-prone as sending: the builders format
-        an address the caller chose, and `OutboundMessage.__post_init__` rejects some of them. Built
+        from request data it should be. Building is as failure-prone as sending: the builders use
+        an endpoint the caller chose, and `OutboundMessage.__post_init__` rejects some of them. Built
         at the call site, that happened *outside* this try - which is how an endpoint containing a
         newline produced a 500 after `subscribe` had already committed, leaving a row nothing could
         later deliver to or delete. The endpoint check now refuses that input, and this makes the
@@ -370,24 +345,6 @@ def create_app(
         if not result.ok:
             logger.error("delivery failed: %s", result.error)
         return result.ok
-
-    def within_mail_budget(session: Session, channel: str) -> bool:
-        """Whether one more confirmation or settings-link *mail* may go out today.
-
-        `transactional_mail_cap_per_day` (config.py) is the only limit on these mails that does
-        not depend on the client IP, which a request can forge (SECURITY_REVIEW.md F-5, status
-        2026-10-09). Checked only when a mail would actually be sent, so refused and unknown
-        addresses do not use up the day. Past the cap the request still answers as usual - the
-        caller learns nothing - and the refusal is logged at error level, because it means either
-        an attack or a cap set too low, and both want a human.
-        """
-        cap = settings.transactional_mail_cap_per_day
-        if channel != Channel.EMAIL.value or not cap:
-            return True
-        if hit_and_check(session, "mail:transactional", cap, timedelta(days=1)):
-            return True
-        logger.error("transactional mail cap of %d per day reached; mail not sent", cap)
-        return False
 
     def seen(session: Session, subscriber_id) -> None:
         """Record that a person demonstrably read something from us - at most once a day.
@@ -426,7 +383,7 @@ def create_app(
         `Origin: null` even on a same-origin POST (found in Chromium while testing this). Only
         where it is missing - browsers from before 2021-2023 - is `Origin` consulted, and there
         `null` has to be let through with it; such a request still needs a token that arrived by
-        push or mail.
+        push.
         """
         fetch_site = request.headers.get("sec-fetch-site")
         if fetch_site is not None:
@@ -567,10 +524,10 @@ def create_app(
             finally:
                 probe.close()
         except Exception:
-            # Logged rather than raised: the map, the radar and the email channel all work without
-            # push, and a service that refuses to start because one channel is misconfigured takes
-            # the others down with it.
-            logger.exception("VAPID key unusable - the push channel is disabled")
+            # Logged rather than raised: the map, the radar and the privacy page all work without
+            # push, and a service that refuses to start because the key is misconfigured takes them
+            # down with it. Signing up is what stops working, and the page says so.
+            logger.exception("VAPID key unusable - signing up and sending are disabled")
 
     # ---- health ---------------------------------------------------------------------------
     @app.get("/healthz", include_in_schema=False)
@@ -632,15 +589,6 @@ def create_app(
         request: Request,
         session: Session = Depends(get_session),
     ) -> JSONResponse:
-        if payload.channel == "email" and not settings.email_channel_enabled:
-            # Refused before the rate limiter, and before anything is stored: the answer does
-            # not depend on who is asking, and an address accepted here would wait forever for
-            # a confirmation nothing can send.
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "E-Mail ist derzeit nicht verfügbar – bitte Push aufs Handy wählen.",
-            )
-
         ip = client_ip(request, settings.trusted_proxy_hops)
         within_ip = hit_and_check(
             session,
@@ -648,34 +596,23 @@ def create_app(
             settings.subscribe_limit_per_hour,
             timedelta(hours=1),
         )
-        # Per-address as well as per-IP. For email this is what stops one mailbox being mailed
-        # repeatedly from many IPs. For web push the endpoint plays the same role: a browser
-        # re-subscribing is normal, a thousand POSTs naming one endpoint is not - and an endpoint
-        # is the only per-subscriber thing a push flood would have in common.
-        within_address = True
-        if payload.email:
-            within_address = hit_and_check(
-                session,
-                f"subscribe:email:{hash_address('email', payload.email).hex()}",
-                settings.subscribe_limit_per_hour,
-                timedelta(hours=1),
-            )
-        elif payload.endpoint:
-            within_address = hit_and_check(
-                session,
-                f"subscribe:webpush:{hash_address('webpush', payload.endpoint).hex()}",
-                settings.subscribe_limit_per_hour,
-                timedelta(hours=1),
-            )
-        if not (within_ip and within_address):
+        # Per endpoint as well as per IP: a browser re-subscribing is normal, a thousand POSTs
+        # naming one endpoint is not - and an endpoint is the only per-subscriber thing a push
+        # flood would have in common.
+        within_endpoint = hit_and_check(
+            session,
+            f"subscribe:webpush:{hash_address(payload.endpoint).hex()}",
+            settings.subscribe_limit_per_hour,
+            timedelta(hours=1),
+        )
+        if not (within_ip and within_endpoint):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many attempts, try later")
 
         try:
             result = svc.subscribe(
                 session,
                 settings,
-                channel=Channel(payload.channel),
-                address=payload.email or payload.endpoint,
+                endpoint=payload.endpoint,
                 push_p256dh=payload.p256dh,
                 push_auth=payload.auth,
                 lat=payload.lat,
@@ -689,43 +626,26 @@ def create_app(
             logger.warning("subscribe refused: %s", exc)
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-        if result.confirm_token and result.address and within_mail_budget(session, payload.channel):
+        if result.confirm_token and result.address:
             subscriber = session.get(Subscriber, result.subscriber_id)
-            deliver(
-                lambda: confirmation_message(
-                    settings,
-                    result.address,
-                    result.confirm_token,
-                    channel=payload.channel,
-                    subscriber=subscriber,
-                )
-            )
+            deliver(lambda: confirmation_message(settings, subscriber, result.confirm_token))
 
-        if payload.channel == "webpush":
-            if result.already_active:
-                # This browser was already confirmed, so no test notification is coming and the
-                # spinner would wait for one forever. The location has been moved by `subscribe`
-                # (the caller owns this endpoint, so the request is theirs to make), which is what
-                # somebody re-signing up from the front page almost always means.
-                return JSONResponse(
-                    {
-                        "status": "schon angemeldet - Ort aktualisiert",
-                        "channel": "webpush",
-                        "already_active": True,
-                    },
-                    status_code=status.HTTP_202_ACCEPTED,
-                )
-            # Nothing to hand back. Under ntfy this returned the topic, a QR code and two links,
-            # because the subscriber could not be reached until they had subscribed their app to a
-            # name only we knew. A browser needs none of that: it already holds the subscription it
-            # just gave us, and the confirmation is on its way to it. The page's job after this is
-            # to wait for the notification, not to display a credential.
+        if result.already_active:
+            # This browser was already confirmed, so no test notification is coming and the
+            # spinner would wait for one forever. The location has been moved by `subscribe`
+            # (the caller owns this endpoint, so the request is theirs to make), which is what
+            # somebody re-signing up from the front page almost always means.
             return JSONResponse(
-                {"status": "warte auf die Benachrichtigung", "channel": "webpush"},
+                {"status": "schon angemeldet - Ort aktualisiert", "already_active": True},
                 status_code=status.HTTP_202_ACCEPTED,
             )
-        # Identical response either way: no account enumeration.
-        return JSONResponse({"status": "check your email"}, status_code=status.HTTP_202_ACCEPTED)
+        # Nothing to hand back: the browser already holds the subscription it just gave us, and the
+        # confirmation is on its way to it. The page's job after this is to wait for the
+        # notification. The same answer whether the endpoint was new, pending or held by someone
+        # who could not prove it: no account enumeration.
+        return JSONResponse(
+            {"status": "warte auf die Benachrichtigung"}, status_code=status.HTTP_202_ACCEPTED
+        )
 
     def page(request: Request, template: str, extra: dict | None = None, **kwargs):
         """Render a page with the context every page needs.
@@ -769,7 +689,8 @@ def create_app(
     # ---- confirm --------------------------------------------------------------------------
     @app.get("/confirm", response_class=HTMLResponse, include_in_schema=False)
     def confirm_page(request: Request) -> HTMLResponse:
-        """Renders a button. Changes nothing - a mail scanner may follow this freely.
+        """Confirms from script on open, and changes nothing by itself - a link scanner or a
+        prefetching browser may follow this freely.
 
         Takes no `token` parameter: the page reads it from the fragment, and accepting one from
         the query string as well would leave the shape D-26 exists to remove still working, and
@@ -823,7 +744,6 @@ def create_app(
                 },
                 status_code=400,
             )
-        subscriber = session.get(Subscriber, result.subscriber_id)
         # No anchor notification any more (D-45). It existed because an ntfy topic was an
         # unmemorable string the reader had to keep somewhere, so the message itself was the
         # bookmark - and a web push notification cannot be a bookmark, because it is gone the
@@ -834,12 +754,7 @@ def create_app(
         response = page(
             request,
             "confirmed.html",
-            {
-                "api_token": result.api_token,
-                "unsubscribe_token": result.unsubscribe_token,
-                "channel": subscriber.channel.value if subscriber else Channel.EMAIL.value,
-                "key_id": result.key_id,
-            },
+            {"unsubscribe_token": result.unsubscribe_token, "key_id": result.key_id},
         )
         # Confirming *is* the proof the settings page asks for. Reaching this line means a token
         # we sent to the channel came back, which is exactly what redeeming a magic link proves -
@@ -921,29 +836,23 @@ def create_app(
     ) -> tuple[Subscriber, Session]:
         """Two credentials, one identity.
 
-        A `Bearer` token is the long-lived key handed out at confirmation, for an app. The
-        settings-page session is a signed cookie that expires in half an hour. They authenticate
-        the same subscriber and reach the same endpoints; what differs is CSRF, because only one
-        of them is sent by the browser automatically. A bearer token has to be attached by script
-        that has already read it, so a cross-site request cannot carry it. A cookie rides along on
-        any request the browser makes, so a cookie-authenticated **write** must also present the
-        CSRF value from the page (F-16).
+        The device key (D-64) signs each request itself. The settings-page session is a signed
+        cookie that expires in half an hour - the fallback for a browser without a key. They
+        authenticate the same subscriber and reach the same endpoints; what differs is CSRF. A
+        signature has to be computed by script that holds the key, so a cross-site request cannot
+        carry one. A cookie rides along on any request the browser makes, so a cookie-authenticated
+        **write** must also present the CSRF value from the page (F-16).
+
+        (A third, the long-lived `Bearer` API token, was only ever issued to email subscribers and
+        went with them, D-76.)
         """
         header = request.headers.get("authorization", "")
         if header.startswith("RainKey "):
             return key_subscriber(request, session, header, body or b""), session
-        if header.startswith("Bearer "):
-            try:
-                subscriber = svc.resolve_token(session, token=header[7:], purpose=TokenPurpose.API)
-            except svc.ValidationError as exc:
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised") from exc
-            return subscriber, session
 
         claims = session_claims(request)
         if claims is None:
-            if header:
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not authorised")
 
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             presented = verify_csrf_token(request.headers.get(CSRF_HEADER, ""), settings.secret_key)
@@ -981,9 +890,9 @@ def create_app(
     def read_me(current=Depends(current_subscriber)) -> dict:
         subscriber, session = current
         sub = session.query(Subscription).filter_by(subscriber_id=subscriber.id).one()
+        # No endpoint in the answer: 200-odd characters of URL that identify nothing to the reader,
+        # and a value this page has no use for (D-76 removed the email address shown here).
         return {
-            "channel": subscriber.channel.value,
-            "address": subscriber.address,
             "status": sub.status.value,
             "lat": sub.lat,
             "lon": sub.lon,
@@ -1047,12 +956,11 @@ def create_app(
     @app.delete("/api/v1/subscriptions/me", status_code=status.HTTP_204_NO_CONTENT)
     def delete_me(current=Depends(current_subscriber)) -> Response:
         subscriber, session = current
-        address, channel = subscriber.address, subscriber.channel.value
-        # Read before the delete: the receipt is the last thing this channel ever gets, and after
-        # `delete_subscriber` the row it needs the encryption keys from is gone.
-        keys = push_keys(subscriber)
+        # Read before the delete: the receipt is the last thing this browser ever gets, and after
+        # `delete_subscriber` the row it needs the endpoint and the encryption keys from is gone.
+        endpoint, keys = subscriber.address, push_keys(subscriber)
         svc.delete_subscriber(session, subscriber)
-        deliver(lambda: deletion_receipt(settings, address, channel=channel, push=keys))
+        deliver(lambda: deletion_receipt(settings, endpoint, keys))
         response = Response(status_code=status.HTTP_204_NO_CONTENT)
         # The session cookie goes with the subscriber. It is checked without a database lookup
         # (`session_claims`), so left behind it went on opening "a session" for a row that no
@@ -1115,12 +1023,11 @@ def create_app(
     def request_manage_link(
         payload: ManageLinkRequest, request: Request, session: Session = Depends(get_session)
     ) -> dict:
-        """Send a settings link to a channel that has already been confirmed.
+        """Send a settings link to a push subscription that has already been confirmed.
 
-        Always 202, whether or not the address is known. The endpoint takes an address someone
-        typed and sends a message to it, so telling the caller which addresses exist would turn
-        the settings page into a subscriber-list oracle - and the addresses are people's
-        mailboxes.
+        The fallback route into the settings for a browser without a device key (D-64). Always 202,
+        whether or not the endpoint is known: telling the caller which endpoints exist would turn
+        this into a subscriber-list oracle.
         """
         ip = client_ip(request, settings.trusted_proxy_hops)
         within_ip = hit_and_check(
@@ -1129,51 +1036,35 @@ def create_app(
             settings.manage_link_limit_per_hour,
             timedelta(hours=1),
         )
-        # Per-address as well as per-IP, exactly as POST /subscriptions does it.
+        # Per endpoint as well as per IP, exactly as POST /subscriptions does it.
         #
-        # This route had only the IP limiter, while `manage_link_limit_per_hour` described itself as
-        # "deliberately as tight as signing up: it is the same mail-bomb lever as POST
-        # /subscriptions". It was not as tight, and the missing half is the half that survives IP
-        # rotation. Demonstrated: 40 POSTs from 40 addresses in `X-Forwarded-For`, all 202, 40
+        # This route once had only the IP limiter, and the missing half is the half that survives
+        # IP rotation. Demonstrated: 40 POSTs from 40 addresses in `X-Forwarded-For`, all 202, 40
         # messages delivered to one subscriber.
         #
         # The flood is the obvious harm and the smaller one. `issue_manage_token` deletes the
-        # subscriber's previous *unused* token, so a stranger who knows an address can invalidate
-        # that person's real settings link as fast as they can request one - and for a push
-        # subscriber the settings page is the only route to "Abmelden und meine Daten löschen".
-        # An attacker could hold someone's deletion right shut indefinitely.
+        # subscriber's previous *unused* token, so a stranger who knows an endpoint can invalidate
+        # that person's real settings link as fast as they can request one - and the settings page
+        # is the route to "Abmelden und meine Daten löschen". An attacker could hold someone's
+        # deletion right shut indefinitely.
         #
-        # Keyed on the hash of whatever was typed, so it is not an oracle: an unknown address is
+        # Keyed on the hash of whatever was sent, so it is not an oracle: an unknown endpoint is
         # counted and refused identically to a known one, and the route still answers 202 either way.
         within_address = hit_and_check(
             session,
-            f"manage:address:{hash_address(payload.channel, payload.address).hex()}",
+            f"manage:address:{hash_address(payload.address).hex()}",
             settings.manage_link_limit_per_hour,
             timedelta(hours=1),
         )
         if not (within_ip and within_address):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many requests")
 
-        channel = Channel(payload.channel)
-        subscriber = svc.find_subscriber(session, channel=channel, address=payload.address)
+        subscriber = svc.find_subscriber(session, endpoint=payload.address)
         # Unconfirmed subscribers are excluded: confirmation is what proves the channel reaches
         # the person, and a settings link is not the place to take that on trust.
-        if (
-            subscriber is not None
-            and subscriber.confirmed_at is not None
-            and within_mail_budget(session, subscriber.channel.value)
-        ):
+        if subscriber is not None and subscriber.confirmed_at is not None:
             token = svc.issue_manage_token(session, settings, subscriber)
-            deliver(
-                lambda: manage_link_message(
-                    settings,
-                    subscriber.address,
-                    token,
-                    subscriber.id,
-                    channel=subscriber.channel.value,
-                    subscriber=subscriber,
-                )
-            )
+            deliver(lambda: manage_link_message(settings, subscriber, token))
         return {"status": "check your messages"}
 
     @app.post("/api/v1/locate")
@@ -1333,10 +1224,9 @@ def create_app(
                 {"message": "Dieser Abmeldelink ist nicht gültig."},
                 status_code=400,
             )
-        address, channel = subscriber.address, subscriber.channel.value
-        keys = push_keys(subscriber)  # see delete_me: the row is gone a line later
+        endpoint, keys = subscriber.address, push_keys(subscriber)  # see delete_me
         svc.delete_subscriber(session, subscriber)
-        deliver(lambda: deletion_receipt(settings, address, channel=channel, push=keys))
+        deliver(lambda: deletion_receipt(settings, endpoint, keys))
         return page(request, "unsubscribed.html")
 
     # ---- map timeline ---------------------------------------------------------------------

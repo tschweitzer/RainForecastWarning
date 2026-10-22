@@ -93,7 +93,8 @@ class SubscriptionStatus(enum.StrEnum):
 
 class TokenPurpose(enum.StrEnum):
     CONFIRM = "confirm"
-    API = "api"
+    # 'api' - the long-lived bearer token, email subscribers only - was removed with email (D-76);
+    # the value stays in the database type, and no row carries it (migration e5b2c8d4f1a6).
     UNSUBSCRIBE = "unsubscribe"
     #: The magic link to the settings page. Stored rather than signed, because it has to be
     #: single use: a signed link stays valid until it expires however often it is opened, and a
@@ -101,54 +102,28 @@ class TokenPurpose(enum.StrEnum):
     MANAGE = "manage"
 
 
-class Channel(enum.StrEnum):
-    """How a subscriber is reached.
-
-    The channel is part of the identity, not a delivery preference: a mailbox and a browser's
-    push endpoint are different kinds of thing that happen to be strings, and the same string on
-    two channels is two different subscribers.
-    """
-
-    EMAIL = "email"
-    #: A W3C Push API endpoint belonging to one browser profile on one device. Handed to us by
-    #: that browser when the reader granted notification permission; never typed and never
-    #: guessable. Replaced the ntfy topic on 2026-09-27 (D-45).
-    WEBPUSH = "webpush"
-
-
 class Subscriber(Base):
     __tablename__ = "subscribers"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    #: Stored as the enum **name** - `EMAIL`, `WEBPUSH` - and this is the only enum column in the
-    #: schema that is. Every other one passes `values_callable` and stores the lowercase value.
+    # `subscribers.channel` still exists in the database, defaulting to 'WEBPUSH', and is no longer
+    # mapped: every subscriber is a web push subscriber since D-76 (migration e5b2c8d4f1a6). It is
+    # kept only so the deploy that removed email could run its migration under the previous code,
+    # which still read it; any later release may drop it. Raw SQL against it must use uppercase
+    # (`tests/test_packaging.py` checks): it stores enum names, and a lowercase match once left
+    # rows behind that crashed the alerting cycle (a9e4d2c71f05).
+    #: The browser's push endpoint URL. Kept in plaintext because we must be able to reach it; the
+    #: hash exists so lookups and rate limiting never match on the address itself.
     #:
-    #: That inconsistency has already cost a deletion migration: `f3b8c21e7a94` deleted lowercase
-    #: `ntfy` rows, matched none, and the survivors crashed the alerting cycle months later
-    #: (repaired by `a9e4d2c71f05`). Raw SQL against this column must use uppercase, and
-    #: `tests/test_packaging.py` checks the runbook and new migrations for it.
-    #:
-    #: Left inconsistent on purpose rather than switched to values. Switching means the code and the
-    #: stored data have to change in the same instant: whichever is deployed first, the other one
-    #: cannot read rows for the minutes in between. Uppercase is readable by every revision that has
-    #: ever run, which makes any deploy order safe.
-    channel: Mapped[Channel] = mapped_column(
-        Enum(Channel, name="channel", native_enum=False, length=16), default=Channel.EMAIL
-    )
-    #: The address on that channel: a mailbox, or a push endpoint URL. Kept in plaintext because
-    #: we must be able to reach it; the hash exists so lookups and rate limiting never match on
-    #: the address itself.
-    #:
-    #: `Text`, not `String(320)`, since 2026-09-27: a mailbox fits in 320 octets by RFC 5321, a
-    #: push endpoint has no such bound. Measured 87-250 characters across FCM, Mozilla autopush
-    #: and Apple, but nothing in the Push API promises a ceiling, and a silently truncated
+    #: `Text`: a push endpoint has no length bound. Measured 87-250 characters across FCM, Mozilla
+    #: autopush and Apple, but nothing in the Push API promises a ceiling, and a silently truncated
     #: endpoint is a subscriber who can never be reached again.
     address: Mapped[str] = mapped_column(Text)
-    #: Unique across (channel, address) - see the table argument below. The hash covers both, so
-    #: an endpoint that happens to look like a mailbox cannot collide with one.
+    #: `tokens.hash_address(address)`. Its input still carries the `webpush:` prefix it had when
+    #: there were two channels, so every stored hash stays valid.
     address_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, index=True)
 
-    # --- web push keys (RFC 8291). NULL for an email subscriber. -----------------------------
+    # --- web push keys (RFC 8291) -------------------------------------------------------------
     #: The browser's P-256 public key, base64url without padding - 87 characters in practice.
     #: Half of what the payload is encrypted to; without it a notification cannot be built at
     #: all, which is why a webpush subscriber with either of these NULL is a broken row rather
@@ -250,7 +225,7 @@ class AuthToken(Base):
     purpose: Mapped[TokenPurpose] = mapped_column(
         Enum(TokenPurpose, name="token_purpose", values_callable=lambda e: [m.value for m in e])
     )
-    #: Only ever the hash. The plaintext exists for the length of one request and one email.
+    #: Only ever the hash. The plaintext exists for the length of one request and one message.
     token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True, index=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -304,7 +279,7 @@ class AlertState(enum.StrEnum):
     #: No trustworthy observation yet - a fresh subscription, or the location just moved.
     UNKNOWN = "unknown"
     DRY = "dry"
-    #: Rain is coming and we have said so. Exactly one mail per event comes from this edge.
+    #: Rain is coming and we have said so. Exactly one notification per event comes from this edge.
     WARNED = "warned"
     RAINING = "raining"
 
@@ -392,8 +367,8 @@ class RainEvent(Base):
 class Notification(Base):
     """Queued before delivery, in the same transaction as the state change.
 
-    A crash between commit and send is recovered by the next cycle; a mail that is too old to be
-    useful is expired rather than sent, because a late rain warning is worse than none.
+    A crash between commit and send is recovered by the next cycle; a notification that is no
+    longer true is expired rather than sent, because a late rain warning is worse than none.
     """
 
     __tablename__ = "notifications"
@@ -406,7 +381,7 @@ class Notification(Base):
     event_id: Mapped[int | None] = mapped_column(
         ForeignKey("rain_events.id", ondelete="SET NULL"), nullable=True
     )
-    channel: Mapped[str] = mapped_column(String(16), default="email")
+    # `notifications.channel` remains in the database with default 'webpush', unmapped (D-76).
     status: Mapped[str] = mapped_column(String(16), default="queued")
     queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

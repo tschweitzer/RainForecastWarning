@@ -1,12 +1,12 @@
-"""Development adapter: writes .eml files you can open in a mail client.
+"""Development adapter: writes every message to a text file instead of sending it.
 
-More useful than the console one for checking how a message actually renders, including headers.
+For seeing exactly what would be pushed - title, body, tap target - without a browser or a push
+service in the loop. `rainalert outbox` prints the newest ones with their links.
 """
 
 from __future__ import annotations
 
 import uuid
-from email.message import EmailMessage
 from pathlib import Path
 
 from rainalert.notify.base import DeliveryResult, OutboundMessage
@@ -19,14 +19,14 @@ class FileNotifier:
 
     def send(self, message: OutboundMessage) -> DeliveryResult:
         self.outbox.mkdir(parents=True, exist_ok=True)  # the directory may have gone since init
-        msg = EmailMessage()
-        msg["To"] = message.to
-        msg["Subject"] = message.subject
-        for key, value in message.headers.items():
-            msg[key] = value
-        msg.set_content(message.text)
-        if message.html:
-            msg.add_alternative(message.html, subtype="html")
-        name = f"{uuid.uuid4()}.eml"
-        (self.outbox / name).write_bytes(bytes(msg))
+        name = f"{uuid.uuid4()}.txt"
+        lines = [
+            f"To: {message.to}",
+            f"Title: {message.subject}",
+            f"Link: {message.click_url or ''}",
+            "",
+            message.text,
+            "",
+        ]
+        (self.outbox / name).write_text("\n".join(lines), encoding="utf-8")
         return DeliveryResult(ok=True, provider_message_id=name)

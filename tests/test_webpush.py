@@ -32,7 +32,7 @@ from sqlalchemy import select
 
 from rainalert import subscriptions as svc
 from rainalert.config import Settings
-from rainalert.db.models import Channel, Notification, Subscriber
+from rainalert.db.models import Notification, Subscriber
 from rainalert.notify.base import DeliveryResult, OutboundMessage
 from rainalert.notify.webpush import (
     ALLOWED_PUSH_HOSTS,
@@ -96,7 +96,6 @@ def message_for(browser, **kwargs):
         "to": ENDPOINT,
         "subject": "Regenwarnung",
         "text": "In etwa 25 Minuten faengt es an zu regnen.",
-        "channel": "webpush",
         "click_url": "https://rain.example.invalid/#l=tok",
         "push_p256dh": browser["p256dh"],
         "push_auth": browser["auth"],
@@ -270,25 +269,26 @@ def test_a_webpush_message_without_keys_cannot_be_built(vapid):
 
     This is the defect that made the entire channel undeliverable: `push_p256dh`/`push_auth` were
     added to `OutboundMessage`, threaded through `subscriptions.subscribe` and the transport, and
-    then every builder in api/mail.py was left setting neither. The transport reported it correctly
-    and nobody was listening, because each test either built its own message with keys or used a
+    then every builder in api/mail.py (now api/messages.py) was left setting neither. The transport
+    reported it correctly and nobody was listening, because each test either built its own message with keys or used a
     fake notifier. 523 tests passed over a channel that could not deliver one byte.
 
     Now every builder runs through this guard in the suite, so forgetting is a failure rather than
     a silent outage.
     """
     with pytest.raises(ValueError, match="push_p256dh"):
-        OutboundMessage(to=ENDPOINT, subject="s", text="t", channel="webpush")
-    # Email is unaffected: it has no keys and needs none.
-    OutboundMessage(to="a@b.example", subject="s", text="t")
+        OutboundMessage(to=ENDPOINT, subject="s", text="t", push_p256dh="", push_auth="")
+    # And leaving them out altogether is not a default: they are required arguments.
+    with pytest.raises(TypeError):
+        OutboundMessage(to=ENDPOINT, subject="s", text="t")
 
 
-def test_every_builder_that_can_target_push_carries_the_keys(settings):
+def test_every_builder_carries_the_keys(settings):
     """The registry test. A builder added later shows up here as a KeyError rather than as a channel
     that quietly stops working - which is how the omission above survived."""
     from types import SimpleNamespace
 
-    from rainalert.api.mail import (
+    from rainalert.api.messages import (
         alert_message,
         confirmation_message,
         deletion_receipt,
@@ -300,20 +300,13 @@ def test_every_builder_that_can_target_push_carries_the_keys(settings):
     subscriber = SimpleNamespace(
         id=uuid.uuid4(),
         address=ENDPOINT,
-        channel=Channel.WEBPUSH,
         push_p256dh="k" * 87,
         push_auth="a" * 22,
     )
     built = {
-        "confirmation": confirmation_message(
-            settings, ENDPOINT, "t", channel="webpush", subscriber=subscriber
-        ),
-        "manage link": manage_link_message(
-            settings, ENDPOINT, "t", subscriber.id, channel="webpush", subscriber=subscriber
-        ),
-        "deletion receipt": deletion_receipt(
-            settings, ENDPOINT, channel="webpush", push=push_keys(subscriber)
-        ),
+        "confirmation": confirmation_message(settings, subscriber, "t"),
+        "manage link": manage_link_message(settings, subscriber, "t"),
+        "deletion receipt": deletion_receipt(settings, ENDPOINT, push_keys(subscriber)),
         "alert": alert_message(
             None,
             settings,
@@ -330,7 +323,7 @@ def test_every_builder_that_can_target_push_carries_the_keys(settings):
         "liveness": liveness_message(settings, subscriber),
     }
     for name, message in built.items():
-        assert message.channel == "webpush", name
+        assert message.to == ENDPOINT, name
         assert message.push_p256dh == "k" * 87, f"{name} lost the key"
         assert message.push_auth == "a" * 22, f"{name} lost the auth secret"
 
@@ -453,8 +446,7 @@ def test_a_gone_subscription_is_deleted_rather_than_retried(db, settings, vapid)
         result = svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh="k" * 87,
             push_auth="a" * 22,
             lat=FRANKFURT[0],
@@ -466,7 +458,6 @@ def test_a_gone_subscription_is_deleted_rather_than_retried(db, settings, vapid)
         session.add(
             Notification(
                 subscription_id=subscription.id,
-                channel="webpush",
                 status="queued",
                 queued_at=datetime.now(UTC),
                 payload={
@@ -494,8 +485,7 @@ def test_a_transient_failure_keeps_the_subscriber(db, settings):
         result = svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh="k" * 87,
             push_auth="a" * 22,
             lat=FRANKFURT[0],
@@ -506,7 +496,6 @@ def test_a_transient_failure_keeps_the_subscriber(db, settings):
         session.add(
             Notification(
                 subscription_id=subscriber.subscriptions[0].id,
-                channel="webpush",
                 status="queued",
                 queued_at=datetime.now(UTC),
                 payload={
@@ -534,8 +523,7 @@ def confirmed_push_subscriber(session, settings, *, confirmed_days_ago: int, end
     result = svc.subscribe(
         session,
         settings,
-        channel=Channel.WEBPUSH,
-        address=endpoint,
+        endpoint=endpoint,
         push_p256dh="k" * 87,
         push_auth="a" * 22,
         lat=FRANKFURT[0],
@@ -568,7 +556,6 @@ def test_a_recently_warned_subscriber_is_left_alone(db, settings):
         session.add(
             Notification(
                 subscription_id=subscriber.subscriptions[0].id,
-                channel="webpush",
                 status="sent",
                 queued_at=datetime.now(UTC) - timedelta(days=2),
                 sent_at=datetime.now(UTC) - timedelta(days=2),
@@ -596,34 +583,12 @@ def test_an_unconfirmed_subscriber_is_never_due(db, settings):
         svc.subscribe(
             session,
             settings,
-            channel=Channel.WEBPUSH,
-            address=ENDPOINT,
+            endpoint=ENDPOINT,
             push_p256dh="k" * 87,
             push_auth="a" * 22,
             lat=FRANKFURT[0],
             lon=FRANKFURT[1],
         )
-        assert due_for_liveness(session, settings) == []
-
-
-def test_email_subscribers_are_never_due(db, settings):
-    """A mailbox does not revoke itself, and an unsolicited monthly mail is closer to spam than to
-    housekeeping."""
-    from rainalert.jobs.liveness import due_for_liveness
-
-    with db() as session:
-        result = svc.subscribe(
-            session,
-            settings,
-            channel=Channel.EMAIL,
-            address="a@b.example",
-            lat=FRANKFURT[0],
-            lon=FRANKFURT[1],
-        )
-        session.get(Subscriber, result.subscriber_id).confirmed_at = datetime.now(UTC) - timedelta(
-            days=90
-        )
-        session.commit()
         assert due_for_liveness(session, settings) == []
 
 
@@ -644,7 +609,7 @@ def test_the_liveness_run_sends_once_and_records_it(db, settings):
         sent, deleted = run_liveness(session, settings, Ok())
         assert (sent, deleted) == (1, 0)
         assert len(sent_messages) == 1
-        assert sent_messages[0].channel == "webpush"
+        assert sent_messages[0].to == ENDPOINT
         # Tapping it opens the settings page; it carries no buttons (D-64).
         assert sent_messages[0].click_url.endswith("/#einstellungen")
         # And now nobody is due, because the send was recorded.
@@ -735,7 +700,6 @@ def test_a_rotated_endpoint_is_pruned_rather_than_followed(db, settings):
         session.add(
             Notification(
                 subscription_id=subscriber.subscriptions[0].id,
-                channel="webpush",
                 status="queued",
                 queued_at=datetime.now(UTC),
                 payload={
@@ -793,7 +757,6 @@ def test_knowing_the_endpoint_does_not_let_anyone_change_a_subscription(db, sett
     attacker = client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
             "lat": 52.52,
             "lon": 13.405,
             "endpoint": ENDPOINT,  # the only thing the attacker holds
@@ -833,7 +796,6 @@ def test_the_owning_browser_can_still_move_its_location(db, settings):
     response = client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
             "lat": 48.1372,
             "lon": 11.5756,
             "endpoint": ENDPOINT,
@@ -866,7 +828,6 @@ def test_half_the_pair_is_not_enough(db, settings):
     client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
             "lat": 51.0,
             "lon": 7.0,
             "endpoint": ENDPOINT,
@@ -916,10 +877,8 @@ def test_the_page_does_not_offer_push_without_a_vapid_key(db, settings):
         "and the script has to read that config"
     )
 
-    # And the message it would show must not tell the reader to pick an option that is absent: on a
-    # push-only deployment there is no email radio to choose, which is the intended first shape.
+    # And it says so in words that do not blame the reader.
     assert "nicht verfügbar" in script
-    assert "EMAIL_AVAILABLE" in script, "the fallback suggestion has to be conditional"
 
 
 def test_the_page_warns_that_clearing_browser_data_ends_the_subscription(db, settings):
@@ -946,14 +905,12 @@ def test_the_page_warns_that_clearing_browser_data_ends_the_subscription(db, set
     assert "Standort wird dabei" not in body
 
 
-def test_the_confirmation_page_speaks_to_the_channel_that_confirmed(db, settings):
+def test_the_confirmation_page_speaks_to_a_push_subscriber(db, settings):
     """It branched on `channel == "ntfy"` for a while after the rename, so every push subscriber was
     told "Du bekommst jetzt eine Mail" on the first page they ever see - and the else branch also
     withheld the line explaining the Einstellungen button, which since D-45 is their only durable
-    route back into settings. Both wrong, on the page that has to make a first impression.
-
-    Driven through the real flow rather than by rendering the template: the channel value reaching
-    it comes from `subscriber.channel.value`, and that is the half that changed.
+    route back into settings. Both wrong, on the page that has to make a first impression. There is
+    no branch left since D-76; this keeps the wording from drifting back.
     """
     from fastapi.testclient import TestClient
 
@@ -969,7 +926,6 @@ def test_the_confirmation_page_speaks_to_the_channel_that_confirmed(db, settings
     client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
             "lat": FRANKFURT[0],
             "lon": FRANKFURT[1],
             "endpoint": ENDPOINT,
@@ -987,8 +943,8 @@ def test_the_confirmation_page_speaks_to_the_channel_that_confirmed(db, settings
 
 
 def test_the_settings_offer_a_way_out(db, settings):
-    """Since D-45 the only one on push: a notification body is plain text nothing linkifies, so the
-    "Abmelden:" URL email still carries cannot be tapped there."""
+    """Since D-45 the only one: a notification body is plain text nothing linkifies, so an
+    "Abmelden:" URL in it could not be tapped."""
     from fastapi.testclient import TestClient
 
     from rainalert.api.app import create_app
@@ -1136,7 +1092,6 @@ def test_deliver_queued_survives_a_row_it_cannot_render(db, settings):
             Notification(
                 subscription_id=subscription.id,
                 event_id=None,
-                channel="webpush",
                 status="queued",
                 queued_at=datetime.now(UTC),
                 payload={"kind": "liveness", "days": 30},
@@ -1168,7 +1123,7 @@ def test_a_lone_surrogate_cannot_crash_a_comparison_or_a_hash(hostile):
     assert same_secret(hostile, "abc") is False
     assert same_secret("abc", hostile) is False
     assert len(hash_token(hostile)) == 32
-    assert len(hash_address("email", hostile)) == 32
+    assert len(hash_address(hostile)) == 32
     # Still a hash, not a constant: two different impossible strings must not collide.
     assert hash_token(hostile) != hash_token(hostile + "x")
 
@@ -1202,16 +1157,14 @@ def test_a_rain_warning_and_a_settings_link_do_not_evict_each_other(settings):
     """
     from types import SimpleNamespace
 
-    from rainalert.api.mail import ALERT_TAG, MANAGE_TAG, alert_message, manage_link_message
+    from rainalert.api.messages import ALERT_TAG, MANAGE_TAG, alert_message, manage_link_message
     from tests.test_channels import ALERT_PAYLOAD, push_subscriber
 
     who = push_subscriber()
     warning = alert_message(
         None, settings, who, SimpleNamespace(timezone="Europe/Berlin"), ALERT_PAYLOAD
     )
-    link = manage_link_message(
-        settings, who.address, "tok", who.id, channel="webpush", subscriber=who
-    )
+    link = manage_link_message(settings, who, "tok")
 
     assert warning.push_tag == ALERT_TAG
     assert link.push_tag == MANAGE_TAG
@@ -1271,7 +1224,6 @@ def test_the_silent_subscriber_count_finds_someone_who_never_acts(db, settings):
             Notification(
                 subscription_id=subscription.id,
                 event_id=None,
-                channel="webpush",
                 status="sent",
                 queued_at=datetime.now(UTC),
                 sent_at=datetime.now(UTC),
@@ -1353,7 +1305,7 @@ def test_rain_now_on_push_is_short_and_takes_the_warning_slot(settings):
     import json
     from types import SimpleNamespace
 
-    from rainalert.api.mail import ALERT_TAG, alert_message
+    from rainalert.api.messages import ALERT_TAG, alert_message
     from tests.test_channels import ALERT_PAYLOAD, push_subscriber
 
     payload = {**ALERT_PAYLOAD, "kind": "rain_now", "lead_minutes": 0, "peak_mm_5min": 0.02}

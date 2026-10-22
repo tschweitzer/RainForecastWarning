@@ -8,7 +8,6 @@ each page having somewhere to put a message when the attempt fails.
 
 import json
 import re
-import uuid
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -174,15 +173,10 @@ def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
     import re
     from pathlib import Path
 
-    mail = (Path(__file__).resolve().parents[1] / "rainalert" / "api" / "mail.py").read_text(
+    mail = (Path(__file__).resolve().parents[1] / "rainalert" / "api" / "messages.py").read_text(
         encoding="utf-8"
     )
-    # The paths a click_url can point at.
-    #
-    # Scoped to the functions that actually build one, which is what makes this precise. Matching
-    # every `public_base_url` URL with a fragment in the file also catches `/unsubscribe#t=`, and
-    # that one is email-only: it goes in a mail body, never in a `click_url`, so no notification can
-    # ever open it. (Notifications carry no buttons, D-64.)
+    # The paths a click_url can point at, from the functions that build one.
     #
     # Matched across string concatenation, because the warning link is built as `f"...}}/"` on one
     # line and `f"#l={...}"` on the next; a pattern anchored to one line sees the path without its
@@ -202,7 +196,7 @@ def test_every_page_a_notification_can_open_re_reads_its_fragment(client):
                 body,
             )
         )
-    assert targets, "no click_url targets found - has mail.py changed shape?"
+    assert targets, "no click_url targets found - has messages.py changed shape?"
     # `/manage` left this set with D-67: settings links go to `/#t=` now, so `/` re-reads two
     # fragments (`#l=` and `#t=`).
     assert targets == {"/", "/confirm"}, (
@@ -243,7 +237,7 @@ def test_the_pages_module_constants_are_const_not_var(client):
     `var` in the right place today is a bug the moment something above it grows a read.
     """
     source = client.get("/static/signup.js").text
-    for name in ("CONFIG", "WINDOW_KEY", "VAPID_KEY", "EMAIL_AVAILABLE"):
+    for name in ("CONFIG", "WINDOW_KEY", "VAPID_KEY"):
         assert f"const {name} =" in source, f"{name} must be const - see this test's docstring"
         assert f"var {name} =" not in source, f"{name} went back to var"
 
@@ -407,7 +401,15 @@ def test_a_new_subscription_lands_on_a_named_band(db, settings):
     from rainalert.radar.overlay import INTENSITY_BANDS
 
     with db() as session:
-        svc.subscribe(session, settings, lat=50.1, lon=8.6, address="fresh@example.com")
+        svc.subscribe(
+            session,
+            settings,
+            lat=50.1,
+            lon=8.6,
+            endpoint="https://fcm.googleapis.com/fcm/send/fresh",
+            push_p256dh="k" * 87,
+            push_auth="a" * 22,
+        )
         stored = float(session.query(Subscription).one().threshold_mm_5min)
 
     assert stored in [threshold for threshold, _, _ in INTENSITY_BANDS]
@@ -466,14 +468,14 @@ def test_the_bands_get_more_opaque_as_the_rain_gets_heavier():
 # --- the signup page says true things about both channels ---------------------------------------
 
 
-def test_the_consent_text_has_a_wording_for_each_channel(client):
-    """Push subscribers have no email address; telling them one is stored is simply false."""
+def test_the_consent_text_names_what_is_stored(client):
+    """The push address and the location - and no email address, which we never ask for (D-76)."""
     page = " ".join(page_source(client).split())  # the template wraps; the sentence does not
     assert (
         "Ich bin einverstanden, dass die Push-Adresse dieses Browsers und mein Standort "
         "gespeichert werden" in page
     )
-    assert "Ich bin einverstanden, dass meine E-Mail-Adresse und mein Standort gespeichert" in page
+    assert "E-Mail-Adresse" not in page
 
 
 def test_the_signup_note_does_not_claim_nothing_is_stored(client):
@@ -487,17 +489,15 @@ def test_the_signup_note_does_not_claim_nothing_is_stored(client):
     assert "Stunden gelöscht" in page
 
 
-def test_both_channel_wordings_are_in_the_page_source(client):
+def test_the_consent_wording_is_in_the_page_itself(client):
     """Rendered, not assembled by script - consent should be readable in the page itself."""
-    page = page_source(client)
-    assert page.count('class="for-push"') >= 2
-    assert page.count('class="for-email"') >= 2
+    assert "Ich bin einverstanden" in client.get("/").text
 
 
-def test_the_stored_consent_record_names_the_channel_and_the_version(db, settings):
-    """Two wordings share a version, so the channel is what disambiguates them."""
+def test_the_stored_consent_record_names_the_version(db, settings):
+    """One wording per version since D-76, so the version alone says what was agreed to."""
     from rainalert import subscriptions as svc
-    from rainalert.db.models import Channel, Subscriber
+    from rainalert.db.models import Subscriber
 
     with db() as session:
         svc.subscribe(
@@ -505,19 +505,16 @@ def test_the_stored_consent_record_names_the_channel_and_the_version(db, setting
             settings,
             lat=50.1,
             lon=8.6,
-            channel=Channel.WEBPUSH,
-            address="https://fcm.googleapis.com/fcm/send/abc",
+            endpoint="https://fcm.googleapis.com/fcm/send/abc",
             push_p256dh="k" * 87,
             push_auth="a" * 22,
         )
         row = session.query(Subscriber).one()
-        assert row.channel is Channel.WEBPUSH
         assert row.consent_text_version == settings.consent_text_version
 
 
-def test_the_privacy_page_covers_both_channels(client):
+def test_the_privacy_page_says_what_a_push_subscriber_gives_us(client):
     page = client.get("/privacy").text
-    assert "E-Mail-Adresse" in page
     # What a push subscriber is actually giving us, in their words rather than ours: the browser's
     # push address, and the fact that a third-party push service is in the path.
     assert "Push-Adresse" in page
@@ -527,7 +524,7 @@ def test_the_privacy_page_covers_both_channels(client):
 def test_the_settings_page_has_no_sign_out_control(client):
     """Subscribed or not: the only account controls are subscribing and unsubscribing
     (PLAN_DEVICE_KEY.md §11). With a device key a sign-out would do nothing - the next visit signs
-    in again - and email sessions end on their own."""
+    in again - and a cookie session ends on its own."""
     page = page_source(client, "/")
     assert 'id="logout"' not in page
     assert "Sitzung auf diesem Gerät beenden" not in page
@@ -618,46 +615,6 @@ def test_every_page_credits_dwd_and_says_the_data_was_modified(client, path):
     assert "eigene Verarbeitung" in page
 
 
-def test_the_messages_carry_the_same_credit(settings):
-    from rainalert.api.mail import confirmation_message
-    from rainalert.attribution import ATTRIBUTION
-
-    message = confirmation_message(settings, "friend@example.com", "token")
-    assert ATTRIBUTION in message.text
-    assert "eigene Verarbeitung" in message.text
-
-
-def test_the_credit_is_defined_once(client):
-    """Four copies of a string that must agree are four that will not."""
-    from rainalert.attribution import ATTRIBUTION, ATTRIBUTION_HTML
-
-    for text in (ATTRIBUTION, ATTRIBUTION_HTML):
-        assert "Deutscher Wetterdienst" in text
-        assert "eigene Verarbeitung" in text
-    # The plain-text form goes into mail headers and JSON; keep it ASCII.
-    ATTRIBUTION.encode("ascii")
-
-
-def test_the_timeline_payload_carries_the_credit(client, db, settings):
-    """The map draws from JSON, so the credit has to be in the JSON."""
-    from rainalert.attribution import ATTRIBUTION
-    from rainalert.timeline import build_timeline
-
-    with db() as session:
-        payload = build_timeline(session, settings, _NullStore(), 12)
-    assert payload["attribution"] == ATTRIBUTION
-
-
-class _NullStore:
-    """Enough OverlayStore for build_timeline to produce a payload with no cycles stored."""
-
-    def url_for_observed(self, nominal_time):
-        return "/overlays/obs/x.png"
-
-    def url_for_forecast(self, nominal_time, lead_minutes):
-        return "/overlays/fc/x.png"
-
-
 # --- the development base URL (Q-10) -------------------------------------------------------------
 
 
@@ -669,23 +626,16 @@ def test_every_message_link_follows_the_configured_base_url(db, settings):
     """
     from types import SimpleNamespace
 
-    from rainalert.api.mail import confirmation_message, deletion_receipt, manage_link_message
-    from rainalert.db.models import Channel
+    from rainalert.api.messages import confirmation_message, deletion_receipt, manage_link_message
 
     local = settings.model_copy(update={"public_base_url": "http://203.0.113.10:8000"})
+    who = SimpleNamespace(
+        address="https://fcm.googleapis.com/fcm/send/abc", push_p256dh="k" * 87, push_auth="a" * 22
+    )
     messages = [
-        confirmation_message(local, "you@example.com", "T"),
-        confirmation_message(
-            local,
-            "https://fcm.googleapis.com/fcm/send/abc",
-            "T",
-            channel="webpush",
-            subscriber=SimpleNamespace(
-                channel=Channel.WEBPUSH, push_p256dh="k" * 87, push_auth="a" * 22
-            ),
-        ),
-        manage_link_message(local, "you@example.com", "T", uuid.uuid4()),
-        deletion_receipt(local, "you@example.com"),
+        confirmation_message(local, who, "T"),
+        manage_link_message(local, who, "T"),
+        deletion_receipt(local, who.address, {"push_p256dh": "k" * 87, "push_auth": "a" * 22}),
     ]
     for message in messages:
         for word in message.text.split():
@@ -705,16 +655,25 @@ def test_the_session_cookie_secure_flag_follows_the_same_setting(db, notifier, s
 
     cases = (("http://203.0.113.10:8000", False), ("https://rain.example", True))
     for index, (base, expect_secure) in enumerate(cases):
-        # A fresh address per case: a confirmed subscriber is not sent another confirmation,
+        # A fresh endpoint per case: a confirmed subscriber is not sent another confirmation,
         # so reusing one leaves the second case reading the first case's message.
-        address = f"q10-{index}@example.com"
+        endpoint = f"https://fcm.googleapis.com/fcm/send/q10-{index}"
         app = create_app(settings.model_copy(update={"public_base_url": base}), db, notifier)
         client = TestClient(app, base_url=base)
-        client.post("/api/v1/subscriptions", json={"email": address, "lat": 50.1, "lon": 8.6})
-        token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
+        client.post(
+            "/api/v1/subscriptions",
+            json={
+                "lat": 50.1,
+                "lon": 8.6,
+                "endpoint": endpoint,
+                "p256dh": "k" * 87,
+                "auth": "a" * 22,
+            },
+        )
+        token = notifier.sent[-1].click_url.split("/confirm#a=")[1]
         client.post("/confirm", data={"token": token})
-        client.post("/api/v1/manage/link", json={"channel": "email", "address": address})
-        link = notifier.sent[-1].text.split("/#t=")[1].split()[0]
+        client.post("/api/v1/manage/link", json={"address": endpoint})
+        link = notifier.sent[-1].click_url.split("/#t=")[1]
         response = client.post("/api/v1/manage/session", data={"token": link})
         assert ("secure" in response.headers["set-cookie"].lower()) is expect_secure, base
 
@@ -726,7 +685,6 @@ def _push_settings(**kwargs):
     return Settings(
         database_url="postgresql+psycopg://unused",
         public_base_url="https://rain.example.invalid",
-        mail_from="RainAlert <noreply@rain.example.invalid>",
         secret_key="test-secret",
         _env_file=None,
         **kwargs,
@@ -742,7 +700,6 @@ def test_a_push_payload_carries_no_buttons():
         to="https://fcm.googleapis.com/fcm/send/x",
         subject="s",
         text="t",
-        channel="webpush",
         click_url="https://rain.example.invalid/#einstellungen",
         push_p256dh="k" * 87,
         push_auth="a" * 22,
@@ -912,25 +869,28 @@ def test_a_finished_signup_stops_being_a_form(client):
     assert "settled(false)" in body
 
 
-# --- the way out is on every message that follows the confirmation --------------------------
+# --- what every notification says, and where it leads -----------------------------------------
 
 
 def _every_message(settings):
-    """One place that knows all of them, so a message added later shows up here unclassified
-    rather than quietly shipping without a way out."""
-    import uuid as _uuid
+    """One place that knows all of them, so a message added later shows up here."""
+    import uuid
     from types import SimpleNamespace
 
-    from rainalert.api.mail import (
+    from rainalert.api.messages import (
         alert_message,
         confirmation_message,
         deletion_receipt,
         manage_link_message,
+        push_keys,
     )
-    from rainalert.db.models import Channel
 
-    who = _uuid.uuid4()
-    subscriber = SimpleNamespace(id=who, address="a@b.example", channel=Channel.EMAIL)
+    subscriber = SimpleNamespace(
+        id=uuid.uuid4(),
+        address="https://fcm.googleapis.com/fcm/send/abc",
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+    )
     subscription = SimpleNamespace(timezone="Europe/Berlin")
     payload = {
         "predicted_start_at": "2026-09-23T14:30:00+00:00",
@@ -939,50 +899,30 @@ def _every_message(settings):
         "peak_mm_5min": 0.4,
     }
     return {
-        "confirmation": (confirmation_message(settings, "a@b.example", "T"), False),
-        "manage link": (manage_link_message(settings, "a@b.example", "T", who), True),
-        "alert": (alert_message(None, settings, subscriber, subscription, payload), True),
-        # "Es regnet jetzt" (D-69) is the same kind of message and keeps the same way out.
-        "rain now": (
-            alert_message(
-                None, settings, subscriber, subscription, {**payload, "kind": "rain_now"}
-            ),
-            True,
+        "confirmation": confirmation_message(settings, subscriber, "T"),
+        "manage link": manage_link_message(settings, subscriber, "T"),
+        "alert": alert_message(None, settings, subscriber, subscription, payload),
+        "rain now": alert_message(
+            None, settings, subscriber, subscription, {**payload, "kind": "rain_now"}
         ),
-        "deletion receipt": (deletion_receipt(settings, "a@b.example"), False),
+        "deletion receipt": deletion_receipt(settings, subscriber.address, push_keys(subscriber)),
     }
 
 
-def test_every_message_after_the_confirmation_offers_a_way_out(client, settings):
-    """Somebody who wants to stop reaches for whichever message is in front of them. A settings
-    link that offers no exit says "you can change this" while hiding the change they came for.
-    """
-    for name, (message, expected) in _every_message(settings).items():
-        has_it = "Abmelden: " in message.text
-        assert has_it is expected, f"{name}: unsubscribe link present={has_it}, wanted={expected}"
+def test_no_notification_prints_a_url(client, settings):
+    """A notification body is plain text nothing linkifies, so a printed URL is an exit the reader
+    can see and not take. The way out is the settings page on the site, which every warning's tap
+    target - the map - sits above (D-45, D-67); the unsubscribe line a mail carried went with email
+    (D-76)."""
+    for name, message in _every_message(settings).items():
+        assert "http" not in message.text, name
+        assert "Abmelden:" not in message.text, name
 
 
-def test_the_confirmation_and_the_receipt_are_the_two_exceptions(client, settings):
-    """Neither is a message you can act on: before confirming there is nothing to leave, and an
-    unconfirmed signup deletes itself; after the receipt the subscription is already gone."""
-    messages = _every_message(settings)
-    assert messages["confirmation"][1] is False
-    assert messages["deletion receipt"][1] is False
-    # And the receipt says what *is* still to do on push - stop the app listening.
-    # The push receipt no longer asks the reader to do anything: the page or the service
-    # worker releases the browser's own subscription, which only the subscriber could do while
-    # the channel was an ntfy topic living in a separate app.
-    assert "geloescht" in messages["deletion receipt"][0].text
-
-
-def test_the_unsubscribe_link_is_built_in_one_place(client, settings):
-    """Three messages carry it. Built three times, they drift - and the shape matters: the token
-    rides in the fragment so it cannot reach a request log (D-26)."""
-    for name, (message, expected) in _every_message(settings).items():
-        if not expected:
-            continue
-        assert "/unsubscribe#t=" in message.text, name
-        assert "/unsubscribe?token=" not in message.text, name
+def test_the_receipt_says_it_is_done(client, settings):
+    """And asks nothing more: the page or the service worker releases the browser's own
+    subscription, which only the subscriber could do while the channel was an ntfy topic."""
+    assert "gelöscht" in _every_message(settings)["deletion receipt"].text
 
 
 # --- navigation -----------------------------------------------------------------------------

@@ -1,9 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
-{# Channel-neutral on purpose. The token is in the URL fragment (D-26), so the server never sees it
-   and this page cannot know whether it is talking to an email or a push subscriber - and it is
-   where confirmed.html's "Abmelden und alles löschen" link sends *both*. It used to say
-   "E-Mail-Adresse", which a push subscriber has never given us. #}
+{# Where confirmed.html's "Abmelden und alles löschen" link goes. The token is in the URL fragment
+   (D-26), so the server never sees it. #}
 <h1>Abmelden</h1>
 <p class="lede" id="lede">Damit werden deine Anmeldung, dein Standort und der Verlauf gelöscht. Das lässt sich
 nicht rückgängig machen.</p>

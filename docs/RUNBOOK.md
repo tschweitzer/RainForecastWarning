@@ -10,16 +10,15 @@ organised around that.
 
 ## 1. First deploy
 
-The first deploy does not need a domain, a certificate or a mail provider. Cloud Run serves
-`https://rainalert-<hash>-ey.a.run.app` with a managed certificate, and push works without any
-of the mail machinery — so the push-only path below is the short one, and email is a later,
-separate step.
+The first deploy does not need a domain or a certificate. Cloud Run serves
+`https://rainalert-<hash>-ey.a.run.app` with a managed certificate, and web push - the only channel
+(DESIGN.md D-76) - needs nothing beyond the VAPID key Terraform generates.
 
 That https matters beyond tidiness: the session cookie's `Secure` flag is set from
 `PUBLIC_BASE_URL` (`app.py`), and browsers refuse geolocation outside a secure context, so the
 locate control on both maps cannot work over plain http at all.
 
-### Push only — no domain, no mail provider
+### What it needs
 
 | # | What | Why it blocks |
 |---|---|---|
@@ -61,8 +60,7 @@ make pin-base
 make image-push REGION=europe-west3 PROJECT=rainchecker-195519
 
 # 5. Create infra/terraform.tfvars from the example and fill it in, including that digest.
-#    The file is gitignored and does not exist in a fresh clone - it holds the digest and, once
-#    email is on, the provider's details. Leave smtp_host out: that is what makes it push-only.
+#    The file is gitignored and does not exist in a fresh clone - it holds the digest.
 cd infra
 cp terraform.tfvars.example terraform.tfvars   # then edit it
 terraform init && terraform apply
@@ -125,25 +123,6 @@ Re-run the job after any migration; it is the only thing that maintains those gr
 Then subscribe yourself from a phone and confirm the notification arrives. Nothing is proven
 until it does.
 
-### Adding email later
-
-| # | What | Why it blocks |
-|---|---|---|
-| 1 | A mail provider account (SMTP host, user, password) | no confirmations, no warnings |
-| 2 | **SPF, DKIM and DMARC on the sending domain** | without them the warnings land in spam, which is the same as not sending them |
-| 3 | The provider's DPA accepted | Art. 28 again, for a second processor |
-
-```sh
-# The SMTP password is the one secret Terraform does not generate. The secret already exists
-# and is empty; this gives it a version.
-echo -n 'the-password' | gcloud secrets versions add rainalert-smtp-password --data-file=-
-
-# Set smtp_host (and mail_from, smtp_username) in terraform.tfvars, then apply. That one
-# variable mounts the secret, sets EMAIL_CHANNEL_ENABLED, and puts the choice back on the
-# signup page - they cannot drift apart because they are derived from it.
-cd infra && terraform apply
-```
-
 ### Watch the first few cycles
 
 The first live run is itself a test: nothing in this repository has ever spoken to the real
@@ -192,8 +171,11 @@ Two more things about that build:
   `b6e2f0a4c813`) is one: the new code reads `subscribers.last_seen_at` and fails on every
   subscriber query until it exists. So is the plausibility check (D-70, migration `c7d1e5a9b2f4`):
   the ingest job writes `radar_cycles.wet_share` and fails every cycle until it exists. So is
-  the radar-down note (D-75, migration `d9a3f6b1c2e7`, `radar_cycles.missing_sites`). Migrate
-  *between* updating the job and updating the rest:
+  the radar-down note (D-75, migration `d9a3f6b1c2e7`, `radar_cycles.missing_sites`). And so is
+  push-only (D-76, migration `e5b2c8d4f1a6`): it gives `subscribers.channel` and
+  `notifications.channel` the web push default, and the new code inserts rows without naming them -
+  so a signup or a warning fails until it has run. Migrate *between* updating the job and updating
+  the rest:
 
 ```sh
 cd infra && terraform apply -target=google_cloud_run_v2_job.migrate   # the job gets the new image
@@ -202,6 +184,13 @@ terraform apply                                                       # now the 
 ```
 
   The previous code runs fine against the migrated schema, so the gap in between costs nothing.
+
+  The push-only release also has Terraform **destroy the `rainalert-smtp-password` secret** (it
+  was empty: email was never switched on) and drops the SMTP settings from the services. Remove
+  `smtp_host`, `smtp_port`, `smtp_username`, `mail_from` and `transactional_mail_cap_per_day` from
+  `terraform.tfvars` too - left in, they only earn a warning per variable, but they say something
+  that is no longer true. The two `channel` columns are still there and unmapped; a later release
+  may drop them.
 
 ---
 
@@ -252,8 +241,10 @@ Work down this list; each step rules out one cause.
 4. **`skipped_missing` for everyone?** The radar composite has no data at the subscribers'
    locations. Compare with DWD's own app. This is the correct behaviour — missing data must never
    be reported as dry — but if it persists for hours, DWD has a problem and so do we.
-5. **Mail failing?** `rainalert_notifications_24h{status="queued"}` climbing while `sent` does not
-   means delivery is broken, not evaluation. Check the provider's dashboard and the daily quota.
+5. **Delivery failing?** `rainalert_notifications_24h{status="queued"}` climbing while `sent` does
+   not means delivery is broken, not evaluation. `web push transport unavailable` in the ingest log
+   is a VAPID secret that is empty, disabled or unreadable: every send fails until it is fixed, and
+   nothing else is affected.
 
 ### Warnings go out but arrive late or not at all
 
@@ -261,8 +252,7 @@ Delivery, not evaluation. A notification that is no longer true is deliberately 
 than sent** — a warning once its predicted start has passed (at least 10, at most 120 minutes after
 it was queued), "Es regnet jetzt" after 15 minutes (D-70). The push service is told the same, so a
 phone that was offline longer gets nothing rather than old news. Look for `expired` in the metrics.
-`subscription … reached its ceiling of 24` in the logs is the per-subscription cap, and `email alert
-cap reached` the mail quota.
+`subscription … reached its ceiling of 24` in the logs is the per-subscription cap.
 
 ### The map is empty or frozen
 
@@ -390,8 +380,9 @@ what it found (always, including zero). To check by hand in Cloud SQL Studio:
 
     SELECT channel, count(*) FROM subscribers GROUP BY channel;
 
-Anything other than `EMAIL` or `WEBPUSH` - including the lowercase forms - is a row the ORM cannot
-load.
+Anything other than `WEBPUSH` was a row the ORM could not load. Since D-76 the column is not mapped
+any more - every subscriber is a push subscriber, and migration `e5b2c8d4f1a6` deleted any other -
+so this error cannot recur; it stays here for the history.
 
 **Writing raw SQL against `channel`:** it is uppercase, and it is the only enum column here that is.
 Every other enum (`subscription_status`, `alert_state`, `cycle_status`, `token_purpose`) stores the
@@ -413,7 +404,7 @@ same-document navigation**: no script re-runs, the token is never read, nothing 
 
 The fix is always on the page, never in the worker: a `hashchange` listener that re-reads the
 fragment. `tests/test_pages.py::test_every_page_a_notification_can_open_re_reads_its_fragment`
-enumerates the target paths from the `click_url`s `mail.py` builds and asserts each page has one, so
+enumerates the target paths from the `click_url`s `messages.py` builds and asserts each page has one, so
 a new notification target fails the suite until its page can be re-entered.
 
 Reported instances, for shape recognition:
@@ -465,31 +456,6 @@ still hold what was warned and sent, but not the per-cycle reasoning.
 
 If their subscription shows `unhealthy`, evaluation has been failing for them specifically and the
 manage page will be telling them so.
-
----
-
-### "Transactional mail cap of N per day reached; mail not sent"
-
-Confirmation and settings-link mails share one daily budget (`transactional_mail_cap_per_day`,
-default 50, DESIGN.md D-63). Push messages and rain warnings do not count against it. When it is
-reached, new subscribers get no confirmation mail and settings links do not go out, until the
-rolling 24 hours free up room. The pages still answer as if the mail had been sent.
-
-Either someone is using the sign-up form to mail strangers (SECURITY_REVIEW.md F-5, status
-2026-10-09), or the cap is too low for a busy day:
-
-```sql
--- mails counted in the last 24 h, by hour
-select date_trunc('hour', occurred_at) as hour, count(*)
-from rate_limit_hits where bucket = 'mail:transactional'
-  and occurred_at > now() - interval '24 hours'
-group by 1 order by 1;
-```
-
-A steady trickle that just reached the cap is real demand: raise
-`TRANSACTIONAL_MAIL_CAP_PER_DAY`, keeping it plus `email_alert_cap_per_day` within the mail
-provider's daily quota. A burst is abuse: leave the cap alone, because it is doing its job. The
-burst ends on its own, since nothing past the cap is sent.
 
 ---
 
@@ -752,7 +718,8 @@ when it confirmed (docs/PLAN_DEVICE_KEY.md). Expected, and not a bug:
   is the point. "Dieser Browser ist angemeldet" with an "Einstellungen öffnen" button (one link to
   this browser) appears only for a browser without a key: subscribers from before the release (once
   - the link registers a key), browsers that cannot keep one, and signups not yet confirmed.
-- **No session cookie, no countdown** for push subscribers. Email works as before.
+- **No session cookie, no countdown** for a browser with a key. One without a key gets the cookie
+  session from the settings link.
 - **No sign-out button** for anyone. Only subscribing and unsubscribing exist.
 
 What to look at when it misbehaves:
@@ -787,9 +754,10 @@ Postgres will happily serve an older application from a newer schema in most cas
 
 ### Rotating `SECRET_KEY`
 
-It signs the unsubscribe links, which are stateless. Rotating it **invalidates every unsubscribe
-link already in someone's inbox**. Only do it if the key is believed compromised, and expect
-support mail.
+It signs the unsubscribe links (shown on the confirmation page), the settings sessions and the
+locate references, and salts the IP hashes. Rotating it **invalidates every unsubscribe link already
+handed out** and signs everybody out of a cookie session. Only do it if the key is believed
+compromised.
 
 ### Do not rotate the VAPID key
 
@@ -877,8 +845,8 @@ look before the next run.
 
   Still unverified, and worth knowing which: **an actual rain warning has never been delivered to a
   real person** — every notification so far has been a confirmation or a settings link, which take a
-  different path through `mail.py` and carry different actions. Also unverified: the notification
-  *action* button (`Einstellungen`) being drawn and tapped, since the magic links so far were
+  different path through `messages.py` and carry different actions. Also unverified: the
+  notification *action* button (`Einstellungen`) being drawn and tapped, since the magic links so far were
   requested from the settings gate rather than from a warning; Apple's push service at all; and
   `pushsubscriptionchange` firing on a rotation. The first real warning is still the test — watch
   `notifications.status` when it fires.
@@ -890,7 +858,7 @@ look before the next run.
   `Topic` would actually buy is bandwidth: several encrypted payloads delivered to a metered radio
   instead of one. That is a real but small cost, and it is the whole of the argument.
   **Revisit this if the tags change.** The reasoning depends entirely on same-kind messages sharing
-  a tag. They now use two tags (`rainalert-alert` and `rainalert-manage`, see `api/mail.py`), which
+  a tag. They now use two tags (`rainalert-alert` and `rainalert-manage`, see `api/messages.py`), which
   preserves the collapse *within* a family; splitting further — per event, say — would break it and
   make `Topic` worth having.
 - **There is no instrument for a push that is accepted and never displayed.** If a payload were

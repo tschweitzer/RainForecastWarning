@@ -11,5 +11,8 @@ class ConsoleNotifier:
 
     def send(self, message: OutboundMessage) -> DeliveryResult:
         self.sent.append(message)
-        print(f"\n--- mail to {message.to} ---\n{message.subject}\n\n{message.text}\n---")
+        print(
+            f"\n--- push to {message.to} ---\n{message.subject}\n\n{message.text}\n"
+            f"{message.click_url or ''}\n---"
+        )
         return DeliveryResult(ok=True, provider_message_id=f"console-{len(self.sent)}")

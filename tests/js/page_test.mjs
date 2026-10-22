@@ -153,7 +153,6 @@ function stateMachine({ subscription = null, begin, hash = '' }) {
   const box = {};
   new Function('box', 'document', 'window', 'history', 'ownSubscriptionFake', 'fakePick',
     `var pageState = null, deciding = false, decideAgain = false, map = null, pick = null;
-     var EMAIL_AVAILABLE = false;
      function ownSubscription() { return Promise.resolve(ownSubscriptionFake.subscription); }
      function addLocate() {}
      function ensurePicker() { pick = pick || fakePick; return pick; }

@@ -1,11 +1,12 @@
-"""Opaque tokens: confirmation, unsubscribe, and the long-lived API bearer.
+"""Opaque tokens: confirmation, settings links, unsubscribe, and the signed references.
 
 Rules, all of which exist because of how these tokens travel:
 
 * The **plaintext is never stored** - only ``sha256`` of it. A token is generated once, put into
-  exactly one email or one response body, and is thereafter only ever compared by hash.
+  exactly one push message or one response body, and is thereafter only ever compared by hash.
 * Comparison is by hash lookup, so it is inherently constant-time with respect to the secret.
-* Confirmation tokens are **single use and expire**; API tokens are long-lived and revocable.
+* Confirmation and settings-link tokens are **single use and expire**. (The long-lived API bearer
+  token went with email, D-76.)
 * A token must never travel in a URL that ends up in a log. Cloud Run logs full request URLs
   including the query string, so the confirm and unsubscribe flows take the token from a POST body
   (SECURITY_REVIEW.md F-4, F-8).
@@ -72,21 +73,17 @@ def hash_token(token: str) -> bytes:
     return hashlib.sha256(token.encode("utf-8", "surrogatepass")).digest()
 
 
-def hash_address(channel: str, address: str) -> bytes:
-    """Stable lookup key for a subscriber, covering the channel as well as the address.
+def hash_address(endpoint: str) -> bytes:
+    """Stable lookup key for a subscriber: a hash of its push endpoint.
 
-    Without the channel, a push endpoint spelled like a mailbox would collide with that mailbox and
-    the two subscribers would be one.
+    Not case-folded: the tail of an endpoint is a path, and a path is case-sensitive, so folding
+    would make two distinct destinations look like one subscriber.
 
-    Mailboxes are case-folded because they are case-insensitive in practice. Push endpoints are not:
-    the tail of one is a path, and a path is case-sensitive, so folding would make two distinct
-    destinations look like one subscriber.
-
-    (The rule is unchanged from when this said "ntfy topic" - it was right for a topic and is right
-    for an endpoint, for the same reason. Only the example was left behind by D-45.)
+    The hashed text is `webpush:<endpoint>`. The prefix is what the hash covered when email was a
+    second channel (it kept an endpoint spelled like a mailbox from colliding with that mailbox);
+    it stays so that every hash already stored still matches (D-76).
     """
-    normalised = address.strip().lower() if channel == "email" else address.strip()
-    return hashlib.sha256(f"{channel}:{normalised}".encode("utf-8", "surrogatepass")).digest()
+    return hashlib.sha256(f"webpush:{endpoint.strip()}".encode("utf-8", "surrogatepass")).digest()
 
 
 def hash_ip(ip: str, secret: str) -> bytes:
@@ -106,8 +103,8 @@ def expiry(hours: int, now: datetime | None = None) -> datetime:
 def unsubscribe_token(subscriber_id: uuid.UUID, secret: str) -> str:
     """A signed, stateless unsubscribe token.
 
-    Every alert mail must carry a working unsubscribe link, but stored tokens are stored as hashes
-    only - so a link cannot be rebuilt from the database later. Signing solves that without ever
+    The confirmed page carries an unsubscribe link that must keep working, but stored tokens are
+    stored as hashes only - so a link cannot be rebuilt from the database later. Signing solves that without ever
     persisting a secret: the token is the subscriber id plus an HMAC over it, verifiable at any
     time, and invalidated wholesale by rotating SECRET_KEY.
     """

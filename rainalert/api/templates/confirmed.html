@@ -1,14 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Angemeldet</h1>
-{# `webpush` since D-45. This said `ntfy` for a while after the channel was renamed, which meant
-   every push subscriber was told they would get email - on the first page they ever see - and was
-   also denied the one line telling them how to get back into settings. #}
-{% if channel == "webpush" %}
 <p class="lede">Du bekommst jetzt eine Benachrichtigung, wenn Regen aufzieht.</p>
-{% else %}
-<p class="lede">Du bekommst jetzt eine Mail, wenn Regen aufzieht.</p>
-{% endif %}
 
 <p>
   {# The settings are on the start page, under the map (D-67). #}
@@ -16,7 +9,6 @@
 </p>
 <p class="hint">
   Ort, Schwelle, Vorwarnzeit und Umkreis – du bist gerade angemeldet und kommst direkt hinein.
-  {% if channel == "webpush" %}
   {# Was: "jederzeit über den Knopf Einstellungen in jeder Warnung - das ist der Weg zurück
      hierher". Two things wrong with it. "jederzeit ... in jeder Warnung" contradicts itself: in a
      dry month there is no warning, so it is not jederzeit. And it is not "der Weg" - /manage is
@@ -30,42 +22,18 @@
      (D-64), so there is no "we send you a notification first" to explain. And since D-67 they are
      not behind a link of their own: the start page shows them to a subscribed browser. #}
   Später findest du sie auf der Startseite unter der Karte.
-  {% endif %}
 </p>
 
-{% if channel == "webpush" %}
 {# D-47, on the page that marks the reader becoming a subscriber - which is where it was missing.
-   Not inside the Zugangsschlüssel <details> below: that is collapsed, its summary says the reader
-   only needs it "für die Schnittstelle", and the "kein Ersatz-Zugang" line in it is about the API
-   key, not about this. The product's hardest constraint cannot live behind a disclosure labelled
-   as irrelevant. #}
+   Not behind a disclosure: the product's hardest constraint has to be on screen. #}
 <p class="hint">
   Diese Anmeldung lebt in diesem Browser. Löschst du die Websitedaten („Cookies und andere
   Websitedaten“), endet sie – einen Ersatz-Zugang gibt es nicht, du meldest dich dann neu an.
 </p>
-{% endif %}
-
-{# Email only since D-64: push subscribers are no longer issued the long-lived API token. #}
-{% if api_token %}
-<details class="note">
-  <summary><strong>Zugangsschlüssel</strong> – brauchst du nur für die Schnittstelle</summary>
-  <p>Er wird nur jetzt angezeigt und nirgends noch einmal. Zum Ändern deiner Einstellungen
-  brauchst du ihn nicht – dafür ist der Knopf oben da.</p>
-  {# Said explicitly because "wird nur jetzt angezeigt" invites the opposite conclusion, and D-47
-     means a reader who writes it down as their way back in has written down the wrong thing. #}
-  <p>Er ist <strong>kein</strong> Ersatz-Zugang: verlierst du diesen Browser, hilft er dir nicht.</p>
-  <code>{{ api_token }}</code>
-</details>
-{% endif %}
 
 <p class="hint">
   <a href="{{ settings.public_base_url.rstrip('/') }}/unsubscribe#t={{ unsubscribe_token }}">Abmelden
-  und alles löschen</a> –
-  {% if channel == "webpush" %}
-  geht auch jederzeit später in den Einstellungen.
-  {% else %}
-  geht auch jederzeit später über den Link in jeder Mail.
-  {% endif %}
+  und alles löschen</a> – geht auch jederzeit später in den Einstellungen.
 </p>
 {# Tells this browser that the key it sent with the confirmation was registered, so it becomes the
    one the settings sign with (devicekey.js). Without one, any key left pending is dropped. #}

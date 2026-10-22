@@ -336,7 +336,6 @@ class WebPushNotifier:
             response = self._client.post(endpoint, content=body, headers=headers)
         # `InvalidURL` is deliberately named alongside `HTTPError`: it does NOT subclass it (it comes
         # off `Exception` directly), so it escaped a method whose entire contract - relied on by
-        # `RoutingNotifier`, which passes the return value straight through, and by
         # `deliver_queued`, which branches on it - is that it returns a `DeliveryResult` and never
         # raises. httpx raises it for a NUL or TAB in the URL, which `check_endpoint` now refuses
         # before a row can exist; this is the second lock on the same door, because the callers'

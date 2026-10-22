@@ -165,8 +165,7 @@ backfill:
 	@$(PY) -m rainalert.cli backfill $(if $(HOURS),--hours $(HOURS),) \
 		$(if $(LIMIT),--limit $(LIMIT),) $(if $(DRY_RUN),--dry-run,) $(if $(YES),--yes,)
 
-# Prints the links from the newest local mails, decoded. `cat`ing the .eml does not work:
-# it is quoted-printable, so the token reads `=3D...` and wraps mid-string.
+# Prints the newest messages NOTIFIER=file wrote, with their links - the tap a local signup needs.
 outbox:
 	@$(PY) -m rainalert.cli outbox $(if $(N),-n $(N),)
 

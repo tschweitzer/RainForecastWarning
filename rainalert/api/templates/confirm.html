@@ -65,10 +65,10 @@ noch einmal direkt aus der Nachricht.</p>
     lede.textContent = ledePromise;
 
     var hash = window.location.hash || '';
-    // `#a=` arrives from a push notification and confirms on open; `#t=` arrives by mail and waits
-    // for the click. Which one is sent is decided in the message, where the channel is known.
+    // `#a=` arrives from a push notification and confirms on open. (`#t=`, a mailed link that
+    // waited for a click, went with email - D-76.)
     var auto = hash.indexOf('#a=') === 0;
-    if (auto || hash.indexOf('#t=') === 0) {
+    if (auto) {
       field.value = decodeURIComponent(hash.slice(3));
       // Erased, and replaceState so Back does not return to a URL still carrying the token.
       history.replaceState(null, '', window.location.pathname);
@@ -83,7 +83,8 @@ noch einmal direkt aus der Nachricht.</p>
     }
 
     if (!auto) {
-      // A mailed link: no push subscription to prove and no key to register.
+      // No fresh link in the fragment, only the one an earlier run already read: offer the button
+      // for it rather than submitting again by itself.
       form.hidden = false;
       return;
     }

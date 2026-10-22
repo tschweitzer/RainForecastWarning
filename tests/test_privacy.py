@@ -93,13 +93,6 @@ def test_the_abuse_counters_are_disclosed_with_the_ip_address(db, tmp_path):
 # --- recipients --------------------------------------------------------------------------------
 
 
-def test_the_mail_server_is_named_only_when_email_is_on(db, tmp_path):
-    on = privacy(db, tmp_path, email_channel_enabled=True, smtp_host="smtp.example.org")
-    assert "<code>smtp.example.org</code>" in on
-    off = privacy(db, tmp_path, email_channel_enabled=False, smtp_host="smtp.example.org")
-    assert "smtp.example.org" not in off
-
-
 def test_every_push_service_the_allowlist_accepts_is_named(db, tmp_path):
     """A push host we will send to is a recipient of the push address."""
     page = privacy(db, tmp_path)

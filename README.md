@@ -1,6 +1,6 @@
 # RainForecastWarning
 
-A cloud service that warns you by push notification or email shortly before it starts raining at
+A cloud service that warns you by browser push notification shortly before it starts raining at
 your location, using DWD radar nowcast data (Germany).
 
 **Status:** in production on Google Cloud (Cloud Run, Cloud SQL, Firebase Hosting). It ingests
@@ -8,8 +8,8 @@ DWD's radar composite every five minutes, evaluates each subscriber's location, 
 before rain arrives ("Es regnet jetzt" when it starts unannounced), and shows a rain map with a
 48 h … +2 h timeline slider.
 
-Push needs nothing beyond the deployment; email additionally needs a mail provider with
-SPF/DKIM/DMARC and its DPA accepted — see [docs/RUNBOOK.md](docs/RUNBOOK.md).
+Web Push is the only channel (DESIGN.md D-76): it needs nothing beyond the deployment and a VAPID
+key — no mail provider, no account, no address of anyone's.
 
 - **[docs/DESIGN.md](docs/DESIGN.md)** — requirements, decisions log, architecture, data model,
   alert state machine, API, privacy, testing strategy and milestones.
@@ -50,17 +50,17 @@ make migrate           # create/upgrade the schema
 make serve             # http://localhost:8000
 ```
 
-With `NOTIFIER=file` and `MAIL_OUTBOX_DIR=./var/outbox`, mails are written as `.eml` files you can
-open instead of being sent — which is how the whole double opt-in flow can be exercised locally.
+With `NOTIFIER=file` and `OUTBOX_DIR=./var/outbox`, notifications are written as `.txt` files —
+title, body and the link a tap would open — instead of being pushed, and `rainalert outbox` prints
+the newest. That is how the whole double opt-in flow can be exercised without a push service.
 
 **Configuration you will need at deploy time** (all have working local defaults):
 
 | Variable | What it is |
 |---|---|
-| `PUBLIC_BASE_URL` | the origin every emailed link is built from |
-| `MAIL_FROM` | sender address; its domain needs SPF, DKIM and DMARC or the mail lands in spam |
-| `NOTIFIER` | `console`, `file` or `smtp` |
-| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` | any provider — they all speak SMTP |
+| `PUBLIC_BASE_URL` | the origin every link in a notification is built from |
+| `NOTIFIER` | `webpush` in production; `console` or `file` locally |
+| `VAPID_PRIVATE_KEY` / `VAPID_SUBJECT` | the push signing key (`rainalert vapid-keys`) and the operator contact push services see |
 | `SECRET_KEY` | salts the consent IP hashes; must be set in production |
 | `TRUSTED_PROXY_HOPS` | how many proxies in front of us are ours (0 ignores `X-Forwarded-For`) |
 | `CONTACT_EMAIL` / `PRIVACY_CONTROLLER` | footer contact, and the controller's name and address the privacy page must name (D-72) |
@@ -77,7 +77,7 @@ make rerender          # rebuild map overlays from archives already held (no DWD
 ```
 
 **Want to try it?** [docs/LOCAL.md](docs/LOCAL.md) runs the whole service on a laptop against the
-real DWD server — no cloud account, no domain, no mail provider. Mail is written as `.eml` files.
+real DWD server — no cloud account and no domain. Notifications are written as text files.
 
 Deployment lives in [`infra/`](infra/) (Terraform) with the procedure and failure modes in
 [docs/RUNBOOK.md](docs/RUNBOOK.md).

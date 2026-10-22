@@ -19,7 +19,6 @@ from rainalert import devicekeys
 from rainalert.config import Settings
 from rainalert.db.models import (
     AuthToken,
-    Channel,
     DeviceKey,
     Subscriber,
     Subscription,
@@ -107,9 +106,7 @@ def holds_subscription(subscriber: Subscriber, proof: PushProof | None) -> bool:
             endpoint = check_endpoint(proof.endpoint.strip())
         except EndpointRefused:
             endpoint = ""
-        if endpoint and same_secret(
-            hash_address(Channel.WEBPUSH.value, endpoint).hex(), subscriber.address_hash.hex()
-        ):
+        if endpoint and same_secret(hash_address(endpoint).hex(), subscriber.address_hash.hex()):
             return True
     if proof.p256dh and subscriber.push_p256dh:
         try:
@@ -123,11 +120,7 @@ def holds_subscription(subscriber: Subscriber, proof: PushProof | None) -> bool:
 
 def _check_push_redemption(subscriber: Subscriber, how: Redemption) -> None:
     """Refuse a current page's redemption of a push token in a browser that is not the owner."""
-    if (
-        subscriber.channel == Channel.WEBPUSH
-        and how.current
-        and not holds_subscription(subscriber, how.proof)
-    ):
+    if how.current and not holds_subscription(subscriber, how.proof):
         raise PushMismatch("this link belongs to a subscription this browser does not hold")
 
 
@@ -136,17 +129,11 @@ def enrol_device_key(
 ) -> str | None:
     """Store the key a current page sent with a push redemption, replacing any previous one.
 
-    Only for web push, only when the feature is on, and only ever called from inside a token
-    redemption - never from an authenticated request - so a key is exactly as strong as the push
+    Only when the feature is on, and only ever called from inside a token redemption - never from an authenticated request - so a key is exactly as strong as the push
     round trip it replaces (PLAN_DEVICE_KEY.md §4.1). Not committed here; the caller commits it
     with the redemption.
     """
-    if not (
-        settings.device_key_login_enabled
-        and subscriber.channel == Channel.WEBPUSH
-        and how.current
-        and how.device_key
-    ):
+    if not (settings.device_key_login_enabled and how.current and how.device_key):
         return None
     try:
         return _replace_device_key(session, subscriber.id, how.device_key, now)
@@ -184,16 +171,16 @@ def rotate_device_key(
 class SubscribeResult:
     """What the caller may learn.
 
-    Note what is *not* here: whether the address was already known. The endpoint answers
-    identically either way, so it cannot be used to test whether someone is subscribed.
+    `already_active` is the one thing about existing state, and it is safe to say: the endpoint is
+    a capability only its browser and push service hold, so whoever presents it is its owner. (While
+    email existed the address was something anyone could type, and the route answered identically.)
     """
 
     confirm_token: str | None
     subscriber_id: uuid.UUID | None
     already_active: bool
-    #: The address the confirmation goes to: the mailbox for email, the push endpoint for web
-    #: push. Echoed back rather than re-derived so the caller sends the confirmation to exactly
-    #: what was stored - a normalised mailbox, or an endpoint that passed the host check.
+    #: The push endpoint the confirmation goes to. Echoed back rather than re-derived so the caller
+    #: sends the confirmation to exactly what was stored: an endpoint that passed the host check.
     address: str | None = None
 
 
@@ -226,8 +213,7 @@ def subscribe(
     *,
     lat: float,
     lon: float,
-    channel: Channel = Channel.EMAIL,
-    address: str | None = None,
+    endpoint: str | None = None,
     push_p256dh: str | None = None,
     push_auth: str | None = None,
     client_ip: str | None = None,
@@ -236,57 +222,46 @@ def subscribe(
 ) -> SubscribeResult:
     """Start a double opt-in. Returns the confirmation token for the caller to deliver.
 
-    Nothing is ever sent to an address that has not confirmed. For email that is what stops this
-    endpoint being usable as a mail relay or to bomb a third party. For web push there is no third
-    party to protect - the browser handed us its own endpoint - but the confirmation keeps its
-    place for the other reason: it proves the channel actually reaches the subscriber. Under web
-    push there is more of that chain to get wrong, not less. A service worker that fails to
-    install, a payload the browser refuses, a permission granted and then revoked before the first
-    send: each leaves a subscription that looks healthy from here and shows nothing there. A rain
-    warning that silently goes nowhere is worse than none, because they stop watching the sky.
+    Nothing is sent to an endpoint that has not confirmed, and the confirmation is not a formality
+    even though the browser handed us its own endpoint: it proves the channel actually reaches the
+    subscriber. Under web push there is plenty of that chain to get wrong. A service worker that
+    fails to install, a payload the browser refuses, a permission granted and then revoked before
+    the first send: each leaves a subscription that looks healthy from here and shows nothing
+    there. A rain warning that silently goes nowhere is worse than none, because they stop
+    watching the sky.
 
-    ``address`` is the mailbox for email and the push endpoint for web push; ``push_p256dh`` and
-    ``push_auth`` are required with the latter and ignored otherwise.
+    ``endpoint``, ``push_p256dh`` and ``push_auth`` are the browser's `PushSubscription`.
     """
     now = now or datetime.now(UTC)
     lat, lon = validate_location(lat, lon)
 
-    if channel == Channel.EMAIL:
-        if not address:
-            raise ValidationError("an email address is required")
-        address = address.strip().lower()
-    else:
-        if not address:
-            raise ValidationError("a push endpoint is required")
-        if not (push_p256dh and push_auth):
-            # Without both, nothing can ever be encrypted for this subscriber, so the row would be
-            # dead the moment it was written. Refuse rather than store something unreachable.
-            raise ValidationError("a push subscription needs its p256dh and auth keys")
-        try:
-            # SSRF: this endpoint is a URL chosen by whoever is calling, and the notifier will POST
-            # to it. Checked here so the row never exists, and again in the notifier so a row that
-            # arrived another way still cannot become a request to anywhere it likes.
-            address = check_endpoint(address.strip())
-        except EndpointRefused as exc:
-            raise ValidationError(str(exc)) from exc
+    if not endpoint:
+        raise ValidationError("a push endpoint is required")
+    if not (push_p256dh and push_auth):
+        # Without both, nothing can ever be encrypted for this subscriber, so the row would be
+        # dead the moment it was written. Refuse rather than store something unreachable.
+        raise ValidationError("a push subscription needs its p256dh and auth keys")
+    try:
+        # SSRF: this endpoint is a URL chosen by whoever is calling, and the notifier will POST
+        # to it. Checked here so the row never exists, and again in the notifier so a row that
+        # arrived another way still cannot become a request to anywhere it likes.
+        address = check_endpoint(endpoint.strip())
+    except EndpointRefused as exc:
+        raise ValidationError(str(exc)) from exc
 
-    digest = hash_address(channel.value, address)
+    digest = hash_address(address)
     subscriber = session.execute(
         select(Subscriber).where(Subscriber.address_hash == digest)
     ).scalar_one_or_none()
 
     if subscriber and subscriber.confirmed_at:
-        # Already confirmed. No second confirmation token, and - for email - nothing else either:
-        # the caller only proved they can type an address, so acting on the request would let a
-        # stranger move somebody else's location.
-        #
-        # Web push looks like the opposite case and *nearly* got the opposite treatment. It is
-        # tempting to say the caller must be the browser that owns this endpoint, because that is
-        # where an endpoint comes from. It is not true, and believing it reopens the hole that
-        # `POST /api/v1/push/resubscribe` was deleted for on the same day (see the security table
-        # and the long comment in static/sw.js): an endpoint is not a secret. It is not published,
-        # but it proves nothing, because a push service will not deliver to it for anyone who lacks
-        # our VAPID key. Anyone who learns one and re-POSTs it here could, for one unauthenticated
+        # Already confirmed, and no second confirmation token. It is tempting to say the caller
+        # must be the browser that owns this endpoint, because that is where an endpoint comes
+        # from. It is not true, and believing it reopens the hole that
+        # `POST /api/v1/push/resubscribe` was deleted for (see the security table and the long
+        # comment in static/sw.js): an endpoint is not a secret. It is not published, but it
+        # proves nothing, because a push service will not deliver to it for anyone who lacks our
+        # VAPID key. Anyone who learns one and re-POSTs it here could, for one unauthenticated
         # request:
         #   - overwrite the stored keys with their own, so every later warning is encrypted to keys
         #     the reader's browser cannot decrypt while the push service still answers 201 and this
@@ -304,47 +279,44 @@ def subscribe(
         # attacker holding only the endpoint cannot produce them.
         #
         # So: the keys are never overwritten, and the location moves only for a caller that can
-        # present them. `compare_digest` because a plain `==` on a secret is a timing oracle.
-        if channel != Channel.EMAIL:
-            if not (push_p256dh and push_auth):
-                return SubscribeResult(None, None, already_active=False)
-            # `same_secret`, not `secrets.compare_digest`: the latter raises TypeError on a
-            # non-ASCII str, and these two values come straight out of a JSON body. A caller who
-            # knew a confirmed endpoint and sent one umlaut in `p256dh` got an unhandled 500 out of
-            # this line - the takeover fix's own contribution to the bug class it was reviewed
-            # alongside. The keys are also charset-checked in `SubscribeRequest` now; this is the
-            # half that holds for a row arriving by any other route.
-            owner = same_secret(push_p256dh, subscriber.push_p256dh or "") and same_secret(
-                push_auth, subscriber.push_auth or ""
-            )
-            if not owner:
-                # Answered exactly as a brand-new endpoint would be, and nothing is stored or sent.
-                # Identical on purpose: a different answer here would make this endpoint an oracle
-                # for "is this push subscription registered?", which the rest of this module is
-                # careful not to be.
-                #
-                # The one legitimate caller this refuses is a browser that rotated its keys while
-                # keeping the same endpoint. That is not a thing browsers do - a rotation produces a
-                # new subscription, so a new endpoint and a new row - and if it ever happened the
-                # 410 pruning would clean up and the reader would sign up again, which is the cost
-                # D-47 already states.
-                return SubscribeResult(None, None, already_active=False)
-            subscription = session.execute(
-                select(Subscription).where(Subscription.subscriber_id == subscriber.id)
-            ).scalar_one_or_none()
-            if subscription is not None and (subscription.lat, subscription.lon) != (lat, lon):
-                # D-17 applies: a move invalidates what the alert state believed about the old
-                # place, and `update_location` is what knows that - not this function.
-                update_location(session, subscriber, lat=lat, lon=lon, now=now)
+        # present them.
+        #
+        # `same_secret`, not `secrets.compare_digest`: the latter raises TypeError on a non-ASCII
+        # str, and these two values come straight out of a JSON body. A caller who knew a confirmed
+        # endpoint and sent one umlaut in `p256dh` got an unhandled 500 out of this line - the
+        # takeover fix's own contribution to the bug class it was reviewed alongside. The keys are
+        # also charset-checked in `SubscribeRequest` now; this is the half that holds for a row
+        # arriving by any other route.
+        owner = same_secret(push_p256dh, subscriber.push_p256dh or "") and same_secret(
+            push_auth, subscriber.push_auth or ""
+        )
+        if not owner:
+            # Answered exactly as a brand-new endpoint would be, and nothing is stored or sent.
+            # Identical on purpose: a different answer here would make this endpoint an oracle
+            # for "is this push subscription registered?", which the rest of this module is
+            # careful not to be.
+            #
+            # The one legitimate caller this refuses is a browser that rotated its keys while
+            # keeping the same endpoint. That is not a thing browsers do - a rotation produces a
+            # new subscription, so a new endpoint and a new row - and if it ever happened the
+            # 410 pruning would clean up and the reader would sign up again, which is the cost
+            # D-47 already states.
+            return SubscribeResult(None, None, already_active=False)
+        subscription = session.execute(
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+        ).scalar_one_or_none()
+        if subscription is not None and (subscription.lat, subscription.lon) != (lat, lon):
+            # D-17 applies: a move invalidates what the alert state believed about the old
+            # place, and `update_location` is what knows that - not this function.
+            update_location(session, subscriber, lat=lat, lon=lon, now=now)
         return SubscribeResult(None, None, already_active=True)
 
     if subscriber is None:
         subscriber = Subscriber(
-            channel=channel,
             address=address,
             address_hash=digest,
-            push_p256dh=push_p256dh if channel != Channel.EMAIL else None,
-            push_auth=push_auth if channel != Channel.EMAIL else None,
+            push_p256dh=push_p256dh,
+            push_auth=push_auth,
             created_at=now,
             consent_ip_hash=hash_ip(client_ip, settings.secret_key) if client_ip else None,
             consent_user_agent=(user_agent or "")[:256] or None,
@@ -402,9 +374,6 @@ def subscribe(
 
 @dataclass
 class ConfirmResult:
-    #: None for web push: the long-lived API token is no longer issued to push subscribers, whose
-    #: settings page has a device key (PLAN_DEVICE_KEY.md §4.9).
-    api_token: str | None
     unsubscribe_token: str
     subscriber_id: uuid.UUID
     #: The id of the device key stored with this confirmation, if one was.
@@ -421,9 +390,9 @@ def confirm(
 ) -> ConfirmResult:
     """Consume a confirmation token and activate the subscription.
 
-    Single use: a mail scanner that follows the link would otherwise consume it and the real user
-    would be told it is already used (SECURITY_REVIEW.md F-4). That is why the HTTP layer only
-    calls this from a POST.
+    Single use, and only ever spent by a POST: a link scanner or a prefetching browser that follows
+    the link would otherwise consume it and the real user would be told it is already used
+    (SECURITY_REVIEW.md F-4).
     """
     now = now or datetime.now(UTC)
     row = session.execute(
@@ -452,23 +421,11 @@ def confirm(
     subscription.status = SubscriptionStatus.ACTIVE
     subscription.updated_at = now
 
-    api_token = None
-    if subscriber.channel == Channel.EMAIL:
-        api_token = new_token()
-        session.add(
-            AuthToken(
-                subscriber_id=subscriber.id,
-                purpose=TokenPurpose.API,
-                token_hash=hash_token(api_token),
-                expires_at=None,
-                created_at=now,
-            )
-        )
     key_id = enrol_device_key(session, settings, subscriber, how, now)
     session.commit()
-    # Signed rather than stored, so every future alert mail can carry a working link (tokens.py).
+    # Signed rather than stored, so the link on the confirmed page keeps working (tokens.py).
     return ConfirmResult(
-        api_token, unsubscribe_token(subscriber.id, settings.secret_key), subscriber.id, key_id
+        unsubscribe_token(subscriber.id, settings.secret_key), subscriber.id, key_id
     )
 
 
@@ -502,15 +459,14 @@ def issue_manage_token(
     return token
 
 
-def find_subscriber(session: Session, *, channel: Channel, address: str) -> Subscriber | None:
-    """Look a subscriber up by what they would type. Returns None rather than raising.
+def find_subscriber(session: Session, *, endpoint: str) -> Subscriber | None:
+    """Look a subscriber up by push endpoint. Returns None rather than raising.
 
-    The caller must answer identically whether this finds anything or not: a settings page that
-    says "unknown address" is an oracle for who has signed up, and the addresses are mailboxes
-    and push topics belonging to real people.
+    The caller must answer identically whether this finds anything or not: a page that says
+    "unknown subscription" is an oracle for who has signed up.
     """
     return session.execute(
-        select(Subscriber).where(Subscriber.address_hash == hash_address(channel.value, address))
+        select(Subscriber).where(Subscriber.address_hash == hash_address(endpoint))
     ).scalar_one_or_none()
 
 
@@ -553,24 +509,6 @@ def redeem_manage_token(
     key_id = enrol_device_key(session, settings, subscriber, how, now) if settings else None
     session.commit()
     return ManageRedemption(subscriber, key_id)
-
-
-def resolve_token(
-    session: Session, *, token: str, purpose: TokenPurpose, now: datetime | None = None
-) -> Subscriber:
-    now = now or datetime.now(UTC)
-    row = session.execute(
-        select(AuthToken).where(
-            AuthToken.token_hash == hash_token(token), AuthToken.purpose == purpose
-        )
-    ).scalar_one_or_none()
-    if row is None or (row.expires_at and row.expires_at < now):
-        raise ValidationError("not authorised")
-    row.last_used_at = now
-    subscriber = session.get(Subscriber, row.subscriber_id)
-    if subscriber is None:
-        raise ValidationError("not authorised")
-    return subscriber
 
 
 def update_location(

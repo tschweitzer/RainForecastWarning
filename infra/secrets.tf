@@ -21,7 +21,7 @@ resource "random_password" "metrics_token" {
 }
 
 resource "google_secret_manager_secret" "this" {
-  for_each  = toset(["api-database-url", "ingest-database-url", "secret-key", "smtp-password", "metrics-token", "vapid-private-key"])
+  for_each  = toset(["api-database-url", "ingest-database-url", "secret-key", "metrics-token", "vapid-private-key"])
   secret_id = "rainalert-${each.key}"
   replication {
     user_managed {
@@ -75,11 +75,8 @@ resource "google_secret_manager_secret_version" "vapid_private_key" {
   secret_data = tls_private_key.vapid.private_key_pem_pkcs8
 }
 
-# The SMTP password is the one secret Terraform must not generate. Set it by hand:
-#   echo -n 'the-password' | gcloud secrets versions add rainalert-smtp-password --data-file=-
-
 resource "google_secret_manager_secret_iam_member" "api_reads" {
-  for_each  = toset(["api-database-url", "secret-key", "smtp-password", "vapid-private-key"])
+  for_each  = toset(["api-database-url", "secret-key", "vapid-private-key"])
   secret_id = google_secret_manager_secret.this[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.api.email}"
@@ -92,7 +89,7 @@ resource "google_secret_manager_secret_iam_member" "api_reads_metrics_token" {
 }
 
 resource "google_secret_manager_secret_iam_member" "ingest_reads" {
-  for_each  = toset(["ingest-database-url", "secret-key", "smtp-password", "vapid-private-key"])
+  for_each  = toset(["ingest-database-url", "secret-key", "vapid-private-key"])
   secret_id = google_secret_manager_secret.this[each.key].id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.ingest.email}"

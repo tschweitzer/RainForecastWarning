@@ -1,7 +1,8 @@
 # Running the whole thing locally (macOS or Linux)
 
-Everything works on a laptop with no cloud account, no domain and no mail provider: archives go to a
-directory, mail is written as `.eml` files you can open, and the map is served by the app itself.
+Everything works on a laptop with no cloud account and no domain: archives go to a directory,
+notifications can be written to text files instead of being pushed, and the map is served by the
+app itself.
 
 **This is worth doing before any deployment**, because your machine can reach
 `opendata.dwd.de` and the development environment this was written in could not. Nothing in this
@@ -92,7 +93,7 @@ DATABASE_URL=postgresql+psycopg://yourname@/rainalert?host=/tmp
 ARCHIVE_DIR=./var/raw
 OVERLAY_DIR=./var/overlays
 NOTIFIER=file
-MAIL_OUTBOX_DIR=./var/outbox
+OUTBOX_DIR=./var/outbox
 PUBLIC_BASE_URL=http://localhost:8000
 
 # The maps draw OpenStreetMap vector tiles from the OSMF's server by default (DESIGN.md D-59), so a
@@ -217,31 +218,8 @@ the address. Set `PUBLIC_BASE_URL` to the address you actually browse if you do 
 confirmation and unsubscribe link is built from it, and they will otherwise point at a localhost
 that is not yours.
 
-Subscribe with any address at your own coordinates. The confirmation mail lands in `var/outbox/`
-as a `.eml`. **Do not read the link out of the raw file** - a `.eml` is quoted-printable, so the
-token appears as `token=3D...` and wraps across a line break. Copying what `cat` shows gives a
-token that is wrong twice, and the page then says the token is invalid, which is true but
-misleading. Let the CLI decode it:
-
-```sh
-make outbox              # newest mail, links decoded and ready to open
-make outbox N=5          # the last five
-```
-
-On a desktop a mail client decodes it for you, so `open var/outbox/*.eml` works there too.
-
-**The subscription is not active until that link is opened.** A fresh signup is `pending`; the
-dispatcher only evaluates `active` and `unhealthy` rows, so an unconfirmed one is never warned
-about - and `unconfirmed_purge_hours` (24 h by default) deletes it. If the server is on another
-machine, the link points at whatever `PUBLIC_BASE_URL` says, so set that to the address you
-actually browse or the link will send you to your own laptop.
-
-### Testing warnings without any mail at all
-
-Web push sends the warning to your browser instead of to a file. No domain, no provider, no mail
-credentials - which is why it works today while the mail questions are still open.
-
-One thing to generate first, once:
+Signing up needs a browser push subscription - push is the only channel (DESIGN.md D-76) - and so
+a VAPID key, even when nothing is actually pushed. Generate one, once:
 
 ```sh
 make dev                       # if you have not already
@@ -252,14 +230,36 @@ Put the private key in `.env`. It is multi-line PEM, so it needs quoting - or ke
 export it:
 
 ```ini
-NOTIFIER=auto
 VAPID_SUBJECT=mailto:you@example.org
 VAPID_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIGH...\n-----END PRIVATE KEY-----\n"
 ```
 
-`NOTIFIER=auto` routes each message by its channel: push endpoints to the web push transport,
-addresses to SMTP (D-39). Unlike the old single-transport `NOTIFIER=ntfy`, there is no way for an
-email address to end up on the push transport by accident.
+Without it the page says push is unavailable and offers no signup.
+
+Then open the site, drop a pin at your own coordinates and submit. The browser asks for notification
+permission at that point - not on page load, deliberately (D-45). With `NOTIFIER=file` the
+confirmation is written to `var/outbox/` instead of being pushed; print it with its link:
+
+```sh
+make outbox              # newest message: title, body, and the link a tap would open
+make outbox N=5          # the last five
+```
+
+Open that link **in the same browser**: the confirm page shows that this browser holds the
+subscription the link was sent to (D-64), and a different browser is refused.
+
+**The subscription is not active until that link is opened.** A fresh signup is `pending`; the
+dispatcher only evaluates `active` and `unhealthy` rows, so an unconfirmed one is never warned
+about - and `unconfirmed_purge_hours` (24 h by default) deletes it. If the server is on another
+machine, the link points at whatever `PUBLIC_BASE_URL` says, so set that to the address you
+actually browse or the link will send you to your own laptop.
+
+### Real push notifications
+
+Set `NOTIFIER=webpush` and the same messages go to your browser through its push service instead of
+to a file. Tapping the test notification confirms the subscription; that tap is the proof the
+channel reaches you, and if nothing arrives the warnings would not have reached you either, which
+is the whole point of sending it.
 
 **Two things will stop this working on localhost, and both are the browser's rules rather than
 ours.**
@@ -274,16 +274,8 @@ Second, a real push service has to be reachable. The notification goes out throu
 `fcm.googleapis.com` or Mozilla's equivalent, so a machine with no outbound HTTPS will subscribe
 fine and then fail at send time with a connection error in the ingest log.
 
-Then: open the site, leave "Push auf dieses Gerät" selected, drop a pin, and submit. The browser
-asks for notification permission at that point - not on page load, deliberately (D-45) - and a test
-notification arrives a moment later. Tapping it confirms the subscription. That tap replaces opening
-an inbox, and if nothing arrives the warnings would not have reached you either, which is the whole
-point of sending it.
-
-**To see what is actually being sent**, `NOTIFIER=file` still writes every message to
-`MAIL_OUTBOX_DIR` as a `.eml`, including the ones bound for push - the body and the action buttons
-are visible there without a browser or a push service in the loop. `make outbox` prints the links
-decoded.
+A VAPID key that is set but unusable does not stop the server starting: the notifier then refuses
+every send and logs why ("web push transport unavailable"), and the map keeps working.
 
 **Testing the liveness notification** (D-46) without waiting for the schedule:
 
@@ -295,24 +287,8 @@ decoded.
 `--dry-run` lists the subscribers a real run would notify. Lower `WEBPUSH_LIVENESS_DAYS` to `0` in
 `.env` to make everybody due.
 
-If you would rather exercise the real mail path, point the SMTP notifier at a local catcher -
-this runs the same code that will run in production, which the `.eml` file never does:
-
-```sh
-curl -sL https://github.com/axllent/mailpit/releases/latest/download/mailpit-linux-amd64.tar.gz \
-  | tar xz mailpit && ./mailpit          # SMTP on 1025, web UI on 8025
-```
-
-```ini
-NOTIFIER=smtp
-SMTP_HOST=127.0.0.1
-SMTP_PORT=1025
-SMTP_USE_TLS=false
-```
-
-
 Then run `make run-ingest` twice more. If rain is approaching your location you will get a warning
-`.eml`. If it is dry, temporarily lower the bar to see the machinery work:
+(in `var/outbox/`, or as a notification). If it is dry, temporarily lower the bar to see the machinery work:
 
 ```sh
 psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_minutes = 120;"
@@ -320,8 +296,8 @@ psql rainalert -c "update subscriptions set threshold_mm_5min = 0.01, lead_time_
 
 ### Getting working links in messages on a VM
 
-Every link in every message - confirmation, settings link, unsubscribe, the tap target on a push
-warning - is built from `PUBLIC_BASE_URL`, and nothing else in the code knows a hostname. So a
+Every link in every message - confirmation, settings link, the tap target on a warning - and the
+unsubscribe link on the confirmation page are built from `PUBLIC_BASE_URL`, and nothing else in the code knows a hostname. So a
 message that points at a reachable address is one line, no code:
 
 ```ini
@@ -331,7 +307,7 @@ PUBLIC_BASE_URL=http://203.0.113.10:8000    # the VM's external IP, the port you
 Restart the server and every message carries that address:
 
 ```
-confirmation   http://203.0.113.10:8000/confirm#a=...   (#t= in mail - D-36)
+confirmation   http://203.0.113.10:8000/confirm#a=...
 settings link  http://203.0.113.10:8000/#t=...
 unsubscribe    http://203.0.113.10:8000/unsubscribe#t=...
 warning taps   http://203.0.113.10:8000/#l=...
@@ -393,12 +369,12 @@ service can check, which is that a message sent to the channel arrived.
 There are three ways in, and only the last one involves typing anything.
 
 **Confirming.** Tapping the confirmation notification already proves the channel reaches you -
-the same proof a magic link gives, a few seconds earlier. On push, `POST /confirm` registers a
-device key in this browser (D-64, docs/PLAN_DEVICE_KEY.md); on email it opens the session. The page
+the same proof a magic link gives, a few seconds earlier. `POST /confirm` registers a device key in
+this browser (D-64, docs/PLAN_DEVICE_KEY.md), or opens the cookie session where it cannot. The page
 that follows has a button straight into the settings - and when the service worker confirms by
 itself (D-66), the start page opens them in place. A new subscriber never needs a link at all.
 
-**Coming back** (push). The browser that confirmed keeps a device key and signs every settings
+**Coming back.** The browser that confirmed keeps a device key and signs every settings
 request with it, so the start page simply shows the settings - no link, no notification, no session
 to expire. Notifications carry no buttons (D-64).
 
@@ -406,9 +382,8 @@ Locally, the key is bound to `PUBLIC_BASE_URL`'s origin: open the site at exactl
 `http://localhost:8000` and `http://127.0.0.1:8000` are different origins - or every signature fails
 and the page quietly falls back to the link.
 
-**Asking for a link**, for a new device or a cleared history: on email, "Schon per E-Mail
-angemeldet?" under the signup form takes the address and the link is sent. On push there is nothing
-to give - the endpoint is 200-odd characters the reader has never seen - so a browser that holds a
+**Asking for a link**, when this browser has no key: there is nothing to type - the endpoint is
+200-odd characters the reader has never seen - so a browser that holds a
 subscription but no key is shown "Dieser Browser ist angemeldet" and one button, "Einstellungen
 öffnen", which sends the link to that browser. A browser with neither is simply shown the signup.
 
@@ -657,7 +632,7 @@ exactly like a step change partway through a run. `grep -c steal /proc/stat` is 
 opens, and a cycle DWD no longer keeps is counted and skipped rather than retried.
 
 Backfilled cycles are **never evaluated for alerts**. They are history: warning about them would
-mail every subscriber about rain that stopped hours ago, once per cycle.
+notify every subscriber about rain that stopped hours ago, once per cycle.
 
 ### Running it when you only have ssh
 
@@ -793,8 +768,8 @@ The counter lives in `rate_limit_hits`, which `make reset-local` truncates:
 make reset-local YES=1    # also clears subscribers, alerts and the outbox; keeps radar data
 ```
 
-Raising the limit is the wrong fix - it is what stops the endpoint being used to mail-bomb
-someone - but it is a setting, if a long test session needs more room.
+Raising the limit is the wrong fix - it is what stops the endpoint being used to flood someone's
+browser with notifications - but it is a setting, if a long test session needs more room.
 
 ## 7. What "working" looks like
 
@@ -873,7 +848,6 @@ which prints instead of writing.
 ## 10. What this does and does not prove
 
 **Does:** the decoder handles a real 25-frame archive; the politeness client talks to the real
-server; the projection, the state machine, the mail and the map all work on live data.
+server; the projection, the state machine, the notifications and the map all work on live data.
 
-**Does not:** that mail is deliverable to real inboxes (that needs a domain with SPF/DKIM/DMARC and
-a provider), or that anything survives a week unattended. Those stay with M6.
+**Does not:** that anything survives a week unattended. That stays with M6.

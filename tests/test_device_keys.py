@@ -20,11 +20,12 @@ from sqlalchemy import select
 from rainalert import devicekeys
 from rainalert.api.app import MANAGE_COOKIE, create_app
 from rainalert.config import Settings
-from rainalert.db.models import AuthToken, DeviceKey, Subscriber, TokenPurpose
+from rainalert.db.models import DeviceKey, Subscriber
 from rainalert.notify import ConsoleNotifier
 
 SITE = "https://rain.example.invalid"
 MUNICH = (48.1533, 11.5574)
+HAMBURG = (53.5511, 9.9937)
 ENDPOINT = "https://fcm.googleapis.com/fcm/send/device-key-test"
 P256DH = "k" * 87
 
@@ -67,7 +68,6 @@ def settings():
     return Settings(
         database_url="postgresql+psycopg://unused",
         public_base_url=SITE,
-        mail_from="RainAlert <noreply@rain.example.invalid>",
         secret_key="test-secret",
         notifier="console",
         _env_file=None,
@@ -91,14 +91,13 @@ def client(db, settings, notifier):
     return make_client(db, settings, notifier)
 
 
-def subscribe_push(client, notifier, endpoint=ENDPOINT) -> str:
+def subscribe_push(client, notifier, endpoint=ENDPOINT, at=MUNICH) -> str:
     """Signs up a push subscriber and returns the confirmation token, unspent."""
     client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
-            "lat": MUNICH[0],
-            "lon": MUNICH[1],
+            "lat": at[0],
+            "lon": at[1],
             "endpoint": endpoint,
             "p256dh": P256DH,
             "auth": "a" * 22,
@@ -219,14 +218,6 @@ def test_confirming_registers_the_key_and_opens_no_session(client, notifier, db)
         assert row.id == browser.key_id and row.public_key == browser.spki
 
 
-def test_push_subscribers_get_no_api_token_any_more(client, notifier, db):
-    """The longest-lived credential a push subscriber had (§4.9)."""
-    enrolled(client, notifier)
-    with db() as session:
-        purposes = session.execute(select(AuthToken.purpose)).scalars().all()
-        assert TokenPurpose.API not in purposes
-
-
 def test_a_page_from_before_the_release_confirms_as_before(client, notifier, db):
     """No `client` field: no proof asked, no key, the cookie session - a tab left open across the
     deploy keeps working."""
@@ -334,7 +325,6 @@ def test_subscribing_cannot_register_a_key(client, notifier, db):
     response = client.post(
         "/api/v1/subscriptions",
         json={
-            "channel": "webpush",
             "lat": MUNICH[0],
             "lon": MUNICH[1],
             "endpoint": ENDPOINT,
@@ -346,22 +336,6 @@ def test_subscribing_cannot_register_a_key(client, notifier, db):
     assert response.status_code == 422  # unknown field, refused outright
     with db() as session:
         assert session.execute(select(DeviceKey)).first() is None
-
-
-def test_email_confirmations_register_no_key(client, notifier, db):
-    client.post(
-        "/api/v1/subscriptions",
-        json={"email": "a@example.com", "lat": MUNICH[0], "lon": MUNICH[1]},
-    )
-    token = notifier.sent[-1].text.split("/confirm#")[1].split("=", 1)[1].split()[0]
-    response = client.post(
-        "/confirm",
-        data={"token": token, "client": "dk1", "device_key": Browser().public},
-    )
-    assert response.status_code == 200 and MANAGE_COOKIE in response.cookies
-    with db() as session:
-        assert session.execute(select(DeviceKey)).first() is None
-        assert TokenPurpose.API in session.execute(select(AuthToken.purpose)).scalars().all()
 
 
 # --- signed requests (§4.2) ------------------------------------------------------------------
@@ -582,7 +556,7 @@ def test_another_subscribers_key_cannot_be_taken_over(client, notifier, db):
 
 def test_redemption_with_someone_elses_key_falls_back_to_the_session(client, notifier, db):
     victim = enrolled(client, notifier)
-    token = subscribe_push(client, notifier, endpoint=ENDPOINT + "-other")
+    token = subscribe_push(client, notifier, endpoint=ENDPOINT + "-other", at=HAMBURG)
     response = client.post(
         "/confirm",
         data={
@@ -595,7 +569,9 @@ def test_redemption_with_someone_elses_key_falls_back_to_the_session(client, not
     )
     assert response.status_code == 200 and MANAGE_COOKIE in response.cookies
     assert "data-key-enrolled" not in response.text
-    assert victim.request(client, "GET", "/api/v1/subscriptions/me").json()["address"] == ENDPOINT
+    # Still the victim's settings: theirs are in Munich, the other signup's in Hamburg.
+    me = victim.request(client, "GET", "/api/v1/subscriptions/me").json()
+    assert (me["lat"], me["lon"]) == MUNICH
 
 
 def test_pages_render_the_client_version_themselves(client):

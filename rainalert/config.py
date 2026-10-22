@@ -109,11 +109,6 @@ class Settings(BaseSettings):
     #: subscription measured had 7. What is left for it to catch is a bug or an absurd rule, and
     #: when it does, it says so in the log. 0 disables it.
     alert_cap_per_subscription_per_day: int = 24
-    #: Ceiling on rain warnings sent *by email* across all subscriptions per rolling 24 h - the mail
-    #: provider's daily quota (§6.2's free tier is 300). Email only since D-70: push has no quota,
-    #: and the per-subscription ceiling already bounds it. Reaching it is logged at ERROR, because
-    #: then email subscribers are not warned for a reason that is not theirs. 0 disables it.
-    email_alert_cap_per_day: int = 300
     #: How many push notifications are sent at once (D-70). Each one is a separate HTTPS request
     #: that spends ~100 ms waiting on the push service; one after another, 3,000 of them would take
     #: about five minutes and outrun the job. Push services are built for concurrent senders.
@@ -146,7 +141,7 @@ class Settings(BaseSettings):
     evaluation_retention_hours: int = 48
 
     # --- Public identity (Q-1: the domain is not chosen yet) ---------------------------------
-    #: Every link in every email, push and page is built from this - and nothing else in the
+    #: Every link in every push message and page is built from this - and nothing else in the
     #: code knows a hostname, so pointing it at a bare IP over http is all that development on
     #: a VM needs: `PUBLIC_BASE_URL=http://203.0.113.10:8000`.
     #:
@@ -156,10 +151,6 @@ class Settings(BaseSettings):
     #: api/app.py set_session_cookie, which keys off this value) so it travels in clear; and
     #: browsers refuse geolocation outside a secure context, so the locate button cannot work.
     public_base_url: str = "http://localhost:8000"
-    #: Likewise a placeholder. Deliverability needs SPF, DKIM and DMARC on whatever domain this
-    #: ends up on - without them these mails land in spam and the service is pointless (§12).
-    mail_from: str = "RainAlert <rainalert@localhost>"
-    mail_reply_to: str | None = None
 
     # --- Basemap (Q-5, resolved 2026-09-27: basemap.de) ---------------------------------------
     #: Leaflet tile template. Defaults to basemap.de Web Raster, the German federal mapping
@@ -216,24 +207,13 @@ class Settings(BaseSettings):
     #: Betreiber dieser Website", which is not enough for a public site.
     privacy_controller: str = ""
 
-    # --- Delivery (Q-4: the provider is not chosen yet) ---------------------------------------
-    #: console | file | smtp | webpush | push | auto. SMTP reaches every provider worth using, so
-    #: choosing one is a matter of credentials rather than code. `auto` is the production shape:
-    #: each channel on its own transport (notify/routing.py). `console` and `file` stay sinks
-    #: that take everything, so a local run never posts to a real push service.
+    # --- Delivery ----------------------------------------------------------------------------
+    #: console | file | webpush | push. `webpush` is production. `console` and `file` are sinks
+    #: for development that take every message, so a local run never posts to a real push service
+    #: unless asked to. Push only since D-76; there is no mail transport.
     notifier: str = "console"
-    #: Whether the email channel is offered at all. False is for a deployment that has push
-    #: working and no mail provider yet: the signup page then shows push only, and the API
-    #: refuses `channel=email` rather than accepting an address it has no way to write to.
-    #: It gates *signing up*, not delivery - anyone already subscribed by email keeps working.
-    email_channel_enabled: bool = True
-    mail_outbox_dir: str | None = None
-    smtp_host: str = "localhost"
-    smtp_port: int = 587
-    smtp_username: str | None = None
-    smtp_password: str | None = None
-    smtp_use_tls: bool = True
-    smtp_timeout_seconds: float = 20.0
+    #: Where `NOTIFIER=file` writes each message, one text file per message.
+    outbox_dir: str | None = None
 
     # --- Push (W3C Web Push, D-45) -------------------------------------------------------------
     #: The VAPID private key, PEM. Generate one with `rainalert vapid-keys` and keep it in Secret
@@ -273,9 +253,8 @@ class Settings(BaseSettings):
     #: the text is edited (GDPR Art. 7(1)). **Bump this whenever the consent text changes**, or
     #: every existing record points at wording that no longer exists.
     #:
-    #: There are two wordings per version - one naming an email address, one naming a push topic -
-    #: because they describe different data. The subscriber's `channel` is stored alongside, so
-    #: channel plus version identifies exactly what was on screen without a second column.
+    #: One wording since D-76, the push one. Records made under 2026-09-21 by an email subscriber
+    #: named an email address; there are none left (migration e5b2c8d4f1a6).
     #:
     #: 2026-09-21: split by channel, and the signup note stopped claiming that nothing is stored
     #: before confirmation. A pending row exists from the moment of signup and is deleted after
@@ -293,19 +272,9 @@ class Settings(BaseSettings):
     location_limit_per_hour: int = 60
     #: Writes to the rule (threshold, lead time, radius) from the settings page.
     settings_limit_per_hour: int = 60
-    #: Magic-link requests. Deliberately as tight as signing up: the endpoint takes an address
-    #: and sends mail to it, so it is the same mail-bomb lever as POST /subscriptions.
+    #: Settings-link requests. As tight as signing up: the endpoint takes a push endpoint and
+    #: sends a message to it.
     manage_link_limit_per_hour: int = 5
-    #: Ceiling on confirmation and settings-link *mails*, across all requests, per rolling 24 h.
-    #: The per-IP limits above are only as good as the client IP, and a request sent straight to
-    #: the service's run.app address can choose its own (SECURITY_REVIEW.md F-5, status
-    #: 2026-10-09). The per-address limits still cap what one mailbox receives, but not how many
-    #: *different* mailboxes a single attacker can have us write to - and those mails spend the
-    #: provider's daily quota and the domain's reputation that rain warnings depend on. This cap
-    #: counts nothing per IP, so no header can get around it. Warnings are not counted here
-    #: (`email_alert_cap_per_day` is theirs); push messages are free and are not counted either.
-    #: 50 is far above what a friends-and-family service signs up in a day. 0 disables it.
-    transactional_mail_cap_per_day: int = 50
     rate_limit_retention_days: int = 7
 
     # --- Self-service settings (§11.2; on the start page since D-67) ----------------------------

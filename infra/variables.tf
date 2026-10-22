@@ -52,28 +52,6 @@ variable "trusted_proxy_hops" {
   }
 }
 
-variable "mail_from" {
-  description = "Sender address. Its domain needs SPF, DKIM and DMARC or the warnings land in spam. Unused while smtp_host is empty."
-  type        = string
-  default     = "RainAlert <noreply@invalid>"
-}
-
-variable "smtp_host" {
-  description = "Any provider - they all speak SMTP. Leave empty for a push-only deployment: the signup page then offers push alone, the API refuses the email channel, and the SMTP password secret is not mounted. Setting it later turns email on."
-  type        = string
-  default     = ""
-}
-
-variable "smtp_port" {
-  type    = number
-  default = 587
-}
-
-variable "smtp_username" {
-  type    = string
-  default = ""
-}
-
 variable "vapid_subject" {
   description = "The contact RFC 8292 puts in the VAPID `sub` claim. Google, Apple and Mozilla receive it on every send and use it to reach the operator when something is wrong with our traffic - the same role dwd_user_agent plays for DWD. A role address, not a personal one. Must be mailto: or https:."
   type        = string
@@ -136,17 +114,6 @@ variable "device_key_login_enabled" {
   description = "Push subscribers' browsers sign their settings requests with a device key, so the settings open without a push round trip (DESIGN.md D-64). The kill switch: false falls back to the push link and the cookie session for everyone, and nothing is lost. If it was turned off because of a verification bug, empty device_keys before turning it back on (RUNBOOK)."
   type        = bool
   default     = true
-}
-
-variable "transactional_mail_cap_per_day" {
-  description = "Confirmation and settings-link mails per rolling 24 h, across all requests (DESIGN.md D-63). The only limit on them a forged client IP cannot get around. Keep it plus the warnings' own cap within the mail provider's daily quota. 0 disables it."
-  type        = number
-  default     = 50
-
-  validation {
-    condition     = var.transactional_mail_cap_per_day >= 0
-    error_message = "transactional_mail_cap_per_day must be 0 (off) or a positive number."
-  }
 }
 
 variable "implausible_rise_pp" {

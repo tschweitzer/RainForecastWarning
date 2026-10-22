@@ -16,9 +16,6 @@ things come of it, and the second is the point.
    settings page, which is the route to changing or ending it.
 2. If the subscription is dead, the push service says so and the row is deleted.
 
-Email is deliberately not included. A mailbox does not revoke itself, an unsolicited periodic mail
-to somebody who has not asked for one is closer to spam than to housekeeping, and the way out of
-email is a link in every message that already works.
 """
 
 from __future__ import annotations
@@ -32,7 +29,6 @@ from sqlalchemy.orm import Session
 from rainalert.config import Settings
 from rainalert.db.models import (
     AuthToken,
-    Channel,
     Notification,
     Subscriber,
     Subscription,
@@ -77,7 +73,6 @@ def due_for_liveness(
         .join(Subscription, Subscription.subscriber_id == Subscriber.id)
         .outerjoin(last_sent, last_sent.c.subscription_id == Subscription.id)
         .where(
-            Subscriber.channel == Channel.WEBPUSH,
             Subscriber.confirmed_at.is_not(None),
             # Not a paused subscription. Nothing sets PAUSED today, so this is latent rather than a
             # live bug - but the day a pause button ships, the reader who pressed it would start
@@ -103,7 +98,6 @@ def liveness_message(settings: Settings, subscriber) -> OutboundMessage:
     days = settings.webpush_liveness_days
     return OutboundMessage(
         to=subscriber.address,
-        channel=Channel.WEBPUSH.value,
         # Not "Regenwarnung ist aktiv", which in ordinary German reads as *a rain warning is in
         # effect* - i.e. it is about to rain. `subject` is the notification title, and a title is
         # the only part most people read on a lock screen, so the body's careful wording never got
@@ -180,7 +174,6 @@ def count_silent_subscribers(session: Session) -> int:
             .select_from(Subscriber)
             .join(Subscription, Subscription.subscriber_id == Subscriber.id)
             .where(
-                Subscriber.channel == Channel.WEBPUSH,
                 Subscriber.confirmed_at.is_not(None),
                 Subscription.id.in_(sent_ok),
                 Subscriber.last_seen_at.is_(None),
@@ -223,7 +216,6 @@ def run_liveness(
         row = Notification(
             subscription_id=subscription.id,
             event_id=None,
-            channel=Channel.WEBPUSH.value,
             status="queued",
             queued_at=now,
             payload={"kind": "liveness", "days": settings.webpush_liveness_days},

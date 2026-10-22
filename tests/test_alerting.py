@@ -98,11 +98,19 @@ def add_cycle(session, nominal=T0):
     return cycle
 
 
-def active_subscription(session, settings, email="friend@example.com", at=FRANKFURT):
+def active_subscription(session, settings, name="friend", at=FRANKFURT):
     from rainalert import subscriptions as svc
     from rainalert.db.models import Subscription
 
-    result = svc.subscribe(session, settings, address=email, lat=at[0], lon=at[1])
+    result = svc.subscribe(
+        session,
+        settings,
+        endpoint=f"https://fcm.googleapis.com/fcm/send/{name}",
+        push_p256dh="k" * 87,
+        push_auth="a" * 22,
+        lat=at[0],
+        lon=at[1],
+    )
     confirmed = svc.confirm(session, settings, token=result.confirm_token)
     return (
         session.query(Subscription)
@@ -136,16 +144,10 @@ def test_rain_coming_produces_exactly_one_warning(db, settings, frames):
 
     message = notifier.sent[0]
     assert "Regen in etwa 60 Minuten" == message.subject
-    # The fragment form, so the token cannot reach a log (D-26) - in the body and in the header
-    # alike, which is only possible because the header no longer promises it may be POSTed.
-    assert "/unsubscribe#t=" in message.text
-    assert (
-        message.headers["List-Unsubscribe"] == f"<{message.text.split('Abmelden: ')[1].split()[0]}>"
-    )
-    assert "List-Unsubscribe-Post" not in message.headers, (
-        "one-click was advertised and answered 400; do not re-add it without the handler (Q-13)"
-    )
-    assert "?token=" not in str(message.headers)
+    # Tapping it opens the map at the warned place, by a signed reference in the fragment (D-26);
+    # the body prints no URL, because nothing in a notification shade could open one.
+    assert "#l=" in message.click_url and "?token=" not in message.click_url
+    assert "http" not in message.text
 
 
 def test_a_second_cycle_of_the_same_front_sends_nothing(db, settings, frames):
@@ -195,9 +197,9 @@ def test_one_broken_subscription_does_not_stop_the_others(db, settings, frames, 
     from rainalert.db.models import Subscription
 
     with db() as session:
-        good = active_subscription(session, settings, email="good@example.com")
+        good = active_subscription(session, settings, name="good")
         good.lead_time_minutes = 60
-        bad = active_subscription(session, settings, email="bad@example.com", at=(51.0, 9.0))
+        bad = active_subscription(session, settings, name="bad", at=(51.0, 9.0))
         session.commit()
         bad_id, good_id = bad.id, good.id
         warm_up(session, settings, frames)
@@ -300,7 +302,7 @@ def test_everyone_warned_at_once_is_not_a_reason_to_warn_nobody(db, settings, fr
     at once - ordinary weather that it took for a broken cycle, and dropped for good."""
     with db() as session:
         for index in range(5):
-            sub = active_subscription(session, settings, email=f"f{index}@example.com")
+            sub = active_subscription(session, settings, name=f"f{index}")
             sub.lead_time_minutes = 60
         session.commit()
         warm_up(session, settings, frames)
@@ -490,7 +492,7 @@ def test_verification_does_not_judge_an_event_too_early(db, settings, frames):
         assert session.query(RainEvent).one().verified is None
 
 
-def test_the_mail_states_the_data_time_not_the_render_time(db, settings, frames):
+def test_the_warning_states_the_data_time_not_the_render_time(db, settings, frames):
     """A warning that misstates how fresh its data is undermines the reader's only way to judge it."""
     notifier = ConsoleNotifier()
     with db() as session:
@@ -533,7 +535,6 @@ def _past_alerts(session, subscription, how_many, now, *, as_liveness=False):
             Notification(
                 subscription_id=subscription.id,
                 event_id=event_id,
-                channel="email",
                 status="sent",
                 queued_at=now - timedelta(hours=i + 1),
                 payload={},
@@ -544,9 +545,8 @@ def _past_alerts(session, subscription, how_many, now, *, as_liveness=False):
 
 def test_a_subscription_at_its_daily_cap_is_not_warned_again(db, settings, frames):
     """F-15. `threshold=0.01, lead=120, radius=20000` is within spec on every axis and together
-    means "close to always" in a German autumn. What it spends is shared - a mail provider's daily
-    quota, a sending domain's reputation, one VAPID key's standing with three push services - so the
-    ceiling is not the subscriber's to set."""
+    means "close to always" in a German autumn. What it spends is shared - one VAPID key's standing
+    with the push services - so the ceiling is not the subscriber's to set."""
     with db() as session:
         sub = active_subscription(session, settings)
         sub.lead_time_minutes = 60
@@ -654,49 +654,16 @@ def test_the_cap_can_be_turned_off(db, settings, frames):
         assert report.alerts == 1
 
 
-def test_the_email_quota_suppresses_mail_and_says_so_loudly(db, settings, frames, caplog):
-    """F-2's ceiling, now on mail only (D-70): it protects the mail provider's daily quota.
-
-    Logged at ERROR, and that is not decoration. Unlike the per-subscription cap - where the account
-    being capped is the one that caused it - reaching this means somebody is not warned about
-    weather that is happening, for a reason that is not theirs.
-    """
-    import logging
-
-    with db() as session:
-        sub = active_subscription(session, settings)
-        sub.lead_time_minutes = 60
-        session.commit()
-        warm_up(session, settings, frames)
-
-        # Under its own cap, over the mail one. Attributed to this subscription only because the
-        # fixture has one; the quota does not care whose they were.
-        tight = settings.model_copy(
-            update={"email_alert_cap_per_day": 3, "alert_cap_per_subscription_per_day": 0}
-        )
-        _past_alerts(session, sub, 3, T0)
-
-        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
-        with caplog.at_level(logging.ERROR):
-            report = evaluate_cycle(session, add_cycle(session), approaching, tight, now=T0)
-
-        assert report.alerts == 0
-        assert report.daily_cap_tripped is True
-        assert report.decisions.get("suppressed_daily_cap") == 1
-        assert "email alert cap reached" in caplog.text
-
-
 def _push_subscription(
     session, settings, endpoint="https://fcm.googleapis.com/fcm/send/alerting-test"
 ):
     from rainalert import subscriptions as svc
-    from rainalert.db.models import Channel, Subscriber
+    from rainalert.db.models import Subscriber
 
     result = svc.subscribe(
         session,
         settings,
-        channel=Channel.WEBPUSH,
-        address=endpoint,
+        endpoint=endpoint,
         push_p256dh="k" * 87,
         push_auth="a" * 22,
         lat=FRANKFURT[0],
@@ -708,25 +675,6 @@ def _push_subscription(
     subscription.status = SubscriptionStatus.ACTIVE
     session.commit()
     return subscription
-
-
-def test_push_is_not_held_to_the_email_quota(db, settings, frames):
-    """Push costs nothing per message and has no quota to protect; the per-subscription ceiling
-    already bounds it. Mail spent today must not silence it."""
-    with db() as session:
-        mail = active_subscription(session, settings)
-        push = _push_subscription(session, settings)
-        push.lead_time_minutes = 60
-        session.commit()
-        warm_up(session, settings, frames)
-
-        tight = settings.model_copy(update={"email_alert_cap_per_day": 3})
-        _past_alerts(session, mail, 3, T0)
-
-        approaching = make_frames(frames, wet_now=False, wet_leads=(60,))
-        report = evaluate_cycle(session, add_cycle(session), approaching, tight, now=T0)
-        assert report.alerts == 1
-        assert session.query(Notification).filter_by(channel="webpush").count() == 1
 
 
 def test_reaching_the_per_subscription_ceiling_is_logged(db, settings, frames, caplog):
@@ -785,7 +733,7 @@ def test_es_regnet_jetzt_expires_after_a_quarter_of_an_hour(db, settings, frames
 
 
 def test_push_is_sent_concurrently_and_one_failure_stays_its_own():
-    """Order kept, an exception confined to its message, mail never on a worker thread."""
+    """Order kept, and an exception confined to its message."""
     import threading
 
     from rainalert.alerting.dispatcher import _send_all
@@ -798,15 +746,11 @@ def test_push_is_sent_concurrently_and_one_failure_stays_its_own():
         delivery_concurrency=4,
         _env_file=None,
     )
-    main = threading.current_thread()
     barrier = threading.Barrier(4, timeout=5)
     seen = []
 
     class Recording:
         def send(self, message):
-            if message.channel == "email":
-                assert threading.current_thread() is main, "mail was sent from a worker thread"
-                return DeliveryResult(ok=True, provider_message_id=message.to)
             # Four pushes meet here at once, or this times out: proof they run side by side.
             barrier.wait()
             seen.append(threading.current_thread().name)
@@ -819,23 +763,20 @@ def test_push_is_sent_concurrently_and_one_failure_stays_its_own():
             to=f"https://push.example.invalid/{n}",
             subject="s",
             text="t",
-            channel="webpush",
             push_p256dh="k" * 87,
             push_auth="a" * 22,
         )
 
-    mail = OutboundMessage(to="friend@example.com", subject="s", text="t", channel="email")
-    messages = [push(0), mail, push(1), push(2), push(3)]
+    messages = [push(0), push(1), push(2), push(3)]
     outcomes = _send_all(Recording(), messages, settings)
 
     assert [getattr(o, "provider_message_id", None) for o in outcomes] == [
         "https://push.example.invalid/0",
-        "friend@example.com",
         "https://push.example.invalid/1",
         None,
         "https://push.example.invalid/3",
     ]
-    assert isinstance(outcomes[3], RuntimeError)
+    assert isinstance(outcomes[2], RuntimeError)
     assert all(name.startswith("push") for name in seen)
 
 
@@ -853,29 +794,39 @@ def test_an_unloadable_subscriber_does_not_take_the_cycle_down(db, settings, fra
 
     F-3's isolation covered evaluation and not persisting. This asserts the half that was missing:
     the healthy subscriber is warned anyway, and what it was warned with is actually committed.
+
+    The channel column that failure came through is no longer mapped (D-76), so the failure is now
+    made by a trigger: the broken subscriber's notification insert raises, after the RainEvent has
+    been flushed - the same place, inside `_persist`, that the lazy load used to raise.
     """
     from sqlalchemy import text
 
     from rainalert.db.models import Notification, Subscription
 
     with db() as session:
-        healthy = active_subscription(session, settings, email="healthy@example.com")
-        broken = active_subscription(session, settings, email="broken@example.com")
+        healthy = active_subscription(session, settings, name="healthy")
+        broken = active_subscription(session, settings, name="broken")
         # Two more, dry and far away. Kept from when a cycle warning 2 of 2 subscribers tripped the
         # blast radius (gone since D-70): real rain is local, and this makes it look local.
         for i, place in enumerate(((53.5511, 9.9937), (48.1351, 11.5820))):
-            active_subscription(session, settings, email=f"dry{i}@example.com", at=place)
+            active_subscription(session, settings, name=f"dry{i}", at=place)
         for sub in (healthy, broken):
             sub.lead_time_minutes = 60
         session.commit()
         warm_up(session, settings, frames)
         healthy_id, broken_id = healthy.id, broken.id
 
-        # Exactly the production state: a channel the enum no longer has, written behind the ORM's
-        # back the way the surviving row was.
         session.execute(
-            text("UPDATE subscribers SET channel = 'NTFY' WHERE id = :id"),
-            {"id": broken.subscriber_id},
+            text(
+                "CREATE FUNCTION refuse_insert() RETURNS trigger LANGUAGE plpgsql AS "
+                "$$ BEGIN RAISE EXCEPTION 'unloadable subscriber'; END $$"
+            )
+        )
+        session.execute(
+            text(
+                "CREATE TRIGGER broken_subscriber BEFORE INSERT ON notifications FOR EACH ROW "
+                f"WHEN (NEW.subscription_id = '{broken.id}') EXECUTE FUNCTION refuse_insert()"
+            )
         )
         session.commit()
         # So the lazy load really goes back to the database, as it did in the job's fresh process.
@@ -925,9 +876,8 @@ def test_rain_that_starts_without_a_warning_says_es_regnet_jetzt(db, settings, f
 
     message = notifier.sent[0]
     assert message.subject == "Es regnet jetzt"
-    assert "eingesetzt" in message.text and "nicht angekuendigt" in message.text
-    # Same exit and same map link as a warning.
-    assert "/unsubscribe#t=" in message.text
+    assert "eingesetzt" in message.text and "nicht angekündigt" in message.text
+    # Same map link as a warning.
     assert "#l=" in message.click_url
 
 
