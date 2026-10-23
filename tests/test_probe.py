@@ -1,4 +1,5 @@
-"""The map's rain tooltip (DESIGN.md D-77): the colour a frame draws must say the reading it drew.
+"""The map's rain tooltip (DESIGN.md D-77, D-78): the colour a frame draws must say the reading it
+drew.
 
 The browser reads an overlay PNG back - palette index, colour, then the value table - instead of
 asking the server. So the whole chain is checked against the renderer: `value_table` against
@@ -6,6 +7,7 @@ asking the server. So the whole chain is checked against the renderer: `value_ta
 against the PNG `render_frame` wrote and the values `sample_frame` put in it.
 """
 
+import io
 import itertools
 import json
 import math
@@ -20,13 +22,17 @@ import numpy as np
 import pytest
 
 from rainalert.radar import odim
+from rainalert.radar.decoder import FINE_NONE
 from rainalert.radar.overlay import (
     BOUNDS,
+    FINE_BASE,
+    FINE_STEPS,
     INTENSITY_BANDS,
     PALETTE,
     build_projection,
     palette_index,
     render_frame,
+    sample_fine,
     sample_frame,
     value_table,
 )
@@ -56,12 +62,16 @@ def test_every_reading_finds_its_colour_and_its_colour_contains_it():
         assert table["bands"][row[6]] == INTENSITY_BANDS[band][2], value
 
 
+FINE_COLOURS = {tuple(int(c) for c in PALETTE[FINE_BASE + k]) for k in range(FINE_STEPS)}
+
+
 def test_colours_are_unique_and_ranges_do_not_overlap():
     table, by_colour = _rows()
     assert len(by_colour) == len(table["rows"]), (
         "two rows share a colour - the browser could not tell them apart"
     )
-    ranges = sorted((row[4], row[5]) for row in table["rows"])
+    # The band shades among themselves; the fine readings refine one of them (D-78), below.
+    ranges = sorted((row[4], row[5]) for row in table["rows"] if tuple(row[:4]) not in FINE_COLOURS)
     for (_, high), (low, _) in itertools.pairwise(ranges):
         assert high is not None and high < low
     assert ranges[-1] == (INTENSITY_BANDS[-1][0], None), "the top band is open-ended"
@@ -77,9 +87,86 @@ def test_drizzle_readings_come_back_exactly():
         assert by_colour[rgba][4] == by_colour[rgba][5] == value
 
 
+# --- the fine drizzle readings (D-78) --------------------------------------------------------
+
+
+def test_every_fine_reading_has_its_own_colour_close_to_the_drizzle_one():
+    """Measurable by a program, not seen by a person: one step of red and at most nine of alpha
+    from the band's own colour, the heavier reading never the fainter."""
+    table, by_colour = _rows()
+    base = np.array(INTENSITY_BANDS[0][1], dtype=int)
+    alphas = []
+    for k in range(FINE_STEPS):
+        rgba = tuple(int(c) for c in PALETTE[FINE_BASE + k])
+        row = by_colour[rgba]
+        assert row[4] == row[5] == k / 1000
+        assert table["bands"][row[6]] == INTENSITY_BANDS[0][2]
+        difference = np.abs(np.array(rgba) - base)
+        assert difference[:3].max() <= 1 and difference[3] <= 10, rgba
+        alphas.append(rgba[3])
+    assert alphas == sorted(alphas)
+    assert len(PALETTE) <= 256, "a palette PNG holds at most 256 colours"
+
+
+def test_the_decoder_keeps_the_thousandths_of_exactly_the_cells_stored_as_001(hdf5_cycle_path):
+    import h5py
+
+    with tarfile.open(hdf5_cycle_path) as archive:
+        member = next(m for m in archive.getmembers() if m.name.endswith("_000-hd5"))
+        blob = archive.extractfile(member).read()
+    frame = odim.decode_member(blob, member.name)
+    with h5py.File(io.BytesIO(blob), "r") as h5:
+        raw = h5["dataset1/data1/data"][()][::-1].astype(np.int64)
+    detected = (raw != 0) & (raw != 2**32 - 1)
+    low = detected & (raw - 1 < 20)
+    assert np.array_equal(frame.fine != FINE_NONE, low)
+    assert np.array_equal(frame.fine[low], (raw - 1)[low])
+    # And those are the cells the values call 0.01 - the alerting's view is untouched.
+    assert np.array_equal(np.isclose(frame.values, 0.01) & detected, low)
+    assert odim.decode_member(blob, member.name, header_only=True).fine is None
+
+
+def test_only_pixels_drawn_at_001_change(rendered):
+    """Every other pixel keeps exactly the index it had before D-78."""
+    _, sampled, fine, _, _ = rendered
+    coarse, refined = palette_index(sampled), palette_index(sampled, fine)
+    changed = coarse != refined
+    assert changed.any(), "the fixture frame has drizzle; some pixels must be refined"
+    assert (coarse[changed] == 1).all()
+    assert ((refined[changed] >= FINE_BASE) & (refined[changed] < FINE_BASE + FINE_STEPS)).all()
+
+
+def test_a_frame_without_fine_readings_draws_as_before(rendered):
+    from dataclasses import replace
+
+    _, sampled, _, _, frame = rendered
+    assert sample_fine(replace(frame, fine=None)) is None
+    assert np.array_equal(palette_index(sampled, None), palette_index(sampled))
+
+
+def test_the_switch_draws_frames_as_before(rendered):
+    """`overlay_fine_drizzle=false`: the diagnostic off, and the PNG back to its old size."""
+    from PIL import Image
+
+    png, sampled, _, projection, frame = rendered
+    plain = render_frame(frame, projection, fine=False)
+    assert np.array_equal(np.array(Image.open(io.BytesIO(plain))), palette_index(sampled))
+    assert len(plain) < len(png)
+
+
+def test_the_setting_reaches_the_renderer_from_terraform():
+    from rainalert.config import Settings
+
+    assert Settings(database_url="x", _env_file=None).overlay_fine_drizzle is True
+    run = (REPO / "infra" / "run.tf").read_text()
+    assert "OVERLAY_FINE_DRIZZLE = tostring(var.overlay_fine_drizzle)" in run
+    for path in ("jobs/ingest.py", "jobs/backfill.py", "cli.py"):
+        assert "overlay_fine_drizzle" in (REPO / "rainalert" / path).read_text(), path
+
+
 def test_the_table_stays_small():
     """It rides in every timeline manifest."""
-    assert len(json.dumps(value_table(), separators=(",", ":"))) < 6000
+    assert len(json.dumps(value_table(), separators=(",", ":"))) < 7000
 
 
 def test_the_manifest_carries_the_table(db, tmp_path):
@@ -195,7 +282,13 @@ def rendered(hdf5_cycle_path):
         member = next(m for m in archive.getmembers() if m.name.endswith("_000-hd5"))
         frame = odim.decode_member(archive.extractfile(member).read(), member.name)
     projection = build_projection()
-    return render_frame(frame, projection), sample_frame(frame, projection), projection
+    return (
+        render_frame(frame, projection),
+        sample_frame(frame, projection),
+        sample_fine(frame, projection),
+        projection,
+        frame,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -210,7 +303,7 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
     from rainalert.api.app import create_app
     from rainalert.config import Settings
 
-    png, sampled, projection = rendered
+    png, sampled, fine, projection, _ = rendered
     width, height = projection.width, projection.height
     frame_png = tmp_path / "frame.png"
     frame_png.write_bytes(png)
@@ -220,7 +313,7 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
     filtered_png = tmp_path / "filters.png"
     filtered_png.write_bytes(_png_with_every_filter(synthetic))
 
-    expected = palette_index(sampled)
+    expected = palette_index(sampled, fine)
     wet = np.argwhere(expected > 0)
     dry = np.argwhere((expected == 0) & projection.inside)
     assert len(wet) > 1000, "the fixture frame should be a wet one"
@@ -230,6 +323,7 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
             dry[rng.choice(len(dry), 50, replace=False)],
         ]
     )
+    assert (expected[tuple(picks.T)] >= FINE_BASE).sum() > 20, "the picks must include drizzle"
     places = [_latlon_of_pixel(int(r), int(c), width, height) for r, c in picks]
     heaviest = wet[np.argmax(sampled[tuple(wet.T)])]
 
@@ -247,6 +341,8 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
         "values": table,
         "describe": [
             {"from": 0.01, "to": 0.01, "label": "Nieselregen"},
+            {"from": 0.004, "to": 0.004, "label": "Nieselregen"},
+            {"from": 0, "to": 0, "label": "Nieselregen"},
             {"from": 0.63, "to": 0.64, "label": "kräftiger Regen"},
             {"from": 6.0, "to": None, "label": "extremer Starkregen"},
         ],
@@ -306,11 +402,20 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
         if expected[r, c] == 0:
             assert entry is None
             continue
+        if expected[r, c] >= FINE_BASE:
+            # A drizzle pixel says DWD's own reading, to the thousandth (D-78).
+            assert entry["from"] == entry["to"] == fine[r, c] / 1000, (fine[r, c], entry)
+            continue
         assert entry["from"] <= value + 1e-6, (value, entry)
         assert entry["to"] is None or value <= entry["to"] + 1e-6, (value, entry)
 
-    drizzle, mid, top = report["described"]
+    drizzle, fine_reading, echo, mid, top = report["described"]
     assert drizzle["lines"] == ["ca. 0,01 mm in 5 Minuten", "≈ 0,12 mm/h · Nieselregen"]
+    assert fine_reading["lines"] == ["ca. 0,004 mm in 5 Minuten", "≈ 0,048 mm/h · Nieselregen"]
+    assert echo["lines"] == [
+        "weniger als 0,001 mm in 5 Minuten",
+        "Radarecho ohne messbare Menge · Nieselregen",
+    ]
     assert (
         mid["lines"][0] == "ca. 0,64 mm in 5 Minuten"
         or mid["lines"][0] == "ca. 0,63 mm in 5 Minuten"

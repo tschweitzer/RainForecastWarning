@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image
 from pyproj import CRS, Transformer
 
-from rainalert.radar.decoder import RVFrame
+from rainalert.radar.decoder import FINE_NONE, RVFrame
 from rainalert.radar.grid import DE1200, RADOLAN_PROJ, GridSpec, cell_corners
 
 #: Germany plus border areas, as (south, west), (north, east). Leaflet takes exactly this.
@@ -238,12 +238,36 @@ def _palette() -> np.ndarray:
     return np.rint(table).astype(np.uint8)
 
 
-#: Index -> RGBA. Built once; `render_frame` writes it into the PNG as its palette.
-PALETTE = _palette()
+#: The readings below the map's first step that the HDF5 edition still carries (D-78): 0.000 to
+#: 0.019 mm, which `values` stores as 0.01. Each gets a palette entry of its own after the bands.
+FINE_STEPS = 20
+FINE_BASE = 1 + len(COLOR_STOPS) * SHADES_PER_BAND
 
 
-def palette_index(values: np.ndarray) -> np.ndarray:
+def _fine_colours() -> np.ndarray:
+    """The drizzle band's own colour, changed just enough to be told apart by a program.
+
+    Alpha runs 131..150 around the band's 140 - under four percent of opacity either way, which
+    nobody sees on a pale blue, and in the direction of the reading, so a heavier one is never
+    the fainter. Red is one above the band's so that none of them, the 140 included, is the
+    colour that already means "0.01" (index 1) - which old frames and the binary edition still
+    draw, and which the tooltip then reads as before.
+    """
+    r, g, b, a = INTENSITY_BANDS[0][1]
+    return np.array([(r + 1, g, b, a - 9 + k) for k in range(FINE_STEPS)], dtype=np.uint8)
+
+
+#: Index -> RGBA. Built once; `render_frame` writes it into the PNG as its palette. 225 band shades
+#: and the 20 fine drizzle readings: 245 of the 256 a palette PNG may have.
+PALETTE = np.concatenate([_palette(), _fine_colours()])
+
+
+def palette_index(values: np.ndarray, fine: np.ndarray | None = None) -> np.ndarray:
     """Values in mm/5min to palette indices: 0 for NaN and anything below the first band.
+
+    ``fine``, where given: per pixel, DWD's reading in thousandths for a pixel drawn at 0.01, NaN
+    elsewhere (`sample_fine`). Such a pixel then gets the fine entry for its reading instead of
+    the band's first shade (D-78). Every other pixel is unaffected.
 
     **A gradient, not seven flat steps** (DESIGN.md D-60). Each band's own colour is drawn exactly
     at the value where the band starts - so the legend and the threshold picker, which show those
@@ -282,6 +306,9 @@ def palette_index(values: np.ndarray) -> np.ndarray:
         )
     shade = np.clip(np.floor(fraction * SHADES_PER_BAND), 0, SHADES_PER_BAND - 1).astype(np.int64)
     index[drawn] = (1 + b * SHADES_PER_BAND + shade).astype(np.uint8)
+    if fine is not None:
+        refine = (index == 1) & np.isfinite(fine)
+        index[refine] = (FINE_BASE + np.clip(fine[refine], 0, FINE_STEPS - 1)).astype(np.uint8)
     return index
 
 
@@ -293,13 +320,19 @@ def colorize(values: np.ndarray) -> np.ndarray:
     return PALETTE[palette_index(values)]
 
 
-def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
-    """One frame to PNG bytes, losing no wet cell. What each pixel holds is `sample_frame`'s."""
+def render_frame(
+    frame: RVFrame, projection: Projection | None = None, *, fine: bool = True
+) -> bytes:
+    """One frame to PNG bytes, losing no wet cell. What each pixel holds is `sample_frame`'s, and
+    for the pixels drawn at 0.01, `sample_fine`'s (D-78) unless ``fine`` is off
+    (`overlay_fine_drizzle`)."""
+    projection = projection or build_projection()
     sampled = sample_frame(frame, projection)
+    readings = sample_fine(frame, projection) if fine else None
     # A palette PNG: one byte a pixel and the colour table once, with each entry's alpha in the
     # tRNS chunk. Browsers decode it to exactly the RGBA `colorize` gives (D-60), and the map's
     # rain tooltip reads the indices back out of it (rainprobe.js, D-77).
-    image = Image.fromarray(palette_index(sampled), mode="P")
+    image = Image.fromarray(palette_index(sampled, readings), mode="P")
     image.putpalette(PALETTE[:, :3].ravel().tolist())
     buffer = io.BytesIO()
     # optimize=True costs a little CPU per frame and saves rather more bandwidth on 168 of them.
@@ -320,8 +353,25 @@ def sample_frame(frame: RVFrame, projection: Projection | None = None) -> np.nda
     could miss the heaviest cell in the country entirely.
     """
     projection = projection or build_projection()
-    values = np.where(frame.missing, np.nan, frame.values)
+    return _sample(np.where(frame.missing, np.nan, frame.values), projection)
 
+
+def sample_fine(frame: RVFrame, projection: Projection | None = None) -> np.ndarray | None:
+    """Per pixel, the heaviest fine reading (thousandths, D-78) among its cells; NaN where none.
+
+    The same rule as `sample_frame`, on the same cells, so a pixel drawn at 0.01 - every one of
+    whose cells is detected and below 0.02 - gets the heaviest of exactly those cells' readings.
+    None for a frame without fine readings (the binary edition).
+    """
+    if frame.fine is None:
+        return None
+    projection = projection or build_projection()
+    readings = np.where(frame.fine == FINE_NONE, np.nan, frame.fine.astype(np.float32))
+    return _sample(readings, projection)
+
+
+def _sample(values: np.ndarray, projection: Projection) -> np.ndarray:
+    """A grid of values (NaN for none) onto the output pixels: the heaviest cell per pixel."""
     # Start from the inverse map, so every pixel has a value even where the output is finer
     # than the source. NaN means "nothing to draw", which colorize renders transparent.
     sampled = values[projection.rows, projection.cols]
@@ -376,6 +426,12 @@ def value_table() -> dict:
     readings = np.arange(1, round(top / _QUANTUM) + 1) * _QUANTUM
     indices = palette_index(readings)
     rows: dict[int, list] = {}
+    # The fine drizzle readings first, each its own colour and exactly one value (D-78). The
+    # band's first shade keeps its row below: frames rendered from the binary edition, or before
+    # D-78, still draw it.
+    for k in range(FINE_STEPS):
+        index = FINE_BASE + k
+        rows[index] = [*(int(c) for c in PALETTE[index]), k / 1000, k / 1000, 0]
     for value, index in zip(readings.tolist(), indices.tolist(), strict=True):
         if index == 0:
             continue

@@ -18,6 +18,10 @@ locals {
     # instead of alerting anyone (D-70). 0 turns the check off.
     IMPLAUSIBLE_RISE_PP = tostring(var.implausible_rise_pp)
 
+    # The thousandths of the cells drawn as 0.01 mm, for the rain tooltip (D-78). A diagnostic:
+    # false once the noise cut is found, and frames go back to their old size.
+    OVERLAY_FINE_DRIZZLE = tostring(var.overlay_fine_drizzle)
+
     # Device keys for the settings page (D-64). The kill switch: false falls back to the push link
     # and the cookie session for everyone, losing nothing - see RUNBOOK before turning it back on.
     DEVICE_KEY_LOGIN_ENABLED = tostring(var.device_key_login_enabled)

@@ -178,10 +178,10 @@
   /* ---- saying it ------------------------------------------------------------------------- */
 
   // Two significant figures: the reading is good to a few percent at best (one shade), and
-  // "0,4372 mm" would claim far more than that.
+  // "0,4372 mm" would claim far more than that. Significant figures rather than decimals so the
+  // fine drizzle readings (D-78) keep theirs: 0,004 is not 0.
   function number(x) {
-    var digits = x >= 10 ? 0 : (x >= 1 ? 1 : 2);
-    return x.toLocaleString('de-DE', { maximumFractionDigits: digits });
+    return x.toLocaleString('de-DE', { maximumSignificantDigits: 2 });
   }
 
   function clock(iso) {
@@ -197,6 +197,15 @@
       : 'gemessen ' + clock(frame.valid_time) + ' Uhr';
     if (!entry) {
       return { lines: ['Hier zeigt das Radarbild keinen Regen.'], when: when };
+    }
+    // DWD's "detected, 0.000 mm": an echo with no amount to it (D-78) - one of the readings the
+    // noise question is about, so it is named rather than shown as "ca. 0 mm".
+    if (entry.from === 0 && entry.to === 0) {
+      return {
+        lines: ['weniger als 0,001 mm in 5 Minuten', 'Radarecho ohne messbare Menge · '
+          + entry.label],
+        when: when
+      };
     }
     if (entry.to === null) {
       return {

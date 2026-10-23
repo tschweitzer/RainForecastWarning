@@ -77,6 +77,10 @@ class RVArchiveRejected(RVFormatError):
     """The archive violates a size or count limit and was not decoded at all."""
 
 
+#: `RVFrame.fine` where a cell has no finer reading than its stored value.
+FINE_NONE = 255
+
+
 @dataclass(frozen=True)
 class RVFrame:
     """One forecast step of one RV cycle."""
@@ -96,6 +100,15 @@ class RVFrame:
     #: Radars DWD reports as missing from this composite (HDF5 ``how/missing_nodes``), e.g.
     #: ``("dehnr",)``. Always empty from the binary edition, which only listed the ones present.
     missing_sites: tuple[str, ...] = ()
+    #: DWD's own reading, in thousandths of a mm, for the cells `values` cannot tell apart: rain
+    #: detected but below 0.02 mm, which `values` stores as 0.01 (radar/odim.py). 0-19 there,
+    #: `FINE_NONE` everywhere else; uint8 (rows, cols), same orientation as `values`.
+    #:
+    #: **For the map only** (DESIGN.md D-78): it lets the overlay carry those readings, so the rain
+    #: tooltip can say them while looking for where radar noise should be cut. Alerting, the
+    #: thresholds and the plausibility check never read it. HDF5 edition only; None from the binary
+    #: one, which has no finer value to give, and None wherever `values` is.
+    fine: np.ndarray | None = None
 
     @property
     def valid_time(self) -> datetime:

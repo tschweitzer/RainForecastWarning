@@ -116,6 +116,12 @@ variable "device_key_login_enabled" {
   default     = true
 }
 
+variable "overlay_fine_drizzle" {
+  description = "Draw DWD's reading to the thousandth for the cells the map shows as 0.01 mm, in colours only the rain tooltip tells apart (DESIGN.md D-78). A diagnostic for finding where radar noise should be cut; it makes frames with widespread drizzle up to about twice as large. false draws them as before. Alerting is unaffected either way."
+  type        = bool
+  default     = true
+}
+
 variable "implausible_rise_pp" {
   description = "Percentage points the wet share of the radar area may rise in one cycle (t+0 against the previous cycle), or any forecast frame may exceed t+0, before the cycle is set aside as corrupt data (DESIGN.md D-70). Real weather moves well under 1 pp per cycle; a corrupt 'rain everywhere' frame jumps 85 to 95. 0 disables the check."
   type        = number

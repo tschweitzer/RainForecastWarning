@@ -241,6 +241,7 @@ def rerender(args: argparse.Namespace) -> int:
         LocalOverlayStore(settings.overlay_dir),
         args.limit,
         pause_seconds=args.pause,
+        fine=settings.overlay_fine_drizzle,
     )
     print(
         f"{report.rendered} frame(s) from {report.archives} archive(s), {report.failed} unreadable"

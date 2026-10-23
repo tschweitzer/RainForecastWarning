@@ -106,8 +106,9 @@ def rerender_observed(
     overlays: OverlayStore,
     limit: int | None = None,
     pause_seconds: float = 0.0,
+    fine: bool = True,
 ) -> BackfillReport:
-    """Re-render the t+0 frame of every archived cycle.
+    """Re-render the t+0 frame of every archived cycle. ``fine``: `overlay_fine_drizzle`.
 
     Only the analysis frame: past forecasts are not shown anywhere, so rendering them would be
     work whose output nothing reads.
@@ -142,7 +143,7 @@ def rerender_observed(
             logger.warning("could not read %s", path.name, exc_info=True)
             continue
         try:
-            overlays.put_observed(frame.nominal_time, render_frame(frame, projection))
+            overlays.put_observed(frame.nominal_time, render_frame(frame, projection, fine=fine))
             report.rendered += 1
         finally:
             del frame
@@ -376,7 +377,9 @@ def _walk(
             try:
                 # Analysis frame only: see render_overlays. This is the difference between one
                 # render per cycle and twenty-five, and on a small VM it is most of the runtime.
-                render_overlays(frames, overlays, observed_only=True)
+                render_overlays(
+                    frames, overlays, observed_only=True, fine=settings.overlay_fine_drizzle
+                )
             except Exception:
                 logger.exception("overlay rendering failed for backfilled cycle %s", stamped)
 

@@ -709,6 +709,15 @@ The migration handles this correctly in both directions — it deletes the `webp
 down, because the older schema has nowhere to put their keys. It is the ordering that has to be
 right, and it is the opposite of the usual "deploy, then migrate".
 
+### Turning off the fine drizzle readings
+
+The map carries DWD's thousandths for the cells it shows as 0.01 mm, for the rain tooltip
+(DESIGN.md D-78). It is a diagnostic for choosing a noise cut, and it makes frames with widespread
+drizzle up to about twice as large. Once it has served, set `overlay_fine_drizzle = false` in
+`terraform.tfvars` and apply: new frames are drawn as before, and the old ones age out of the
+timeline within its window (`make rerender` redraws them at once where archives are kept locally).
+Nothing about alerting changes either way.
+
 ### Device keys: the settings without a link
 
 Since D-64 a push subscriber's browser signs its settings requests with a device key it registered

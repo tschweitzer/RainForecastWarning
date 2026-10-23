@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     #: appeared because a prune ran while someone was looking at it.
     overlay_obs_retention_hours: int = DWD_RETENTION_HOURS + 2
     overlay_fc_retention_hours: int = 1
+    #: Draw DWD's own reading, to the thousandth, for the cells shown as 0.01 mm - in colours a
+    #: program can tell apart and nobody can see - so the rain tooltip can say it (D-78). A
+    #: diagnostic, for finding where radar noise should be cut. It costs frame size where drizzle
+    #: is widespread (measured 110 -> 203 KB on such a frame, 62 -> 88 KB on a typical wet one);
+    #: false draws every frame as before. Alerting never reads it either way.
+    overlay_fine_drizzle: bool = True
 
     # --- Retention (D-7, D-23) --------------------------------------------------------------
     #: Also past the timeline: re-rendering the oldest frame from raw has to stay possible, and

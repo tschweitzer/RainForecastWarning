@@ -32,6 +32,7 @@ import numpy as np
 
 from rainalert.radar.decoder import (
     EXPECTED_SHAPE,
+    FINE_NONE,
     MAX_DIM,
     MAX_LEAD_MINUTES,
     MIN_DIM,
@@ -96,7 +97,12 @@ def decode_member(blob: bytes, name: str = "", *, header_only: bool = False) -> 
     steps = np.maximum(1.0, np.floor(np.round(mm * 100.0, 6)))
     values = np.where(detected, steps * PRECISION, 0.0)
     values = np.where(missing, np.nan, values).astype(np.float32)
-    return _frame(values, missing, fields)
+    # Exactly the cells stored as 0.01 - detected, below 0.02 - keep the thousandths the file has,
+    # for the map (D-78). 20 readings, 0.000 to 0.019, so a byte each.
+    low = detected & (steps == 1.0)
+    fine = np.full(raw.shape, FINE_NONE, dtype=np.uint8)
+    fine[low] = np.clip(np.rint(mm[low] * 1000.0), 0, 19).astype(np.uint8)
+    return _frame(values, missing, fields, fine)
 
 
 def _attr(group, key: str) -> str:
@@ -254,7 +260,7 @@ def _data(h5, fields: dict) -> np.ndarray:
     return h5["dataset1/data1/data"][()]
 
 
-def _frame(values, missing, fields: dict) -> RVFrame:
+def _frame(values, missing, fields: dict, fine=None) -> RVFrame:
     return RVFrame(
         values=values,
         missing=missing,
@@ -265,4 +271,5 @@ def _frame(values, missing, fields: dict) -> RVFrame:
         radar_sites=fields["radar_sites"],
         raw_header=fields["raw_header"],
         missing_sites=fields["missing_sites"],
+        fine=fine,
     )
