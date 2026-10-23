@@ -6,7 +6,8 @@ your location, using DWD radar nowcast data (Germany).
 **Status:** in production on Google Cloud (Cloud Run, Cloud SQL, Firebase Hosting). It ingests
 DWD's radar composite every five minutes, evaluates each subscriber's location, sends a warning
 before rain arrives ("Es regnet jetzt" when it starts unannounced), and shows a rain map with a
-48 h … +2 h timeline slider.
+48 h … +2 h timeline slider - resting the mouse or long-pressing on rain says how much is falling
+there (D-77).
 
 Web Push is the only channel (DESIGN.md D-76): it needs nothing beyond the deployment and a VAPID
 key — no mail provider, no account, no address of anyone's.

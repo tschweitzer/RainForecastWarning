@@ -16,6 +16,8 @@
   .maplibregl-ctrl.locate-control a { width:29px; height:29px; line-height:29px; color:#333;
                                       text-decoration:none; }
   .maplibregl-ctrl.locate-control a.on { color:var(--accent); }
+  /* A long press on the map is the rain tooltip's (rainprobe.js, D-77). */
+  .maplibregl-map { -webkit-touch-callout:none; }
 </style>
 <script type="importmap" nonce="{{ request.state.csp_nonce }}">
 {"imports": {"maplibre-gl": {{ static_url('vendor/maplibre/maplibre-gl.mjs') | tojson }}}}

@@ -305,6 +305,9 @@
     var WINDOW = 6;                 // how far either side of the cursor to prefetch
     var slider = opts.slider, play = opts.play, stamp = opts.stamp, banner = opts.banner;
     var current = null;             // offset_minutes of the frame on screen
+    var onScreen = null;            // the frame whose image is on screen; null in a gap
+    var values = null;              // what each colour stands for (D-77), from the manifest
+    var watchers = [];              // told whenever the frame on screen changes (rainprobe.js)
 
     /* The bubble over the knob while it is held (D-56): how far the frame under the finger is
        from the latest radar image - the same "jetzt" the stamp line uses. Above the knob because
@@ -404,6 +407,7 @@
       var frame = frames[index];
       if (!frame) { return; }
       current = frame.offset_minutes;
+      onScreen = null;
       if (stamp) { stamp.innerHTML = label(frame); }
       if (slider) { slider.setAttribute('aria-valuetext', relative(frame.offset_minutes)); }
 
@@ -412,14 +416,23 @@
         // something it did not is exactly the failure this service must not have.
         overlay.hide();
         if (stamp) { stamp.innerHTML += ' · <span class="kind">keine Daten</span>'; }
+        notify();
         return;
       }
       preload(frame.url);
       overlay.show(frame.url, bounds);
+      onScreen = frame;
       for (var d = -WINDOW; d <= WINDOW; d++) {
         var neighbour = frames[index + d];
         if (neighbour && !gapAt(neighbour.offset_minutes)) { preload(neighbour.url); }
       }
+      notify();
+    }
+
+    function notify() {
+      watchers.forEach(function (fn) {
+        try { fn(onScreen); } catch (e) { /* a listener must not break the loop */ }
+      });
     }
 
     // Playback speed. 500 ms is the middle of the range that works: below roughly 300 ms the eye
@@ -538,11 +551,14 @@
           frames = fresh;
           gaps = data.gaps || [];
           bounds = data.bounds;
+          values = data.values || null;
 
           if (!frames.length || !bounds) {
             // Removed, not left behind: on a reload the map would otherwise keep showing a frame
             // from the window we just navigated away from, with nothing on the slider to match it.
             overlay.hide();
+            onScreen = null;
+            notify();
             say('Noch keine Radardaten vorhanden.');
             if (opts.onEmpty) { opts.onEmpty(); }
             return { status: 'empty', ready: Promise.resolve() };
@@ -600,12 +616,32 @@
 
     load(opts.pastHours);
 
-    return { stop: stop, show: show, load: load };
+    return {
+      stop: stop, show: show, load: load,
+      // For the rain tooltip (rainprobe.js, D-77): the frame on screen, where it is drawn, what
+      // its colours mean, and a call whenever it changes.
+      frame: function () { return onScreen; },
+      bounds: function () { return bounds; },
+      values: function () { return values; },
+      watch: function (fn) { watchers.push(fn); }
+    };
+  }
+
+  /* What the rain tooltip needs from a Leaflet map: the element to listen on, and a container
+     point turned into a place. radar-gl.js has the same for the vector map. */
+  function probeTarget(map) {
+    return {
+      container: map.getContainer(),
+      latLngAt: function (x, y) {
+        var at = map.containerPointToLatLng([x, y]);
+        return { lat: at.lat, lng: at.lng };
+      }
+    };
   }
 
   global.RainRadar = {
     createMap: createMap, basemap: basemap, picker: picker, timeline: timeline, pinIcon: pinIcon,
     mark: mark, unmark: unmark, locateControl: locateControl, legendControl: legendControl,
-    PIN_SVG: PIN_SVG
+    probeTarget: probeTarget, PIN_SVG: PIN_SVG
   };
 })(window);

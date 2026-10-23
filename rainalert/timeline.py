@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from rainalert.attribution import ATTRIBUTION
 from rainalert.config import Settings
 from rainalert.db.models import CycleStatus, RadarCycle
-from rainalert.radar.overlay import BOUNDS, legend
+from rainalert.radar.overlay import BOUNDS, legend, value_table
 from rainalert.storage import OverlayStore
 
 CYCLE_MINUTES = 5
@@ -75,6 +75,7 @@ def build_timeline(
             "frames": [],
             "gaps": [],
             "colorscale": legend(),
+            "values": value_table(),
             "attribution": ATTRIBUTION,
         }
 
@@ -143,5 +144,7 @@ def build_timeline(
         "frames": [asdict(frame) for frame in frames],
         "gaps": [asdict(gap) for gap in gaps],
         "colorscale": legend(),
+        # What each colour in a frame stands for, for the rain tooltip (D-77).
+        "values": value_table(),
         "attribution": ATTRIBUTION,
     }

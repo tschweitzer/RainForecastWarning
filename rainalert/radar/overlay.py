@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image
@@ -293,7 +294,21 @@ def colorize(values: np.ndarray) -> np.ndarray:
 
 
 def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
-    """One frame to PNG bytes, losing no wet cell.
+    """One frame to PNG bytes, losing no wet cell. What each pixel holds is `sample_frame`'s."""
+    sampled = sample_frame(frame, projection)
+    # A palette PNG: one byte a pixel and the colour table once, with each entry's alpha in the
+    # tRNS chunk. Browsers decode it to exactly the RGBA `colorize` gives (D-60), and the map's
+    # rain tooltip reads the indices back out of it (rainprobe.js, D-77).
+    image = Image.fromarray(palette_index(sampled), mode="P")
+    image.putpalette(PALETTE[:, :3].ravel().tolist())
+    buffer = io.BytesIO()
+    # optimize=True costs a little CPU per frame and saves rather more bandwidth on 168 of them.
+    image.save(buffer, format="PNG", optimize=True, transparency=PALETTE[:, 3].tobytes())
+    return buffer.getvalue()
+
+
+def sample_frame(frame: RVFrame, projection: Projection | None = None) -> np.ndarray:
+    """The value, in mm/5min, each output pixel shows; NaN where nothing is drawn.
 
     Each output pixel shows the **heaviest** rain among the source cells that fall in it. That
     is the same rule the alerting uses over a subscriber's radius (sampler.sample), and for the
@@ -323,16 +338,7 @@ def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
     current = np.nan_to_num(flat[projection.scatter_pixels], nan=-1.0)
     combined = np.maximum(current, readings)
     flat[projection.scatter_pixels] = np.where(combined < 0, np.nan, combined)
-    sampled = flat.reshape(projection.height, projection.width)
-
-    # A palette PNG: one byte a pixel and the colour table once, with each entry's alpha in the
-    # tRNS chunk. Browsers decode it to exactly the RGBA `colorize` gives (D-60).
-    image = Image.fromarray(palette_index(sampled), mode="P")
-    image.putpalette(PALETTE[:, :3].ravel().tolist())
-    buffer = io.BytesIO()
-    # optimize=True costs a little CPU per frame and saves rather more bandwidth on 168 of them.
-    image.save(buffer, format="PNG", optimize=True, transparency=PALETTE[:, 3].tobytes())
-    return buffer.getvalue()
+    return flat.reshape(projection.height, projection.width)
 
 
 def legend() -> list[dict]:
@@ -346,3 +352,42 @@ def legend() -> list[dict]:
         }
         for threshold, colour, label in INTENSITY_BANDS
     ]
+
+
+#: The resolution RV values come in since D-74: whole hundredths of a millimetre.
+_QUANTUM = 0.01
+
+
+@lru_cache(maxsize=1)
+def value_table() -> dict:
+    """What every colour an overlay can contain stands for, so the map can say it (D-77).
+
+    `rows` has one entry per colour, `[r, g, b, a, from, to, band]`: the smallest and largest
+    reading drawn in that colour in mm per 5 min - `to` is None for the top band, one colour for
+    everything from its start up - and an index into `bands`, the band names. Rows rather than
+    objects because this rides in every timeline manifest: 162 colours as objects were 16 KB.
+
+    Built by running every reading the product can carry through `palette_index` - not by
+    inverting the formula - so the table cannot disagree with the renderer. Keyed by colour rather
+    than palette index because colour is what the file guarantees: an encoder that renumbered the
+    palette would still draw the same RGBA.
+    """
+    top = INTENSITY_BANDS[-1][0]
+    readings = np.arange(1, round(top / _QUANTUM) + 1) * _QUANTUM
+    indices = palette_index(readings)
+    rows: dict[int, list] = {}
+    for value, index in zip(readings.tolist(), indices.tolist(), strict=True):
+        if index == 0:
+            continue
+        value = round(value, 2)
+        if index in rows:
+            rows[index][5] = value
+        else:
+            band = (index - 1) // SHADES_PER_BAND
+            rows[index] = [*(int(c) for c in PALETTE[index]), value, value, band]
+    # The top band starts at `top` and has no end: everything heavier is drawn the same.
+    rows[int(palette_index(np.array([top]))[0])][5] = None
+    return {
+        "bands": [label for _, _, label in INTENSITY_BANDS],
+        "rows": [rows[index] for index in sorted(rows)],
+    }

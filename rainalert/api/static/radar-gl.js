@@ -322,8 +322,16 @@ function timeline(view, opts) {
   return window.RainRadar.timeline(view, Object.assign({}, opts, { overlay: overlay(view, opts) }));
 }
 
+/* What the rain tooltip needs (radar.js `probeTarget`): MapLibre's container and its unproject. */
+function probeTarget(view) {
+  return {
+    container: view.gl.getContainer(),
+    latLngAt: (x, y) => view.gl.unproject([x, y])
+  };
+}
+
 if (webglAvailable() && window.RainRadar) {
   window.RainRadarGL = {
-    createMap, basemap, picker, mark, unmark, timeline, locateControl, legendControl
+    createMap, basemap, picker, mark, unmark, timeline, locateControl, legendControl, probeTarget
   };
 }

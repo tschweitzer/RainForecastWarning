@@ -215,6 +215,12 @@ var Engine = null;
     }
   });
 
+  // Resting the mouse or pressing a finger on rain says how much (D-77). Absent where the
+  // browser cannot inflate a PNG, and then the map simply has no tooltip.
+  if (typeof RainProbe !== 'undefined' && Engine.probeTarget) {
+    RainProbe.attach(Engine.probeTarget(map), radar);
+  }
+
   rangePicker();
   refreshControl();
 })();
