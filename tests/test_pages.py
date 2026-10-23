@@ -376,7 +376,17 @@ def test_the_bands_are_ordered_and_within_what_can_be_stored(settings):
         # Every option in the dropdown must be a value the API will actually accept, or the page
         # offers choices that fail on save.
         assert settings.min_threshold_mm_5min <= threshold <= settings.plausibility_max_mm_5min
-        assert round(threshold, 2) == threshold  # numeric(5,2) keeps two decimals
+        assert round(threshold, 3) == threshold  # numeric(6,3) keeps three decimals (D-80)
+    # The lowest band is the floor the API enforces: one value, in two places, that must agree.
+    assert thresholds[0] == settings.min_threshold_mm_5min
+
+
+def test_the_picker_offers_nieselregen_from_0008(client):
+    """D-80: the band, the value saved and the label all say 0.008."""
+    page = client.get("/").text
+    assert '<option value="0.008"' in page
+    assert "Nieselregen – ab 0.008 mm/5 min" in " ".join(page.split())
+    assert '<option value="0.01"' not in page
 
 
 def test_every_band_is_accepted_by_the_api(settings):

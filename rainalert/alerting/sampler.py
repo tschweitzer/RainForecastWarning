@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rainalert.radar.decoder import RVFrame
+from rainalert.radar.decoder import FINE_NONE, RVFrame
 from rainalert.radar.grid import radius_mask
 
 #: Leads a complete RV cycle carries: 0, 5, ... 120.
@@ -63,6 +63,10 @@ class MaskCache:
         return len(self._masks)
 
 
+#: The thousandths `RVFrame.fine` holds (D-78).
+FINE_PRECISION = 0.001
+
+
 def on_the_grid(value: float, precision: float) -> float:
     """Snap a decoded reading back to the decimal the radar actually reported.
 
@@ -84,6 +88,11 @@ def sample(
     ``max`` rather than ``mean``: a 2 km radius one of whose cells is under a shower means the
     subscriber gets wet. A mean would dilute exactly the small convective cells this service exists
     to catch.
+
+    **Below 0.02 mm the reading is DWD's thousandth, not the stored 0.01** (D-80). `values` keeps
+    every detected cell at 0.01 or more, so a threshold under 0.02 could not tell an echo of
+    0.000 from drizzle of 0.019; `RVFrame.fine` can. From 0.02 up nothing changes. A frame without
+    thousandths (the binary edition) is read as before.
     """
     # `cache or MaskCache()` would be wrong: MaskCache defines __len__, so an *empty* cache is
     # falsy and the shared one would be silently replaced on every call - making the whole
@@ -102,6 +111,12 @@ def sample(
         missing[index] = float(window_missing.mean())
         if window_missing.all():
             rates[index] = None  # no data is not zero rain
-        else:
-            rates[index] = on_the_grid(float(np.nanmax(frame.values[rows, cols])), frame.precision)
+            continue
+        window = frame.values[rows, cols]
+        precision = frame.precision
+        if frame.fine is not None:
+            fine = frame.fine[rows, cols]
+            window = np.where(fine != FINE_NONE, fine * FINE_PRECISION, window)
+            precision = FINE_PRECISION
+        rates[index] = on_the_grid(float(np.nanmax(window)), precision)
     return SampleSeries(tuple(rates), tuple(missing))

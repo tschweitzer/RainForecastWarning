@@ -111,9 +111,3 @@ alert_email = "you@example.org"
 # Mozilla use to reach you if something is wrong with this service's push traffic. Override only if
 # that should be a different address - it is sent to three third parties on every notification.
 # vapid_subject = "mailto:push@example.org"
-
-# --- Fine drizzle readings on the map (DESIGN.md D-78) --------------------------------------
-# On by default: the rain tooltip says DWD's reading to the thousandth where the map shows
-# 0.01 mm. A diagnostic for choosing a noise cut; frames with widespread drizzle grow up to about
-# twice as large. Switch it off once it has served:
-# overlay_fine_drizzle = false

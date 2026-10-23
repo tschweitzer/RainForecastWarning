@@ -568,10 +568,10 @@ def validate_rule(
         value = float(threshold_mm_5min)
         if not math.isfinite(value):
             raise ValidationError("the threshold must be a number")
-        # The column is numeric(5,2), so a third decimal is rounded away by the database, and
-        # 0.001 rounds to 0.00 - which then fails the `threshold_positive` CHECK as a 500. Round
-        # here, where it can still be judged, and compare the rounded value.
-        value = round(value, 2)
+        # The column is numeric(6,3) (D-80), so a fourth decimal is rounded away by the database,
+        # and 0.0001 rounds to 0.000 - which then fails the `threshold_positive` CHECK as a 500.
+        # Round here, where it can still be judged, and compare the rounded value.
+        value = round(value, 3)
         floor, ceiling = settings.min_threshold_mm_5min, settings.plausibility_max_mm_5min
         if not floor <= value <= ceiling:
             raise ValidationError(

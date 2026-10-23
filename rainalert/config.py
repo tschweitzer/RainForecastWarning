@@ -69,16 +69,16 @@ class Settings(BaseSettings):
     missing_fraction_limit: float = 0.30
     #: What a subscriber may set the rule to, from the settings page or the API.
     #:
-    #: The threshold floor is the RV product's own quantum: values are `raw * 0.01` mm per
-    #: interval (DWD_RV_FORMAT.md §7, `PR E-02`), so 0.01 is the smallest difference the data can
-    #: express and anything finer is a number the radar cannot answer. It is also exactly the
-    #: floor of `numeric(5,2)`: 0.001 rounds to 0.00 in the column and trips the
-    #: `threshold_positive` CHECK as a 500 rather than a validation error.
+    #: The threshold floor is the noise floor, the start of "Nieselregen" (overlay.py
+    #: INTENSITY_BANDS, D-80): below it the readings are mostly not rain, and the map does not draw
+    #: them either. 0.008 is meaningful because below 0.02 the sampler reads DWD's thousandths
+    #: (D-78) rather than the stored hundredths. The column is `numeric(6,3)` since then, so a
+    #: fourth decimal is what rounds away.
     #:
     #: The ceiling is `plausibility_max_mm_5min`, not a separate number, because a cycle whose
     #: peak exceeds it is rejected at ingest (jobs/ingest.py) - so a threshold above it could
     #: never fire on data this service accepts.
-    min_threshold_mm_5min: float = 0.01
+    min_threshold_mm_5min: float = 0.008
     #: Lead times the RV product carries: 5 ... 120 in steps of 5. rules.py steps by 5, so a
     #: lead that is not a multiple would silently round down.
     min_lead_minutes: int = 5
@@ -132,12 +132,6 @@ class Settings(BaseSettings):
     #: appeared because a prune ran while someone was looking at it.
     overlay_obs_retention_hours: int = DWD_RETENTION_HOURS + 2
     overlay_fc_retention_hours: int = 1
-    #: Draw DWD's own reading, to the thousandth, for the cells shown as 0.01 mm - in colours a
-    #: program can tell apart and nobody can see - so the rain tooltip can say it (D-78). A
-    #: diagnostic, for finding where radar noise should be cut. It costs frame size where drizzle
-    #: is widespread (measured 110 -> 203 KB on such a frame, 62 -> 88 KB on a typical wet one);
-    #: false draws every frame as before. Alerting never reads it either way.
-    overlay_fine_drizzle: bool = True
 
     # --- Retention (D-7, D-23) --------------------------------------------------------------
     #: Also past the timeline: re-rendering the oldest frame from raw has to stay possible, and

@@ -270,6 +270,76 @@ def test_the_push_only_migration_keeps_push_and_removes_email(postgres_url, monk
         get_settings.cache_clear()
 
 
+def test_nieselregen_subscribers_follow_the_band_to_0008(postgres_url, monkeypatch):
+    """f7c4a1e9b3d2 (D-80): three decimals for the threshold, and 0.01 - what choosing
+    "Nieselregen" stored - becomes 0.008. Any other value is kept exactly. Then back down."""
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    from rainalert.config import get_settings
+
+    get_settings.cache_clear()
+    engine = create_engine(postgres_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    root = pathlib.Path(__file__).resolve().parent.parent
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+
+    def thresholds(conn):
+        return sorted(
+            float(v)
+            for v in conn.execute(text("SELECT threshold_mm_5min FROM subscriptions")).scalars()
+        )
+
+    try:
+        command.upgrade(config, "e5b2c8d4f1a6")
+        with engine.begin() as conn:
+            for i, threshold in enumerate((0.01, 0.15, 0.02, 0.01)):
+                conn.execute(
+                    text(
+                        "INSERT INTO subscribers (id, address, address_hash, locale, created_at) "
+                        "VALUES (gen_random_uuid(), :a, :h, 'de', now())"
+                    ),
+                    {"a": f"s{i}", "h": f"h{i}".encode().ljust(32, b"x")},
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO subscriptions (id, subscriber_id, status, lat, lon, "
+                        "location_updated_at, radius_m, threshold_mm_5min, lead_time_minutes, "
+                        "min_gap_minutes, timezone, created_at, updated_at) SELECT "
+                        "gen_random_uuid(), id, 'active', 50.1, 8.7, now(), 2000, :t, 30, 0, "
+                        "'Europe/Berlin', now(), now() FROM subscribers WHERE address = :a"
+                    ),
+                    {"t": threshold, "a": f"s{i}"},
+                )
+
+        command.upgrade(config, "f7c4a1e9b3d2")
+        with engine.begin() as conn:
+            assert thresholds(conn) == [0.008, 0.008, 0.02, 0.15]
+            scale = conn.execute(
+                text(
+                    "SELECT numeric_precision, numeric_scale FROM information_schema.columns "
+                    "WHERE table_name = 'subscriptions' AND column_name = 'threshold_mm_5min'"
+                )
+            ).one()
+            assert tuple(scale) == (6, 3)
+
+        command.downgrade(config, "e5b2c8d4f1a6")
+        with engine.begin() as conn:
+            assert thresholds(conn) == [0.01, 0.01, 0.02, 0.15]
+        command.upgrade(config, "head")
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE"))
+            conn.execute(text("CREATE SCHEMA public"))
+        engine.dispose()
+        get_settings.cache_clear()
+
+
 def test_migrations_match_the_models(postgres_url, monkeypatch):
     """Alembic and the ORM must not drift: a model change without a migration is a broken deploy."""
     from alembic import command

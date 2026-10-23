@@ -282,7 +282,8 @@ def test_the_csrf_endpoint_needs_the_cookie(client, notifier):
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
-        ({"threshold_mm_5min": 0.001}, "numeric(5,2) rounds it to 0.00 and trips the CHECK"),
+        ({"threshold_mm_5min": 0.0001}, "numeric(6,3) rounds it to 0.000 and trips the CHECK"),
+        ({"threshold_mm_5min": 0.007}, "under the noise floor, where nothing is drawn (D-80)"),
         ({"threshold_mm_5min": 41.0}, "above plausibility_max_mm_5min it could never fire"),
         ({"lead_time_minutes": 32}, "rules.py steps by 5, so 32 would be evaluated as 30"),
         ({"lead_time_minutes": 125}, "RV only forecasts 120 minutes"),
@@ -301,7 +302,8 @@ def test_values_outside_the_rule_are_refused_readably(client, notifier, body, re
 @pytest.mark.parametrize(
     "body",
     [
-        {"threshold_mm_5min": 0.01},  # the RV quantum, the smallest the data can express
+        {"threshold_mm_5min": 0.008},  # the noise floor, where Nieselregen starts (D-80)
+        {"threshold_mm_5min": 0.01},
         {"threshold_mm_5min": 40.0},  # the plausibility ceiling
         {"lead_time_minutes": 5},
         {"lead_time_minutes": 120},  # the full forecast, as asked for

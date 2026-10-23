@@ -43,8 +43,10 @@ assert.equal(Probe.pixelAt(spec.bounds, spec.width, spec.height, 50, 20), -1, 'e
 const frameBytes = fs.readFileSync(spec.frame_png);
 const frameImage = await Probe.decodeFrame(frameBytes.buffer.slice(frameBytes.byteOffset, frameBytes.byteOffset + frameBytes.length));
 const table = Probe.lookupTable(spec.values);
+output.debug_readings = [];
 for (const [lat, lon] of spec.places) {
   output.readings.push(Probe.reading(frameImage, table, spec.bounds, lat, lon));
+  output.debug_readings.push(Probe.reading(frameImage, table, spec.bounds, lat, lon, true));
 }
 for (const entry of spec.describe) {
   output.described.push(Probe.describe(entry, { kind: 'observed', valid_time: '2026-10-18T15:40:00Z' }));

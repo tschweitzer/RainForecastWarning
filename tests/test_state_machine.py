@@ -293,6 +293,58 @@ def test_a_reading_exactly_at_the_threshold_counts(raw):
     )
 
 
+# --- the noise floor: below 0.02 mm the thousandths decide (D-80) -----------------------------
+
+
+def _drizzle_frame(fine_reading, value=0.01, fine_none=False):
+    """The real analysis frame, set to one reading everywhere: `value` stored, `fine_reading` the
+    thousandths DWD gave - as the HDF5 decoder leaves a cell under 0.02 mm."""
+    from dataclasses import replace
+
+    import numpy as np
+
+    from rainalert.radar.decoder import FINE_NONE, read_frames
+    from tests.helpers import FIXTURES
+
+    analysis = read_frames(FIXTURES / "DE1200_RV2609161355_trimmed.tar.bz2")[0]
+    shape = analysis.values.shape
+    values = np.full(shape, value, dtype=np.float32)
+    fine = None if fine_none else np.full(shape, fine_reading, dtype=np.uint8)
+    if fine is not None and value >= 0.02:
+        fine[:] = FINE_NONE
+    return replace(analysis, values=values, missing=np.zeros(shape, dtype=bool), fine=fine)
+
+
+@pytest.mark.parametrize(("thousandths", "warns"), [(0, False), (7, False), (8, True), (19, True)])
+def test_nieselregen_warns_from_0008_on_dwds_own_reading(thousandths, warns):
+    """Every one of these is stored as 0.01, so before D-80 all four warned - an echo of 0.000 as
+    much as drizzle of 0.019. The thousandths tell them apart."""
+    from decimal import Decimal
+
+    from rainalert.alerting.rules import AlertRule, evaluate
+    from rainalert.alerting.sampler import sample
+
+    threshold = float(Decimal("0.008"))  # numeric(6,3) -> float, as dispatcher.py does
+    series = sample([_drizzle_frame(thousandths)], 50.1109, 8.6821, 2000)
+    assert series.max_rate_by_lead[0] == thousandths / 1000
+    assert evaluate(series, AlertRule(threshold_mm_5min=threshold)).now_wet is warns
+
+
+def test_from_002_up_the_stored_value_decides_as_before():
+    from rainalert.alerting.sampler import sample
+
+    series = sample([_drizzle_frame(0, value=0.35)], 50.1109, 8.6821, 2000)
+    assert series.max_rate_by_lead[0] == 0.35
+
+
+def test_a_frame_without_thousandths_is_read_as_before():
+    """The binary edition: every detected cell is 0.01 and stays so - the old behaviour."""
+    from rainalert.alerting.sampler import sample
+
+    series = sample([_drizzle_frame(0, fine_none=True)], 50.1109, 8.6821, 2000)
+    assert series.max_rate_by_lead[0] == 0.01
+
+
 # --- "Es regnet jetzt" (D-69) ----------------------------------------------------------------
 
 

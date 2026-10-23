@@ -16,7 +16,10 @@ const { RainProbe, RainCut } = win;
 const spec = JSON.parse(fs.readFileSync(process.argv[4], 'utf8'));
 const outDir = process.argv[5];
 const lookup = RainProbe.lookupTable(spec.values);
-const report = { unchanged: [], cuts: RainCut.CUTS, labels: RainCut.CUTS.map(RainCut.label) };
+const floor = spec.values.floor;
+const report = {
+  unchanged: [], cuts: RainCut.CUTS, labels: RainCut.CUTS.map((c) => RainCut.label(c, floor))
+};
 
 for (const item of spec.pngs) {
   const bytes = new Uint8Array(fs.readFileSync(item.path));
@@ -36,6 +39,7 @@ const input = { value: '0', addEventListener: (type, fn) => { listeners[type] = 
 const output = { textContent: '' };
 const box = {
   hidden: true,
+  dataset: { floor: String(floor) },
   querySelector: (selector) => (selector === 'input' ? input : output)
 };
 const filters = [];
@@ -53,8 +57,9 @@ globalThis.fetch = async () => {
 win.RainCut.attach(box, timeline);
 assert.equal(box.hidden, false, 'the slider shows itself once it works');
 assert.equal(input.max, RainCut.CUTS.length - 1);
-assert.match(output.textContent, /^aus/);
-assert.deepEqual(filters, [], 'off is the default: frames drawn as they are');
+assert.equal(RainCut.CUTS[+input.value], floor, 'it starts at the floor everyone sees');
+assert.match(output.textContent, /die Rauschgrenze, wie für alle/);
+assert.deepEqual(filters, [], 'at the floor frames are drawn as they are');
 
 input.value = String(RainCut.CUTS.indexOf(0.005));
 listeners.input();
@@ -66,9 +71,14 @@ assert.match(drawn, /^blob:/, 'a cut frame is drawn from memory');
 await filters[0]('https://bucket.example/obs/1.png');
 assert.equal(fetched, 1, 'the same frame at the same cut is cut once');
 
+input.value = String(RainCut.CUTS.indexOf(floor));
+listeners.input();
+assert.equal(filters.at(-1), null, 'back at the floor: frames as they are');
+
 input.value = '0';
 listeners.input();
-assert.equal(filters.at(-1), null, 'back to off: frames as they are');
+assert.equal(typeof filters.at(-1), 'function', 'nothing hidden is a cut too: it reveals the floor');
+assert.match(output.textContent, /^nichts ausgeblendet/);
 globalThis.fetch = realFetch;
 
 fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report));

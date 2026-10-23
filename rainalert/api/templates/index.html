@@ -148,7 +148,7 @@
 {% if debug %}
 {# Directly under the map, so the map stays in view while the cut moves (noisecut.js, D-79). Only on
    /?debug: it changes what this browser draws and nothing else. #}
-<div class="noise-cut" id="noise-cut" hidden>
+<div class="noise-cut" id="noise-cut" data-floor="{{ noise_floor }}" hidden>
   <label for="noise-cut-range">Rauschgrenze (Debug)</label>
   <input type="range" id="noise-cut-range" min="0" max="0" step="1" value="0">
   <output for="noise-cut-range" aria-live="polite"></output>

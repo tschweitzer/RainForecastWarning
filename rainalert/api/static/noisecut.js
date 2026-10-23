@@ -13,12 +13,16 @@
    Which colour means which readings is the manifest's `values` table (overlay.py `value_table`),
    read through rainprobe.js. Frames from before D-78 have one colour for every reading below
    0.02 mm, so on those a cut between 0.001 and 0.01 hides nothing and one above 0.01 hides all
-   of it. */
+   of it.
+
+   The slider starts at the noise floor (D-80), which is what everyone sees. Lower brings back
+   what the floor removes: those readings are in every frame as transparent colours of their own,
+   and get their alpha back from the table's `below`. Higher hides more. */
 (function (global) {
   'use strict';
 
-  /* The cuts the slider offers, in mm per 5 min: off, then every fine drizzle reading (D-78),
-     then hundredths to 0.1. Index 0 is "off". */
+  /* The cuts the slider offers, in mm per 5 min: nothing hidden, then every fine drizzle reading
+     (D-78), then hundredths to 0.1. Index 0 shows every echo, the floor among them included. */
   var CUTS = [0];
   for (var k = 1; k <= 20; k++) { CUTS.push(k / 1000); }
   for (var h = 3; h <= 10; h++) { CUTS.push(h / 100); }
@@ -52,9 +56,10 @@
     return out;
   }
 
-  /* A frame's PNG bytes with every colour whose readings all lie below `cut` made transparent.
-     `lookup` maps an RGBA key to `{from, to}` (RainProbe.lookupTable). Returns the bytes
-     unchanged when there is nothing to hide, and throws on anything that is not a palette PNG. */
+  /* A frame's PNG bytes with every colour whose readings all lie below `cut` made transparent, and
+     every reading under the noise floor that is not below `cut` drawn again. `lookup` maps an RGBA
+     key to `{from, to, below, alpha}` (RainProbe.lookupTable). Returns the bytes unchanged when
+     nothing changes - at the floor itself - and throws on anything that is not a palette PNG. */
   function cutPng(bytes, lookup, cut) {
     var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (view.getUint32(0) !== 0x89504e47) { throw new Error('not a PNG'); }
@@ -73,20 +78,28 @@
 
     var count = plte.length / 3;
     var alpha = new Uint8Array(count);
-    var hidden = 0;
+    var changed = 0;
     for (var i = 0; i < count; i++) {
       var a = trns && i < trns.length ? trns[i] : 255;
       alpha[i] = a;
-      var entry = a ? lookup.get(global.RainProbe.rgbaKey(plte[i * 3], plte[i * 3 + 1],
-        plte[i * 3 + 2], a)) : null;
-      // Hidden only when every reading drawn in this colour is below the cut; the open-ended top
-      // band never is.
-      if (entry && entry.to !== null && entry.to < cut - 1e-9) {
-        alpha[i] = 0;
-        hidden++;
+      var entry = lookup.get(global.RainProbe.rgbaKey(plte[i * 3], plte[i * 3 + 1],
+        plte[i * 3 + 2], a));
+      if (!entry) { continue; }
+      var next = a;
+      if (entry.below) {
+        // Under the floor: drawn again unless it is under the cut as well.
+        next = entry.to < cut - 1e-9 ? 0 : entry.alpha;
+      } else if (entry.to !== null && entry.to < cut - 1e-9) {
+        // Hidden only when every reading drawn in this colour is below the cut; the open-ended
+        // top band never is.
+        next = 0;
+      }
+      if (next !== a) {
+        alpha[i] = next;
+        changed++;
       }
     }
-    if (!hidden) { return bytes; }
+    if (!changed) { return bytes; }
 
     var replacement = chunk('tRNS', alpha);
     var before = trns ? bytes.subarray(0, trnsAt) : bytes.subarray(0, plteEnd);
@@ -98,15 +111,18 @@
     return out;
   }
 
-  function label(cut) {
-    if (!cut) { return 'aus – alles wird gezeigt'; }
+  /* What the slider says. `floor` is the noise floor (D-80), named when the cut is on it. */
+  function label(cut, floor) {
+    if (!cut) { return 'nichts ausgeblendet – jedes Radarecho wird gezeigt'; }
     var mm = cut.toLocaleString('de-DE', { minimumFractionDigits: cut < 0.02 ? 3 : 2 });
     return 'unter ' + mm + ' mm/5 min ausgeblendet (≈ '
-      + (cut * 12).toLocaleString('de-DE', { maximumSignificantDigits: 2 }) + ' mm/h)';
+      + (cut * 12).toLocaleString('de-DE', { maximumSignificantDigits: 2 }) + ' mm/h)'
+      + (Math.abs(cut - floor) < 1e-9 ? ' – die Rauschgrenze, wie für alle' : '');
   }
 
-  /* `box`: the slider's container, rendered only on `/?debug`. `timeline`: radar.js's, for the
-     value table and to show frames through `filter`. */
+  /* `box`: the slider's container, rendered only on `/?debug`, with the noise floor in
+     `data-floor`. `timeline`: radar.js's, for the value table and to show frames through
+     `filter`. */
   function attach(box, timeline) {
     if (!box || !timeline || !timeline.filter || !global.RainProbe || typeof fetch !== 'function'
         || typeof Blob !== 'function' || typeof URL === 'undefined' || !URL.createObjectURL) {
@@ -115,12 +131,17 @@
     var input = box.querySelector('input');
     var out = box.querySelector('output');
     if (!input) { return null; }
+    // The floor everyone sees is where the slider starts (D-80); at it, frames are drawn as they
+    // are and nothing is fetched.
+    var floor = parseFloat((box.dataset && box.dataset.floor) || '0') || 0;
+    var start = CUTS.findIndex(function (c) { return Math.abs(c - floor) < 1e-9; });
     input.min = 0;
     input.max = CUTS.length - 1;
     input.step = 1;
+    input.value = String(start < 0 ? 0 : start);
     box.hidden = false;
 
-    var cut = 0;
+    var cut = start < 0 ? 0 : floor;
     var cache = new Map();           // frame url -> Promise of the url to draw, oldest first
     var lookup = null, lookupFor = null;
 
@@ -172,12 +193,12 @@
 
     function apply() {
       var next = CUTS[+input.value] || 0;
-      if (out) { out.textContent = label(next); }
+      if (out) { out.textContent = label(next, floor); }
       if (next === cut) { return; }
       cut = next;
       cache.forEach(release);
       cache.clear();
-      timeline.filter(cut > 0 ? filtered : null);
+      timeline.filter(Math.abs(cut - floor) < 1e-9 ? null : filtered);
     }
 
     input.addEventListener('input', apply);

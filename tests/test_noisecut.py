@@ -27,6 +27,7 @@ from rainalert.notify import ConsoleNotifier
 from rainalert.radar import odim
 from rainalert.radar.overlay import (
     FINE_BASE,
+    PALETTE,
     build_projection,
     palette_index,
     render_frame,
@@ -48,6 +49,11 @@ def client(db, tmp_path):
         _env_file=None,
     )
     return TestClient(create_app(settings, session_factory=db, notifier=ConsoleNotifier()))
+
+
+def test_the_slider_starts_at_the_floor(client):
+    page = client.get("/?debug").text
+    assert 'data-floor="0.008"' in page
 
 
 def test_the_slider_is_only_on_the_debug_page(client):
@@ -106,19 +112,19 @@ def test_below_the_cut_nothing_is_drawn_and_above_it_everything_is_unchanged(cli
     projection = build_projection()
     sampled = sample_frame(frame, projection)
     fine = sample_fine(frame, projection)
+    from dataclasses import replace
+
     pngs = {
         "fine": render_frame(frame, projection),
-        # A frame from before D-78: one colour for everything below 0.02 mm.
-        "plain": render_frame(frame, projection, fine=False),
+        # A frame without thousandths (binary edition, or before D-78): one colour for 0.000-0.019.
+        "plain": render_frame(replace(frame, fine=None), projection),
     }
+    index = {"fine": palette_index(sampled, fine), "plain": palette_index(sampled)}
     # What each pixel really holds: the thousandth where the frame carries it.
-    truth = {
-        "fine": np.where(palette_index(sampled, fine) >= FINE_BASE, fine / 1000, sampled),
-        "plain": sampled,
-    }
+    truth = {"fine": np.where(index["fine"] >= FINE_BASE, fine / 1000, sampled), "plain": sampled}
     for name, png in pngs.items():
         (tmp_path / f"{name}.png").write_bytes(png)
-    cuts = [0.001, 0.004, 0.005, 0.011, 0.02, 0.05, 0.1]
+    cuts = [0, 0.001, 0.004, 0.005, 0.008, 0.011, 0.02, 0.05, 0.1]
     spec = {
         "pngs": [{"name": n, "path": str(tmp_path / f"{n}.png")} for n in pngs],
         "values": value_table(),
@@ -149,30 +155,40 @@ def test_below_the_cut_nothing_is_drawn_and_above_it_everything_is_unchanged(cli
     assert result.returncode == 0, f"noise cut tests failed:\n{result.stdout}\n{result.stderr}"
     report = json.loads((out / "report.json").read_text())
 
+    shown_alpha = {FINE_BASE + k: row[3] for k, row in enumerate(value_table()["below"])}
     for name, png in pngs.items():
         before = np.array(Image.open(io.BytesIO(png)).convert("RGBA"))
         drawn_before = before[..., 3] > 0
+        has_reading = index[name] > 0  # drawn, or under the floor (D-80)
         for cut in cuts:
             cut_png = (out / f"{name}-{cut}.png").read_bytes()
             assert _crc_ok(cut_png), (name, cut)
             after = np.array(Image.open(io.BytesIO(cut_png)).convert("RGBA"))
-            below = drawn_before & (truth[name] < cut - 1e-9)
-            assert (after[below][:, 3] == 0).all(), (
-                f"{name} @ {cut}: something below the cut is drawn"
-            )
-            kept = drawn_before & ~below
+            visible = has_reading & (truth[name] >= cut - 1e-9)
+            assert (after[~visible][:, 3] == 0).all(), f"{name} @ {cut}: something below is drawn"
+            kept = visible & drawn_before
             assert np.array_equal(after[kept], before[kept]), f"{name} @ {cut}: kept pixels changed"
-            assert (after[~drawn_before][:, 3] == 0).all()
+            # Under the floor and not under the cut: drawn again, in its own colour (D-80).
+            revealed = visible & ~drawn_before
+            if revealed.any():
+                assert name == "fine" and cut < 0.008
+                expected = PALETTE[index[name][revealed]].copy()
+                expected[:, 3] = [shown_alpha[i] for i in index[name][revealed]]
+                assert np.array_equal(after[revealed], expected), f"{name} @ {cut}"
+            if cut == 0 and name == "fine":
+                assert revealed.sum() > 1000, "cut 0 must bring back what the floor removes"
 
-    # The plain frame cannot split its one colour for 0.000-0.019: below 0.01 nothing goes.
-    # (Its bytes may still change - it carries the fine entries unused - but no pixel does.)
+    # At the floor nothing changes - what everyone sees - so nothing is re-written either.
+    assert ["fine", 0.008] in report["unchanged"] and ["plain", 0.008] in report["unchanged"]
+    # The plain frame cannot split its one colour for 0.000-0.019: up to 0.01 it all stays.
     plain = np.array(Image.open(io.BytesIO(pngs["plain"])).convert("RGBA"))
-    for cut in (0.001, 0.005):
+    for cut in (0, 0.001, 0.005):
         assert np.array_equal(np.array(Image.open(out / f"plain-{cut}.png").convert("RGBA")), plain)
     plain_011 = np.array(Image.open(out / "plain-0.011.png").convert("RGBA"))
     assert (plain_011[np.isclose(sampled, 0.01)][:, 3] == 0).all()
 
     assert report["cuts"][:3] == [0, 0.001, 0.002] and report["cuts"][-1] == 0.1
-    assert report["labels"][0].startswith("aus")
+    assert report["labels"][0].startswith("nichts ausgeblendet")
+    assert report["labels"][report["cuts"].index(0.008)].endswith("die Rauschgrenze, wie für alle")
     assert report["labels"][report["cuts"].index(0.004)].startswith("unter 0,004 mm/5 min")
     assert "(≈ 0,6 mm/h)" in report["labels"][report["cuts"].index(0.05)]

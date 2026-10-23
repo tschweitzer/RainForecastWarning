@@ -24,7 +24,9 @@ import pytest
 from rainalert.radar import odim
 from rainalert.radar.decoder import FINE_NONE
 from rainalert.radar.overlay import (
+    BELOW_FLOOR_STEPS,
     BOUNDS,
+    DRAWN_FROM_MM_5MIN,
     FINE_BASE,
     FINE_STEPS,
     INTENSITY_BANDS,
@@ -96,7 +98,7 @@ def test_every_fine_reading_has_its_own_colour_close_to_the_drizzle_one():
     table, by_colour = _rows()
     base = np.array(INTENSITY_BANDS[0][1], dtype=int)
     alphas = []
-    for k in range(FINE_STEPS):
+    for k in range(BELOW_FLOOR_STEPS, FINE_STEPS):
         rgba = tuple(int(c) for c in PALETTE[FINE_BASE + k])
         row = by_colour[rgba]
         assert row[4] == row[5] == k / 1000
@@ -106,6 +108,30 @@ def test_every_fine_reading_has_its_own_colour_close_to_the_drizzle_one():
         alphas.append(rgba[3])
     assert alphas == sorted(alphas)
     assert len(PALETTE) <= 256, "a palette PNG holds at most 256 colours"
+
+
+def test_below_the_floor_the_colours_are_transparent_but_still_tell_apart():
+    """D-80: 0.000-0.007 are not drawn, and keep colours of their own so the debug noise cut can
+    show them again - with the alpha the table's `below` names, close to the drizzle colour."""
+    table = value_table()
+    assert table["floor"] == DRAWN_FROM_MM_5MIN == 0.008
+    assert BELOW_FLOOR_STEPS == 8 and len(table["below"]) == 8
+    rgb_elsewhere = {
+        tuple(int(c) for c in PALETTE[i][:3])
+        for i in range(len(PALETTE))
+        if not FINE_BASE <= i < FINE_BASE + BELOW_FLOOR_STEPS
+    }
+    base = np.array(INTENSITY_BANDS[0][1], dtype=int)
+    for k, row in enumerate(table["below"]):
+        entry = PALETTE[FINE_BASE + k]
+        assert entry[3] == 0, "under the floor nothing is drawn"
+        assert tuple(row[:3]) == tuple(int(c) for c in entry[:3])
+        assert tuple(row[:3]) not in rgb_elsewhere, "the colour alone must identify the reading"
+        assert row[4] == row[5] == k / 1000
+        assert abs(row[3] - base[3]) <= 10 and np.abs(np.array(row[:3]) - base[:3]).max() <= 8
+    # And the gradient did not move: from 0.01 up every value keeps the shade it had.
+    assert palette_index(np.array([0.008, 0.009, 0.01]))[...].tolist() == [1, 1, 1]
+    assert palette_index(np.array([0.007, 0.0]))[...].tolist() == [0, 0]
 
 
 def test_the_decoder_keeps_the_thousandths_of_exactly_the_cells_stored_as_001(hdf5_cycle_path):
@@ -144,24 +170,23 @@ def test_a_frame_without_fine_readings_draws_as_before(rendered):
     assert np.array_equal(palette_index(sampled, None), palette_index(sampled))
 
 
-def test_the_switch_draws_frames_as_before(rendered):
-    """`overlay_fine_drizzle=false`: the diagnostic off, and the PNG back to its old size."""
+def test_nothing_under_the_floor_is_drawn(rendered):
+    """Every pixel whose reading is under 0.008 is transparent in the PNG the map gets."""
     from PIL import Image
 
-    png, sampled, _, projection, frame = rendered
-    plain = render_frame(frame, projection, fine=False)
-    assert np.array_equal(np.array(Image.open(io.BytesIO(plain))), palette_index(sampled))
-    assert len(plain) < len(png)
+    png, sampled, fine, _, _ = rendered
+    alpha = np.array(Image.open(io.BytesIO(png)).convert("RGBA"))[..., 3]
+    refined = palette_index(sampled, fine) >= FINE_BASE
+    under = refined & (fine < BELOW_FLOOR_STEPS)
+    assert under.sum() > 1000, "the fixture frame has drizzle under the floor"
+    assert (alpha[under] == 0).all()
+    assert (alpha[refined & (fine >= BELOW_FLOOR_STEPS)] > 0).all()
 
 
-def test_the_setting_reaches_the_renderer_from_terraform():
+def test_the_floor_is_one_number():
     from rainalert.config import Settings
 
-    assert Settings(database_url="x", _env_file=None).overlay_fine_drizzle is True
-    run = (REPO / "infra" / "run.tf").read_text()
-    assert "OVERLAY_FINE_DRIZZLE = tostring(var.overlay_fine_drizzle)" in run
-    for path in ("jobs/ingest.py", "jobs/backfill.py", "cli.py"):
-        assert "overlay_fine_drizzle" in (REPO / "rainalert" / path).read_text(), path
+    assert Settings(database_url="x", _env_file=None).min_threshold_mm_5min == DRAWN_FROM_MM_5MIN
 
 
 def test_the_table_stays_small():
@@ -208,7 +233,7 @@ def test_the_start_page_loads_the_tooltip_after_the_map(db, tmp_path):
     assert page.index("/static/radar.js") < page.index("/static/rainprobe.js")
     assert client.get("/static/rainprobe.js").status_code == 200
     signup = client.get("/static/signup.js").text
-    assert "RainProbe.attach(Engine.probeTarget(map), radar)" in signup
+    assert "RainProbe.attach(Engine.probeTarget(map), radar, {" in signup
     for engine in ("radar.js", "radar-gl.js"):
         assert "probeTarget" in client.get(f"/static/{engine}").text, engine
 
@@ -314,12 +339,15 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
     filtered_png.write_bytes(_png_with_every_filter(synthetic))
 
     expected = palette_index(sampled, fine)
-    wet = np.argwhere(expected > 0)
-    dry = np.argwhere((expected == 0) & projection.inside)
+    drawn = PALETTE[expected][..., 3] > 0
+    wet = np.argwhere(drawn)
+    dry = np.argwhere(~drawn & projection.inside)
+    under = np.argwhere((expected >= FINE_BASE) & (expected < FINE_BASE + BELOW_FLOOR_STEPS))
     assert len(wet) > 1000, "the fixture frame should be a wet one"
     picks = np.concatenate(
         [
             wet[rng.choice(len(wet), 300, replace=False)],
+            under[rng.choice(len(under), 50, replace=False)],
             dry[rng.choice(len(dry), 50, replace=False)],
         ]
     )
@@ -396,9 +424,17 @@ def test_the_browser_reads_back_what_the_renderer_drew(rendered, tmp_path, db):
     # Places land on the pixel they are the centre of: the browser's projection is the renderer's.
     assert report["pixels"] == [int(r) * width + int(c) for r, c in picks]
 
-    # And what the tooltip would say there contains the value the renderer drew.
-    for (r, c), entry in zip(picks, report["readings"], strict=True):
+    # And what the tooltip would say there contains the value the renderer drew. Under the floor
+    # it says nothing - nothing is drawn - except on the debug page (D-80).
+    for (r, c), entry, debug in zip(
+        picks, report["readings"], report["debug_readings"], strict=True
+    ):
         value = sampled[r, c]
+        if FINE_BASE <= expected[r, c] < FINE_BASE + BELOW_FLOOR_STEPS:
+            assert entry is None
+            assert debug["below"] and debug["from"] == debug["to"] == fine[r, c] / 1000
+            continue
+        assert debug == entry
         if expected[r, c] == 0:
             assert entry is None
             continue

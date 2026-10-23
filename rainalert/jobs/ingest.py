@@ -109,7 +109,6 @@ def render_overlays(
     overlays: OverlayStore,
     *,
     observed_only: bool = False,
-    fine: bool = True,
 ) -> int:
     """Render the map frames for one cycle (§11.1).
 
@@ -127,7 +126,7 @@ def render_overlays(
     for frame in frames:
         if observed_only and frame.lead_minutes != 0:
             continue
-        png = render_frame(frame, projection, fine=fine)
+        png = render_frame(frame, projection)
         if frame.lead_minutes == 0:
             overlays.put_observed(frame.nominal_time, png)
         else:
@@ -266,7 +265,7 @@ def ingest_once(
         # Rendering first and separately: a rendering failure must not cost anyone a warning.
         if overlays is not None:
             try:
-                render_overlays(frames, overlays, fine=settings.overlay_fine_drizzle)
+                render_overlays(frames, overlays)
             except Exception:
                 logger.exception("overlay rendering failed for cycle %s", nominal)
 

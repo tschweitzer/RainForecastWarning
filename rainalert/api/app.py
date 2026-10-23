@@ -62,7 +62,7 @@ from rainalert.db.schema import schema_complaint
 from rainalert.db.session import make_engine, make_session_factory
 from rainalert.notify import Notifier, build_notifier
 from rainalert.notify.webpush import WebPushNotifier
-from rainalert.radar.overlay import LAYER_OPACITY, legend
+from rainalert.radar.overlay import DRAWN_FROM_MM_5MIN, LAYER_OPACITY, legend
 from rainalert.storage import GCSOverlayStore, LocalOverlayStore, OverlayStore
 from rainalert.timeline import build_timeline
 from rainalert.tokens import (
@@ -1293,6 +1293,8 @@ def create_app(
                 "bounds": rule_bounds(),
                 # `/?debug`: the noise-cut slider under the map (D-79). Any value, even none.
                 "debug": debug is not None,
+                # Where it starts: the floor everyone sees (D-80).
+                "noise_floor": DRAWN_FROM_MM_5MIN,
             },
         )
 

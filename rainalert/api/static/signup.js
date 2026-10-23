@@ -217,8 +217,12 @@ var Engine = null;
 
   // Resting the mouse or pressing a finger on rain says how much (D-77). Absent where the
   // browser cannot inflate a PNG, and then the map simply has no tooltip.
+  // On `/?debug` it also says what lies under the noise floor (D-80), which is what is being
+  // looked at there.
   if (typeof RainProbe !== 'undefined' && Engine.probeTarget) {
-    RainProbe.attach(Engine.probeTarget(map), radar);
+    RainProbe.attach(Engine.probeTarget(map), radar, {
+      belowFloor: !!document.getElementById('noise-cut')
+    });
   }
   // The noise-cut slider under the map, on `/?debug` only (D-79).
   if (typeof RainCut !== 'undefined') {

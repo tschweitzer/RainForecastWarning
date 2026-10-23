@@ -185,6 +185,12 @@ terraform apply                                                       # now the 
 
   The previous code runs fine against the migrated schema, so the gap in between costs nothing.
 
+  The release that moves "Nieselregen" to 0.008 (D-80, migration `f7c4a1e9b3d2`) has no order to
+  keep: the previous code treats 0.008 like 0.01, and the new code before the migration only finds
+  0.01. Run the migration with it anyway - only then are Nieselregen subscribers at 0.008. It also
+  removes the `overlay_fine_drizzle` variable: delete that line from `terraform.tfvars` if you set
+  it (left in, it only earns a warning).
+
   The push-only release also has Terraform **destroy the `rainalert-smtp-password` secret** (it
   was empty: email was never switched on) and drops the SMTP settings from the services. Remove
   `smtp_host`, `smtp_port`, `smtp_username`, `mail_from` and `transactional_mail_cap_per_day` from
@@ -708,15 +714,6 @@ gcloud run jobs execute rainalert-migrate --region europe-west3 --args=downgrade
 The migration handles this correctly in both directions — it deletes the `webpush` rows on the way
 down, because the older schema has nowhere to put their keys. It is the ordering that has to be
 right, and it is the opposite of the usual "deploy, then migrate".
-
-### Turning off the fine drizzle readings
-
-The map carries DWD's thousandths for the cells it shows as 0.01 mm, for the rain tooltip
-(DESIGN.md D-78). It is a diagnostic for choosing a noise cut, and it makes frames with widespread
-drizzle up to about twice as large. Once it has served, set `overlay_fine_drizzle = false` in
-`terraform.tfvars` and apply: new frames are drawn as before, and the old ones age out of the
-timeline within its window (`make rerender` redraws them at once where archives are kept locally).
-Nothing about alerting changes either way.
 
 ### Device keys: the settings without a link
 

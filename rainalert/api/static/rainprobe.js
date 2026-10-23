@@ -163,16 +163,27 @@
         from: row[4], to: row[5], label: values.bands[row[6]] || ''
       });
     });
+    /* Below the noise floor (D-80): transparent in the frame, so keyed with alpha 0, and marked -
+       `alpha` is what the debug noise cut draws them with to show what the floor removes. */
+    ((values && values.below) || []).forEach(function (row) {
+      table.set(rgbaKey(row[0], row[1], row[2], 0), {
+        from: row[4], to: row[5], label: values.bands[row[6]] || '', below: true, alpha: row[3]
+      });
+    });
     return table;
   }
 
-  /* What a decoded frame says at a place: `{from, to, label}`, or null where nothing is drawn. */
-  function reading(image, table, bounds, lat, lon) {
+  /* What a decoded frame says at a place: `{from, to, label}`, or null where nothing is drawn.
+     A reading under the noise floor is not drawn, so it is null too unless `belowFloor` - the
+     debug page, where the floor itself is what is being looked at. */
+  function reading(image, table, bounds, lat, lon, belowFloor) {
     var at = pixelAt(bounds, image.width, image.height, lat, lon);
     if (at < 0) { return null; }
     var index = image.indices[at];
     if (index === 0) { return null; }
-    return table.get(image.colours[index]) || null;
+    var entry = table.get(image.colours[index]) || null;
+    if (entry && entry.below && !belowFloor) { return null; }
+    return entry;
   }
 
   /* ---- saying it ------------------------------------------------------------------------- */
@@ -231,8 +242,10 @@
 
   /* `target`: `{container, latLngAt(x, y)}` from the map engine (radar.js / radar-gl.js
      `probeTarget`), x and y relative to the container. `source`: the timeline, for the frame on
-     screen, its bounds and the value table, and to hear when the frame changes. */
-  function attach(target, source) {
+     screen, its bounds and the value table, and to hear when the frame changes.
+     `options.belowFloor`: also say what lies under the noise floor (the debug page, D-80). */
+  function attach(target, source, options) {
+    var belowFloor = !!(options && options.belowFloor);
     if (!supported() || !target || !source || !source.frame) { return null; }
     var container = target.container;
 
@@ -342,7 +355,7 @@
       var where = target.latLngAt(at.x, at.y);
       frameImage(frame.url).then(function (image) {
         if (mine !== generation) { return; }
-        var entry = reading(image, lookup, bounds, where.lat, where.lng);
+        var entry = reading(image, lookup, bounds, where.lat, where.lng, belowFloor);
         if (!entry && kind === 'mouse') {
           tip.hidden = true;
           shown = null;

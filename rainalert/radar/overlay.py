@@ -65,13 +65,13 @@ _PROJECTION_BAND_ROWS = 100
 #: invisible. Two opacities multiplying is also a bad way to reason about a palette, so the
 #: layer is now drawn at 1.0 and this column is what you actually see.
 INTENSITY_BANDS: tuple[tuple[float, tuple[int, int, int, int], str], ...] = (
-    # From the product's own quantum (`PR E-02`: values are `raw * 0.01`), so every non-zero
-    # reading is drawn and can be warned on - nothing the radar reports is cut. It was 0.05
-    # (~0.6 mm/h) until 2026-10-07, which left about two thirds of the wet cells in a typical
-    # frame transparent and missed drizzle that the DWD app showed and that was falling. The
-    # lowest steps carry the most non-rain echoes (clutter, insects); that is the price of
-    # seeing everything, and the operator chose it (D-52).
-    (0.01, (120, 180, 255, 140), "Nieselregen"),  # ~0.12 mm/h
+    # The noise floor: below 0.008 mm nothing is drawn and nothing can warn (D-80). Chosen by the
+    # operator with the debug noise cut (D-79) on DWD's own thousandths (D-78), which show the
+    # faint fields under it to be mostly not rain. History: 0.05 (~0.6 mm/h) until 2026-10-07,
+    # which hid two thirds of the wet cells and drizzle that was falling (D-52); then 0.01, the
+    # product's quantum, which - because every detected cell is stored as at least 0.01 - drew
+    # and warned on every echo the radar saw, noise included.
+    (0.008, (120, 180, 255, 140), "Nieselregen"),  # ~0.1 mm/h
     (0.15, (60, 140, 240, 173), "leichter Regen"),  # ~1.8 mm/h
     (0.35, (40, 190, 150, 199), "mäßiger Regen"),  # ~4.2 mm/h
     (0.70, (245, 210, 70, 217), "kräftiger Regen"),  # ~8.4 mm/h
@@ -89,6 +89,11 @@ LAYER_OPACITY = 1.0
 #: it reports how wet a cycle was - otherwise "0 wet cells" and "nothing visible" look like the
 #: same fact when they are not.
 DRAWN_FROM_MM_5MIN: float = INTENSITY_BANDS[0][0]
+
+#: Where the colour gradient is anchored (D-60): the drizzle band's own colour is drawn at 0.01,
+#: as it was before the floor moved below it (D-80), so nothing visible changed from 0.01 up
+#: and every drizzle reading keeps a shade of its own. 0.008 and 0.009 get that colour too.
+GRADIENT_FROM: float = 0.01
 
 #: What the renderer wants: just the thresholds and their colours.
 COLOR_STOPS: tuple[tuple[float, tuple[int, int, int, int]], ...] = tuple(
@@ -215,7 +220,9 @@ def build_projection(spec: GridSpec = DE1200, width: int = WIDTH) -> Projection:
 #: readings gets a shade of its own (16 gave 11 of 14). Measured on a wet frame: 107 KB.
 SHADES_PER_BAND = 32
 
-_STOP_VALUES = np.array([threshold for threshold, _ in COLOR_STOPS], dtype=np.float64)
+_STOP_VALUES = np.array(
+    [GRADIENT_FROM, *(threshold for threshold, _ in COLOR_STOPS[1:])], dtype=np.float64
+)
 _STOP_LOGS = np.log(_STOP_VALUES)
 _STOP_COLOURS = np.array([colour for _, colour in COLOR_STOPS], dtype=np.float64)
 
@@ -238,10 +245,17 @@ def _palette() -> np.ndarray:
     return np.rint(table).astype(np.uint8)
 
 
-#: The readings below the map's first step that the HDF5 edition still carries (D-78): 0.000 to
-#: 0.019 mm, which `values` stores as 0.01. Each gets a palette entry of its own after the bands.
+#: The readings below 0.02 mm that the HDF5 edition carries to the thousandth (D-78): 0.000 to
+#: 0.019, which `values` stores as 0.01. Each gets a palette entry of its own after the bands.
 FINE_STEPS = 20
 FINE_BASE = 1 + len(COLOR_STOPS) * SHADES_PER_BAND
+#: How many of them lie below the noise floor (D-80): 0.000 to 0.007.
+BELOW_FLOOR_STEPS = round(INTENSITY_BANDS[0][0] * 1000)
+
+
+def _shown_alpha(k: int) -> int:
+    """The alpha fine reading `k` (thousandths) is drawn with - or would be, below the floor."""
+    return INTENSITY_BANDS[0][1][3] - 9 + k
 
 
 def _fine_colours() -> np.ndarray:
@@ -250,11 +264,22 @@ def _fine_colours() -> np.ndarray:
     Alpha runs 131..150 around the band's 140 - under four percent of opacity either way, which
     nobody sees on a pale blue, and in the direction of the reading, so a heavier one is never
     the fainter. Red is one above the band's so that none of them, the 140 included, is the
-    colour that already means "0.01" (index 1) - which old frames and the binary edition still
-    draw, and which the tooltip then reads as before.
+    colour that already means "0.01" (index 1) - which frames without thousandths still draw.
+
+    Below the noise floor (D-80) the entry is transparent - not drawn - but keeps a colour of its
+    own (green 172-179, which nothing else has): the debug noise cut (noisecut.js, D-79) gives such
+    an entry its alpha back, from `value_table`'s `below`, to show what the floor removes.
     """
-    r, g, b, a = INTENSITY_BANDS[0][1]
-    return np.array([(r + 1, g, b, a - 9 + k) for k in range(FINE_STEPS)], dtype=np.uint8)
+    r, g, b, _ = INTENSITY_BANDS[0][1]
+    return np.array(
+        [
+            (r + 1, g - BELOW_FLOOR_STEPS + k, b, 0)
+            if k < BELOW_FLOOR_STEPS
+            else (r + 1, g, b, _shown_alpha(k))
+            for k in range(FINE_STEPS)
+        ],
+        dtype=np.uint8,
+    )
 
 
 #: Index -> RGBA. Built once; `render_frame` writes it into the PNG as its palette. 225 band shades
@@ -263,11 +288,12 @@ PALETTE = np.concatenate([_palette(), _fine_colours()])
 
 
 def palette_index(values: np.ndarray, fine: np.ndarray | None = None) -> np.ndarray:
-    """Values in mm/5min to palette indices: 0 for NaN and anything below the first band.
+    """Values in mm/5min to palette indices: 0 for NaN and anything below the noise floor.
 
     ``fine``, where given: per pixel, DWD's reading in thousandths for a pixel drawn at 0.01, NaN
     elsewhere (`sample_fine`). Such a pixel then gets the fine entry for its reading instead of
-    the band's first shade (D-78). Every other pixel is unaffected.
+    the band's first shade (D-78) - a transparent one below the floor (D-80). Every other pixel is
+    unaffected.
 
     **A gradient, not seven flat steps** (DESIGN.md D-60). Each band's own colour is drawn exactly
     at the value where the band starts - so the legend and the threshold picker, which show those
@@ -293,16 +319,17 @@ def palette_index(values: np.ndarray, fine: np.ndarray | None = None) -> np.ndar
     v = np.round(np.nan_to_num(v, nan=-1.0), 6)
 
     index = np.zeros(v.shape, dtype=np.uint8)
-    band = np.searchsorted(_STOP_VALUES, v, side="right") - 1  # -1 below the first band
-    drawn = band >= 0
+    drawn = v >= DRAWN_FROM_MM_5MIN
     if not drawn.any():
         return index
-    b = band[drawn]
+    # 0.008 and 0.009 are shaded as 0.01, where the gradient starts (GRADIENT_FROM).
+    shaded = np.maximum(v[drawn], GRADIENT_FROM)
+    b = np.searchsorted(_STOP_VALUES, shaded, side="right") - 1
     last = len(_STOP_VALUES) - 1
     nxt = np.minimum(b + 1, last)
     with np.errstate(divide="ignore", invalid="ignore"):
         fraction = np.where(
-            b < last, (np.log(v[drawn]) - _STOP_LOGS[b]) / (_STOP_LOGS[nxt] - _STOP_LOGS[b]), 0.0
+            b < last, (np.log(shaded) - _STOP_LOGS[b]) / (_STOP_LOGS[nxt] - _STOP_LOGS[b]), 0.0
         )
     shade = np.clip(np.floor(fraction * SHADES_PER_BAND), 0, SHADES_PER_BAND - 1).astype(np.int64)
     index[drawn] = (1 + b * SHADES_PER_BAND + shade).astype(np.uint8)
@@ -320,15 +347,12 @@ def colorize(values: np.ndarray) -> np.ndarray:
     return PALETTE[palette_index(values)]
 
 
-def render_frame(
-    frame: RVFrame, projection: Projection | None = None, *, fine: bool = True
-) -> bytes:
-    """One frame to PNG bytes, losing no wet cell. What each pixel holds is `sample_frame`'s, and
-    for the pixels drawn at 0.01, `sample_fine`'s (D-78) unless ``fine`` is off
-    (`overlay_fine_drizzle`)."""
+def render_frame(frame: RVFrame, projection: Projection | None = None) -> bytes:
+    """One frame to PNG bytes, losing no wet cell above the noise floor. What each pixel holds is
+    `sample_frame`'s, and for the pixels drawn at 0.01, `sample_fine`'s (D-78, D-80)."""
     projection = projection or build_projection()
     sampled = sample_frame(frame, projection)
-    readings = sample_fine(frame, projection) if fine else None
+    readings = sample_fine(frame, projection)
     # A palette PNG: one byte a pixel and the colour table once, with each entry's alpha in the
     # tRNS chunk. Browsers decode it to exactly the RGBA `colorize` gives (D-60), and the map's
     # rain tooltip reads the indices back out of it (rainprobe.js, D-77).
@@ -417,6 +441,10 @@ def value_table() -> dict:
     everything from its start up - and an index into `bands`, the band names. Rows rather than
     objects because this rides in every timeline manifest: 162 colours as objects were 16 KB.
 
+    `below`, the same shape, is the fine readings under the noise floor (D-80): in a frame their
+    colour has alpha 0, and the `a` here is the one the debug noise cut gives them back (D-79).
+    `floor` is the floor itself, the lowest reading that is drawn and can warn.
+
     Built by running every reading the product can carry through `palette_index` - not by
     inverting the formula - so the table cannot disagree with the renderer. Keyed by colour rather
     than palette index because colour is what the file guarantees: an encoder that renumbered the
@@ -426,10 +454,10 @@ def value_table() -> dict:
     readings = np.arange(1, round(top / _QUANTUM) + 1) * _QUANTUM
     indices = palette_index(readings)
     rows: dict[int, list] = {}
-    # The fine drizzle readings first, each its own colour and exactly one value (D-78). The
-    # band's first shade keeps its row below: frames rendered from the binary edition, or before
-    # D-78, still draw it.
-    for k in range(FINE_STEPS):
+    # The fine drizzle readings from the floor up first, each its own colour and exactly one value
+    # (D-78). The band's first shade keeps its row below: frames without thousandths - from the
+    # binary edition, or rendered before D-78 - still draw it.
+    for k in range(BELOW_FLOOR_STEPS, FINE_STEPS):
         index = FINE_BASE + k
         rows[index] = [*(int(c) for c in PALETTE[index]), k / 1000, k / 1000, 0]
     for value, index in zip(readings.tolist(), indices.tolist(), strict=True):
@@ -443,7 +471,13 @@ def value_table() -> dict:
             rows[index] = [*(int(c) for c in PALETTE[index]), value, value, band]
     # The top band starts at `top` and has no end: everything heavier is drawn the same.
     rows[int(palette_index(np.array([top]))[0])][5] = None
+    below = [
+        [*(int(c) for c in PALETTE[FINE_BASE + k][:3]), _shown_alpha(k), k / 1000, k / 1000, 0]
+        for k in range(BELOW_FLOOR_STEPS)
+    ]
     return {
         "bands": [label for _, _, label in INTENSITY_BANDS],
+        "floor": DRAWN_FROM_MM_5MIN,
         "rows": [rows[index] for index in sorted(rows)],
+        "below": below,
     }

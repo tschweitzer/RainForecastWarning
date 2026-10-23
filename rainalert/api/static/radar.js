@@ -604,7 +604,8 @@
                 + s.approx_mm_per_hour + ' mm/h)' : '';
               return '<span title="' + name + '"><i style="background:rgba(' + c[0] + ',' + c[1]
                 + ',' + c[2] + ',' + (c[3] / 255).toFixed(2) + ')"></i>'
-                + s.from_mm_5min.toFixed(2) + '</span>';
+                // Three decimals only where a band starts on one: Nieselregen at 0.008 (D-80).
+                + s.from_mm_5min.toFixed(s.from_mm_5min < 0.01 ? 3 : 2) + '</span>';
             }).join('') + '<span>mm / 5 min</span>';
           }
           if (opts.onReady) { opts.onReady(frames[at]); }
