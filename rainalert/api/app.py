@@ -489,7 +489,10 @@ def create_app(
             # draws, with fetch() rather than <img> - so the tile server and the overlay bucket
             # have to be here as well as in img-src. The bucket already allows this site in its
             # CORS policy, which fetch() needs and <img> did not.
-            f"connect-src 'self' {image_origin(settings.vector_tile_url)} "
+            #
+            # `blob:` for the debug noise cut (D-79): it hands MapLibre a frame it has re-written
+            # in memory, and MapLibre fetches even that one.
+            f"connect-src 'self' blob: {image_origin(settings.vector_tile_url)} "
             f"{image_origin(settings.overlay_public_base_url or '')}; "
             "frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
         )
@@ -1250,7 +1253,7 @@ def create_app(
     WINDOW_CHOICES = (3, 6, 12, 24, 48)
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def index(request: Request, hours: str | None = None) -> HTMLResponse:
+    def index(request: Request, hours: str | None = None, debug: str | None = None) -> HTMLResponse:
         """The radar and the signup form, on one page.
 
         `/map` used to be separate and is gone - not redirected. It was still in development and
@@ -1288,6 +1291,8 @@ def create_app(
                 "choices": [c for c in WINDOW_CHOICES if c <= settings.timeline_past_hours],
                 # The settings live on this page too (D-67).
                 "bounds": rule_bounds(),
+                # `/?debug`: the noise-cut slider under the map (D-79). Any value, even none.
+                "debug": debug is not None,
             },
         )
 

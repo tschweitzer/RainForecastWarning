@@ -145,6 +145,15 @@
   der Warnung.</p>
 
 <div id="map" class="radar-map"></div>
+{% if debug %}
+{# Directly under the map, so the map stays in view while the cut moves (noisecut.js, D-79). Only on
+   /?debug: it changes what this browser draws and nothing else. #}
+<div class="noise-cut" id="noise-cut" hidden>
+  <label for="noise-cut-range">Rauschgrenze (Debug)</label>
+  <input type="range" id="noise-cut-range" min="0" max="0" step="1" value="0">
+  <output for="noise-cut-range" aria-live="polite"></output>
+</div>
+{% endif %}
 <div class="controls" id="radar-controls" hidden>
   <button type="button" id="play" aria-label="Abspielen">▶</button>
   <input type="range" id="slider" min="0" max="0" step="1" value="0" aria-label="Zeit"
@@ -416,6 +425,9 @@
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('geolocate.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('radar.js') }}"></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('rainprobe.js') }}"></script>
+{% if debug %}
+<script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('noisecut.js') }}"></script>
+{% endif %}
 {% include '_map_engine.html' %}
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('devicekey.js') }}" defer></script>
 <script nonce="{{ request.state.csp_nonce }}" src="{{ static_url('pendingconfirm.js') }}" defer></script>

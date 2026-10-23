@@ -119,6 +119,11 @@
                 box-shadow:0 1px 4px rgba(0,0,0,.3); }
   .rain-probe strong { font-size:.9rem; }
   .rain-probe .when { opacity:.75; font-size:.72rem; }
+  /* The debug noise cut under the map (noisecut.js, D-79): one row, the slider taking the room. */
+  .noise-cut { display:flex; flex-wrap:wrap; align-items:center; gap:.3rem .6rem; margin:.4rem 0 0;
+               font-size:.8rem; color:var(--muted); }
+  .noise-cut input { flex:1 1 12rem; margin:0; }
+  .noise-cut output { flex:1 1 100%; font-variant-numeric:tabular-nums; color:var(--fg); }
   /* A long press on the map is ours: no "save image" callout on iOS over the Leaflet overlay
      (the vector map's is in _map_engine.html). */
   .leaflet-container { -webkit-touch-callout:none; }

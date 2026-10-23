@@ -308,6 +308,10 @@
     var onScreen = null;            // the frame whose image is on screen; null in a gap
     var values = null;              // what each colour stands for (D-77), from the manifest
     var watchers = [];              // told whenever the frame on screen changes (rainprobe.js)
+    /* The debug noise cut (noisecut.js, D-79): url -> Promise of the url to draw instead. Null
+       draws frames as they are, which is every page but `/?debug`. */
+    var urlFilter = null;
+    var showing = 0;                // only the newest show() may put an image on the map
 
     /* The bubble over the knob while it is held (D-56): how far the frame under the finger is
        from the latest radar image - the same "jetzt" the stamp line uses. Above the knob because
@@ -408,6 +412,7 @@
       if (!frame) { return; }
       current = frame.offset_minutes;
       onScreen = null;
+      var mine = ++showing;
       if (stamp) { stamp.innerHTML = label(frame); }
       if (slider) { slider.setAttribute('aria-valuetext', relative(frame.offset_minutes)); }
 
@@ -419,12 +424,25 @@
         notify();
         return;
       }
-      preload(frame.url);
-      overlay.show(frame.url, bounds);
+      if (urlFilter) {
+        // The frame before stays on screen the millisecond this takes; a frame that cannot be
+        // cut is drawn as it is.
+        var filter = urlFilter;
+        filter(frame.url).then(function (url) {
+          if (mine === showing) { overlay.show(url, bounds); }
+        }, function () {
+          if (mine === showing) { overlay.show(frame.url, bounds); }
+        });
+      } else {
+        preload(frame.url);
+        overlay.show(frame.url, bounds);
+      }
       onScreen = frame;
       for (var d = -WINDOW; d <= WINDOW; d++) {
         var neighbour = frames[index + d];
-        if (neighbour && !gapAt(neighbour.offset_minutes)) { preload(neighbour.url); }
+        if (neighbour && !gapAt(neighbour.offset_minutes)) {
+          if (urlFilter) { urlFilter(neighbour.url); } else { preload(neighbour.url); }
+        }
       }
       notify();
     }
@@ -623,7 +641,14 @@
       frame: function () { return onScreen; },
       bounds: function () { return bounds; },
       values: function () { return values; },
-      watch: function (fn) { watchers.push(fn); }
+      watch: function (fn) { watchers.push(fn); },
+      // The debug noise cut (noisecut.js): draw every frame through `fn`, or as it is with null,
+      // starting with the one on screen.
+      filter: function (fn) {
+        urlFilter = fn;
+        var at = frames.findIndex(function (f) { return f.offset_minutes === current; });
+        if (at >= 0) { show(at); }
+      }
     };
   }
 

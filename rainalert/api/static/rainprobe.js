@@ -427,6 +427,6 @@
 
   global.RainProbe = {
     attach: attach, decodeFrame: decodeFrame, pixelAt: pixelAt, lookupTable: lookupTable,
-    reading: reading, describe: describe, number: number
+    reading: reading, describe: describe, number: number, rgbaKey: rgbaKey
   };
 })(typeof window !== 'undefined' ? window : globalThis);

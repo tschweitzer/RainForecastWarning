@@ -220,6 +220,10 @@ var Engine = null;
   if (typeof RainProbe !== 'undefined' && Engine.probeTarget) {
     RainProbe.attach(Engine.probeTarget(map), radar);
   }
+  // The noise-cut slider under the map, on `/?debug` only (D-79).
+  if (typeof RainCut !== 'undefined') {
+    RainCut.attach(document.getElementById('noise-cut'), radar);
+  }
 
   rangePicker();
   refreshControl();
